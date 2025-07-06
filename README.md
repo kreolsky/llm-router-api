@@ -128,6 +128,21 @@ curl -X POST http://localhost:8777/v1/chat/completions \
          }'
 ```
 
+### Example 4: Creating Embeddings
+
+To generate embeddings for a given text, send a POST request to `/v1/embeddings`.
+
+```bash
+curl -X POST "http://localhost:8777/v1/embeddings" \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer YOUR_ROUTER_API_KEY" \
+     -d '{
+           "model": "embeddings/dummy",
+           "input": "Hello, world!"
+         }'
+```
+*Replace `YOUR_ROUTER_API_KEY` with an API key configured in `config/user_keys.yaml` and `embeddings/dummy` with your configured embeddings model ID.*
+
 ## 🔗 API Endpoints
 
 The router exposes a set of RESTful API endpoints for interaction:
@@ -136,3 +151,4 @@ The router exposes a set of RESTful API endpoints for interaction:
 *   `GET /v1/models`: Retrieves a list of all configured LLM models.
 *   `GET /v1/models/{model_id}`: Fetches detailed information for a specific model by its ID.
 *   `POST /v1/chat/completions`: The primary endpoint for chat completion requests. It adheres to the standard OpenAI Chat Completions API request format and intelligently routes requests to the appropriate LLM provider.
+*   `POST /v1/embeddings`: The endpoint for generating embeddings. It adheres to the standard OpenAI Embeddings API request format and routes requests to the configured embeddings provider.

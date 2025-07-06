@@ -14,11 +14,7 @@ providers:
     headers:
       HTTP-Referer: "https://nnp.space"
       X-Title: "nnp.space"
-  orange:  # Локальный сервер orange
+  orange:  # Локальный сервер ORANGE
     type: openai
     base_url: http://192.168.1.52:5010/v1
     api_key_env: ORANGE_API_KEY
-  box:  # Локальный сервер box
-    type: openai
-    base_url: http://192.168.1.65:5010/v1
-    api_key_env: BOX_API_KEY

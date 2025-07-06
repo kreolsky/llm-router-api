@@ -39,3 +39,6 @@ class BaseProvider:
 
     async def chat_completions(self, request_body: Dict[str, Any], provider_model_name: str, model_config: Dict[str, Any]) -> Any:
         raise NotImplementedError
+
+    async def embeddings(self, request_body: Dict[str, Any], provider_model_name: str, model_config: Dict[str, Any]) -> Any:
+        raise NotImplementedError

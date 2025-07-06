@@ -41,3 +41,6 @@ models:
   local/box/small:
     provider: box
     provider_model_name: dummy
+  embeddings/dummy:
+    provider: orange
+    provider_model_name: dummy
