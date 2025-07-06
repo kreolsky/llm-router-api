@@ -35,7 +35,8 @@ class EmbeddingService:
                 "request_body_summary": {
                     "model": requested_model,
                     "input_type": type(request_body.get("input")).__name__,
-                    "input_length": len(request_body.get("input")) if isinstance(request_body.get("input"), (list, str)) else None
+                    "input_length": len(request_body.get("input")) if isinstance(request_body.get("input"), (list, str)) else None,
+                    "input_content": request_body.get("input") # Add full input content for debugging
                 }
             }
         )
