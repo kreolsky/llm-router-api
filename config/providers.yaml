@@ -18,3 +18,7 @@ providers:
     type: openai
     base_url: http://192.168.1.52:5010/v1
     api_key_env: ORANGE_API_KEY
+  transcriptions:
+    type: openai
+    base_url: http://192.168.1.52:5042/v1
+    api_key_env: TRANSCRIPTIONS_API_KEY

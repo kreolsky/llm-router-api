@@ -1,4 +1,5 @@
-from fastapi import FastAPI, Request, HTTPException, status, Depends
+from fastapi import FastAPI, Request, HTTPException, status, Depends, File, Form, UploadFile
+from typing import Optional
 from fastapi.responses import JSONResponse, StreamingResponse
 import uvicorn
 import asyncio
@@ -14,6 +15,7 @@ from ..providers import get_provider_instance
 from ..services.chat_service import ChatService
 from ..services.model_service import ModelService
 from ..services.embedding_service import EmbeddingService # Import EmbeddingService
+from ..services.transcription_service import TranscriptionService # Import TranscriptionService
 from ..logging.config import setup_logging # Import setup_logging
 from .middleware import RequestLoggerMiddleware # Import RequestLoggerMiddleware
 
@@ -46,6 +48,9 @@ async def startup_event():
 
     # Initialize EmbeddingService
     app.state.embedding_service = EmbeddingService(app.state.config_manager, app.state.httpx_client)
+
+    # Initialize TranscriptionService
+    app.state.transcription_service = TranscriptionService(app.state.config_manager, app.state.httpx_client, app.state.model_service)
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -80,6 +85,19 @@ async def create_embeddings(
     auth_data: tuple = Depends(get_api_key)
 ):
     return await app.state.embedding_service.create_embeddings(request, auth_data)
+
+@app.post("/v1/audio/transcriptions")
+async def create_transcription(
+    audio_file: UploadFile = File(...),
+    model: str = Form(...),
+    response_format: str = Form("json"),
+    temperature: float = Form(0.0),
+    language: Optional[str] = Form(None),
+    auth_data: tuple = Depends(get_api_key)
+):
+    return await app.state.transcription_service.create_transcription(
+        audio_file, model, auth_data, response_format, temperature, language
+    )
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

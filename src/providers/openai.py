@@ -46,6 +46,38 @@ class OpenAICompatibleProvider(BaseProvider):
                 detail={"error": {"message": f"Network error communicating with provider: {e}", "code": "provider_network_error"}},
             )
 
+    async def transcriptions(self, audio_file: Any, request_params: Dict[str, Any], model_config: Dict[str, Any]) -> Any:
+        # The OpenAI API for audio transcriptions expects multipart/form-data
+        # The 'file' field should contain the audio file
+        # Other parameters like 'model', 'response_format', 'temperature', 'language' are sent as form fields
+
+        # Prepare multipart form data
+        files = {'file': (audio_file.filename, audio_file.file.read(), audio_file.content_type)}
+        data = {k: str(v) for k, v in request_params.items()} # Convert all params to string for form fields
+
+        try:
+            response = await self.client.post(
+                f"{self.base_url}/audio/transcriptions",
+                headers={"Authorization": self.headers["Authorization"]}, # Only send Authorization header
+                files=files,
+                data=data,
+                timeout=600
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Provider HTTP error for transcriptions: {e.response.text}")
+            raise HTTPException(
+                status_code=e.response.status_code,
+                detail={"error": {"message": f"Provider error: {e.response.text}", "code": f"provider_http_error_{e.response.status_code}"}},
+            )
+        except httpx.RequestError as e:
+            logger.error(f"Provider network error for transcriptions: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"error": {"message": f"Network error communicating with provider: {e}", "code": "provider_network_error"}},
+            )
+
     async def embeddings(self, request_body: Dict[str, Any], provider_model_name: str, model_config: Dict[str, Any]) -> Any:
         # Transform request: Replace the model name with the provider's specific model name
         request_body["model"] = provider_model_name

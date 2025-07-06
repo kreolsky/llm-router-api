@@ -143,6 +143,19 @@ curl -X POST "http://localhost:8777/v1/embeddings" \
 ```
 *Replace `YOUR_ROUTER_API_KEY` with an API key configured in `config/user_keys.yaml` and `embeddings/dummy` with your configured embeddings model ID.*
 
+### Example 5: Creating Audio Transcriptions
+
+To transcribe an audio file, send a POST request to `/v1/audio/transcriptions` with your audio file and the desired transcription model.
+
+```bash
+curl -X POST http://localhost:8777/v1/audio/transcriptions \
+    -H "Content-Type: multipart/form-data" \
+    -H "Authorization: Bearer YOUR_ROUTER_API_KEY" \
+    -F "audio_file=@your_audio_file.ogg" \
+    -F "model=transcriptions/dummy"
+```
+*Replace `YOUR_ROUTER_API_KEY` with an API key configured in `config/user_keys.yaml`, `your_audio_file.ogg` with the path to your audio file, and `transcriptions/dummy` with your configured transcription model ID.*
+
 ## 🔗 API Endpoints
 
 The router exposes a set of RESTful API endpoints for interaction:
@@ -152,3 +165,4 @@ The router exposes a set of RESTful API endpoints for interaction:
 *   `GET /v1/models/{model_id}`: Fetches detailed information for a specific model by its ID.
 *   `POST /v1/chat/completions`: The primary endpoint for chat completion requests. It adheres to the standard OpenAI Chat Completions API request format and intelligently routes requests to the appropriate LLM provider.
 *   `POST /v1/embeddings`: The endpoint for generating embeddings. It adheres to the standard OpenAI Embeddings API request format and routes requests to the configured embeddings provider.
+*   `POST /v1/audio/transcriptions`: The endpoint for transcribing audio. It adheres to the standard OpenAI Audio Transcriptions API request format and routes requests to the configured transcription provider.
