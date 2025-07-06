@@ -1,0 +1,24 @@
+providers:
+  openai:
+    type: openai
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+  deepseek:
+    type: openai # DeepSeek совместим с OpenAI API
+    base_url: https://api.deepseek.com/v1
+    api_key_env: DEEPSEEK_API_KEY
+  openrouter:
+    type: openai # OpenRouter совместим с OpenAI API
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: OPENROUTER_API_KEY
+    headers:
+      HTTP-Referer: "https://nnp.space"
+      X-Title: "nnp.space"
+  orange:  # Локальный сервер orange
+    type: openai
+    base_url: http://192.168.1.52:5010/v1
+    api_key_env: ORANGE_API_KEY
+  box:  # Локальный сервер box
+    type: openai
+    base_url: http://192.168.1.65:5010/v1
+    api_key_env: BOX_API_KEY

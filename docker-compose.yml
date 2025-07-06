@@ -1,0 +1,12 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8777:8000"
+    volumes:
+      - ./src:/app/src
+      - ./config:/app/config
+      - ./logs:/app/logs
+    env_file:
+      - .env
+    restart: unless-stopped
