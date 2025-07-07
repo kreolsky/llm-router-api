@@ -15,6 +15,15 @@ In the rapidly evolving landscape of Large Language Models, managing multiple pr
 *   **Scalability & Reliability:** Build a more robust and scalable LLM infrastructure by centralizing traffic and managing provider failovers.
 *   **Future-Proofing:** Easily adapt to new LLM advancements and providers without significant architectural changes.
 
+## 🌐 Supported LLM Providers
+
+The NNP LLM Router is designed to be highly flexible and supports integration with a variety of Large Language Model (LLM) providers. Below is a list of currently supported and tested providers:
+
+*   **OpenAI compatible**
+*   **Ollama** (Local instances supported, see configuration details below)
+
+**Note on Anthropic:** While the router's architecture supports Anthropic, it has not been thoroughly tested.
+
 ## ✨ Features
 
 *   **Intelligent Routing:** Directs LLM requests to the provider based on your configuration.
@@ -23,17 +32,6 @@ In the rapidly evolving landscape of Large Language Models, managing multiple pr
 *   **Secure Access:** Implement API key-based authentication and fine-grained model access control.
 *   **Comprehensive Observability:** Detailed logging of requests, responses, token usage, and associated costs.
 *   **Automated Cost Tracking:** Accurately calculates LLM usage expenses based on token consumption and pricing.
-
-## 🌐 Supported LLM Providers
-
-The NNP LLM Router is designed to be highly flexible and supports integration with a variety of Large Language Model (LLM) providers. Below is a list of currently supported and tested providers:
-
-*   **DeepSeek**
-*   **OpenRouter**
-*   **OpenAI**
-*   **Ollama** (Local instances supported, see configuration details below)
-
-**Note on Anthropic:** While the router's architecture supports Anthropic, it has not been thoroughly tested.
 
 ## 🛠️ Quick Start with Docker Compose
 
