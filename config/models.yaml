@@ -44,9 +44,11 @@ models:
   embeddings/dummy:
     provider: orange
     provider_model_name: dummy
+    is_hidden: true
   stt/dummy:
     provider: transcriber
     provider_model_name: dummy
+    is_hidden: true
   ollama/llama2:
     provider: ollama
     provider_model_name: llama2

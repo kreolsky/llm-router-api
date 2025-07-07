@@ -89,6 +89,10 @@ class ModelService:
         
         models_list = []
         for model_id, model_data in models_config.items():
+            # If is_hidden is true, skip this model
+            if model_data.get("is_hidden", False):
+                continue
+
             if allowed_models is None or len(allowed_models) == 0 or model_id in allowed_models:
                 models_list.append({
                     "id": model_id,
