@@ -152,7 +152,11 @@ curl -X POST http://localhost:8777/v1/audio/transcriptions \
     -H "Content-Type: multipart/form-data" \
     -H "Authorization: Bearer YOUR_ROUTER_API_KEY" \
     -F "audio_file=@your_audio_file.ogg" \
-    -F "model=transcriptions/dummy"
+    -F "model=transcriptions/dummy" \
+    -F "response_format=json" \
+    -F "temperature=0.0" \
+    -F "language=en" \
+    -F "return_timestamps=false"
 ```
 *Replace `YOUR_ROUTER_API_KEY` with an API key configured in `config/user_keys.yaml`, `your_audio_file.ogg` with the path to your audio file, and `transcriptions/dummy` with your configured transcription model ID.*
 
