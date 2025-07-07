@@ -83,7 +83,8 @@ async def create_embeddings(
 @app.post("/v1/audio/transcriptions")
 async def create_transcription(
     request: Request, # Add Request to access headers
-    audio_file: UploadFile = File(...),
+    audio_file: Optional[UploadFile] = File(None), # Make audio_file optional
+    file: Optional[UploadFile] = File(None), # Add 'file' as an optional parameter
     model: str = Form(...),
     response_format: str = Form("json"),
     temperature: float = Form(0.0),
@@ -94,9 +95,20 @@ async def create_transcription(
     logger.info(f"Transcription request received from {request.client.host}")
     logger.info(f"Request Headers: {dict(request.headers)}")
     logger.info(f"Form Fields: model={model}, response_format={response_format}, temperature={temperature}, language={language}, return_timestamps={return_timestamps}") # Log return_timestamps
-    logger.info(f"Audio File: filename={audio_file.filename}, content_type={audio_file.content_type}, size={audio_file.size if hasattr(audio_file, 'size') else 'unknown'}")
+    # Determine which file was provided
+    if audio_file:
+        uploaded_file = audio_file
+    elif file:
+        uploaded_file = file
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": {"message": "No audio file provided. Please upload 'audio_file' or 'file'.", "code": "no_audio_file"}}
+        )
+
+    logger.info(f"Audio File: filename={uploaded_file.filename}, content_type={uploaded_file.content_type}, size={uploaded_file.size if hasattr(uploaded_file, 'size') else 'unknown'}")
     return await app.state.transcription_service.create_transcription(
-        audio_file, model, auth_data, response_format, temperature, language, return_timestamps # Pass return_timestamps
+        uploaded_file, model, auth_data, response_format, temperature, language, return_timestamps
     )
 
 
