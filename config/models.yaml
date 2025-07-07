@@ -44,6 +44,6 @@ models:
   embeddings/dummy:
     provider: orange
     provider_model_name: dummy
-  transcriptions/dummy:
-    provider: transcriptions
+  stt/dummy:
+    provider: transcriber
     provider_model_name: dummy
