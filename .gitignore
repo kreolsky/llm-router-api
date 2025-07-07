@@ -10,7 +10,7 @@ env/
 # Editor files
 .vscode/
 .idea/
-.kilo
+.kilo/
 
 # Logs
 logs/
