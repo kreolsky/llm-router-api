@@ -4,7 +4,7 @@ from fastapi import HTTPException, status
 import io
 
 from .base import BaseProvider
-from ..utils.deep_merge import deep_merge # Assuming deep_merge is in src/utils
+from ..utils.deep_merge import deep_merge
 
 class OpenAICompatibleProvider(BaseProvider):
     def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient):

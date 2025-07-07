@@ -1,5 +1,4 @@
 import httpx
-import json
 from typing import Dict, Any, Tuple
 
 from fastapi import HTTPException, status, Request
@@ -7,7 +6,6 @@ from fastapi.responses import JSONResponse
 
 from ..core.config_manager import ConfigManager
 from ..providers import get_provider_instance
-from ..core.auth import get_api_key
 from ..logging.config import logger
 
 class EmbeddingService:

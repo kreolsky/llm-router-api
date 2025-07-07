@@ -15,8 +15,8 @@ class TranscriptionService:
         self.client = client
         self.model_service = model_service
 
-    async def _validate_model_and_provider(self, model_id: str) -> Tuple[Dict[str, Any], Dict[str, Any], str, str]:
-        model_config = await self.model_service.retrieve_model(model_id)
+    async def _validate_model_and_provider(self, model_id: str, auth_data: Tuple[str, str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any], str, str]:
+        model_config = await self.model_service.retrieve_model(model_id, auth_data)
         provider_name = model_config.get("provider")
         provider_model_name = model_config.get("provider_model_name")
 
@@ -42,7 +42,7 @@ class TranscriptionService:
         logger.info(f"User {user_id} requesting transcription for model {model_id}")
 
         try:
-            model_config, provider_config, provider_name, provider_model_name = await self._validate_model_and_provider(model_id)
+            model_config, provider_config, provider_name, provider_model_name = await self._validate_model_and_provider(model_id, auth_data)
             provider_instance = await self._get_provider_instance(provider_config)
             
             request_params = {

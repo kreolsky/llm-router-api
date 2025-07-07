@@ -1,15 +1,9 @@
 import httpx
-import json
 import os
-import logging # Import logging
 from typing import Dict, Any, AsyncGenerator
 from fastapi.responses import StreamingResponse, JSONResponse
-from fastapi import HTTPException, status
 
-from ..utils.deep_merge import deep_merge # Import deep_merge from utils
-from ..logging.config import logger # Import logger from logging_config
-
-# logger = logging.getLogger("nnp-llm-router") # Initialize logger
+from ..utils.deep_merge import deep_merge
 
 class BaseProvider:
     def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient):

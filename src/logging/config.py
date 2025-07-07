@@ -1,7 +1,6 @@
 import logging
 import json
 import os
-from logging.handlers import RotatingFileHandler
 
 logger = logging.getLogger("nnp-llm-router")
 

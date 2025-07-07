@@ -4,8 +4,6 @@ import logging
 from fastapi import Request, HTTPException, status
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from ..logging.config import setup_logging # Import setup_logging
-
 logger = logging.getLogger("nnp-llm-router")
 
 class RequestLoggerMiddleware(BaseHTTPMiddleware):

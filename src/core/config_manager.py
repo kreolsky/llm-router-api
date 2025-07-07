@@ -3,8 +3,6 @@ import os
 import asyncio
 from typing import Dict, Any
 
-from ..logging.config import logger # Import logger from logging_config
-
 class ConfigManager:
     def __init__(self, config_dir: str = "config"):
         self.config_dir = config_dir

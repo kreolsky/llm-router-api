@@ -38,6 +38,6 @@ async def get_api_key(
             detail={"error": {"message": "Invalid API key", "code": "invalid_api_key"}},
         )
     
-    allowed_models = config["user_keys"][found_project].get("allowed_models", [])
+    allowed_models = config["user_keys"][found_project].get("allowed_models")
     request.state.project_name = found_project # Store project_name in request.state
     return found_project, api_key, allowed_models

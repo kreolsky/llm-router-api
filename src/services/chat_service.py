@@ -7,7 +7,6 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from ..core.config_manager import ConfigManager
 from ..providers import get_provider_instance
-from ..core.auth import get_api_key
 from .model_service import ModelService
 from ..logging.config import logger
 
@@ -156,7 +155,6 @@ class ChatService:
                     )
                 return StreamingResponse(generate_and_log(), media_type=response_data.media_type)
             
-            # If the provider returns a dictionary (non-streaming), wrap it in JSONResponse
             else:
                 usage = response_data.get("usage", {})
                 prompt_tokens = usage.get("prompt_tokens", 0)

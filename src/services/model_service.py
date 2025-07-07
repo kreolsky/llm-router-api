@@ -81,49 +81,60 @@ class ModelService:
         
         return additional_model_details
 
-    async def list_models(self) -> Dict[str, Any]:
+    async def list_models(self, auth_data: Tuple[str, str, list]) -> Dict[str, Any]:
+        _, _, allowed_models = auth_data
         current_config = self.config_manager.get_config()
         models_config = current_config.get("models", {})
         
         models_list = []
         for model_id, model_data in models_config.items():
-            models_list.append({
-                "id": model_id,
-                "object": "model",
-                "created": int(time.time()), # Placeholder
-                "owned_by": "nnp-llm-router", # Custom owner
-                "parent": None,
-                "permission": [
-                    {
-                        "id": f"model-perm-{model_id}",
-                        "object": "model_permission",
-                        "created": int(time.time()),
-                        "allow_create_engine": False,
-                        "allow_sampling": True,
-                        "allow_logprobs": False,
-                        "allow_search_indices": False,
-                        "allow_view": True,
-                        "allow_fine_tuning": False,
-                        "organization": "*",
-                        "group": None,
-                        "is_blocking": False
-                    }
-                ],
-                "root": model_id
-            })
+            if allowed_models is None or len(allowed_models) == 0 or model_id in allowed_models:
+                models_list.append({
+                    "id": model_id,
+                    "object": "model",
+                    "created": int(time.time()), # Placeholder
+                    "owned_by": "nnp-llm-router", # Custom owner
+                    "parent": None,
+                    "permission": [
+                        {
+                            "id": f"model-perm-{model_id}",
+                            "object": "model_permission",
+                            "created": int(time.time()),
+                            "allow_create_engine": False,
+                            "allow_sampling": True,
+                            "allow_logprobs": False,
+                            "allow_search_indices": False,
+                            "allow_view": True,
+                            "allow_fine_tuning": False,
+                            "organization": "*",
+                            "group": None,
+                            "is_blocking": False
+                        }
+                    ],
+                    "root": model_id
+                })
         return {"object": "list", "data": models_list}
 
-    async def retrieve_model(self, model_id: str) -> Dict[str, Any]:
+    async def retrieve_model(self, model_id: str, auth_data: Tuple[str, str, list]) -> Dict[str, Any]:
+        _, _, allowed_models = auth_data
+
+        # Check if the model is allowed for this user
+        if allowed_models and model_id not in allowed_models:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": {"message": f"Model '{model_id}' is not available for your account", "code": "model_not_allowed"}},
+            )
+
         current_config = self.config_manager.get_config()
         models_config = current_config.get("models", {})
-        
+
         model_data = models_config.get(model_id)
         if not model_data:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": {"message": f"Model '{model_id}' not found", "code": "model_not_found"}},
             )
-        
+
         provider_name = model_data.get("provider")
         provider_model_name = model_data.get("provider_model_name")
 

@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi import HTTPException, status
 
 from .base import BaseProvider
-from ..utils.deep_merge import deep_merge # Assuming deep_merge is in src/utils
+from ..utils.deep_merge import deep_merge
 
 class AnthropicProvider(BaseProvider):
     def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient):

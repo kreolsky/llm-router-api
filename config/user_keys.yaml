@@ -2,10 +2,10 @@ user_keys:
   debug:
     api_key: dummy
     allowed_models: [] # Доступ ко всем моделям
-  dead-internet:
+  full:
     api_key: nnp-v1-bf03fba300415668661028e5601c4e28ec03f3ba944659d67e1a4cbb41eac9b7
     allowed_models: [] # Доступ ко всем моделям
-  cir-online:
+  short:
     api_key: nnp-v1-b3a36caabbd16fe8bd045f16966f137252b5a680ecbd6475f346eb6897d75462
     allowed_models: # Если список пуст или отсутствует, доступны все модели
       - gemini/chat

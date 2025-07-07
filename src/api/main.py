@@ -8,10 +8,10 @@ from ..core.config_manager import ConfigManager
 from ..core.auth import get_api_key
 from ..services.chat_service import ChatService
 from ..services.model_service import ModelService
-from ..services.embedding_service import EmbeddingService # Import EmbeddingService
-from ..services.transcription_service import TranscriptionService # Import TranscriptionService
-from ..logging.config import setup_logging # Import setup_logging
-from .middleware import RequestLoggerMiddleware # Import RequestLoggerMiddleware
+from ..services.embedding_service import EmbeddingService
+from ..services.transcription_service import TranscriptionService
+from ..logging.config import setup_logging
+from .middleware import RequestLoggerMiddleware
 
 # Configure logging
 setup_logging()
@@ -58,13 +58,15 @@ async def health_check():
     return {"status": "ok"}
 
 @app.get("/v1/models")
-async def list_models():
-    return await app.state.model_service.list_models()
+async def list_models(
+    auth_data: tuple = Depends(get_api_key)
+):
+    return await app.state.model_service.list_models(auth_data)
 
 
 @app.get("/v1/models/{model_id:path}")
-async def retrieve_model(model_id: str):
-    return await app.state.model_service.retrieve_model(model_id)
+async def retrieve_model(model_id: str, auth_data: tuple = Depends(get_api_key)):
+    return await app.state.model_service.retrieve_model(model_id, auth_data)
 
 @app.post("/v1/chat/completions")
 async def chat_completions(
