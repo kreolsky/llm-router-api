@@ -1,191 +1,231 @@
 # LLM Router
 
+## TLDR;
+**LLM Router** is a unified API gateway for diverse Large Language Models (LLMs) and AI services. It simplifies integration by providing a single OpenAI-compatible endpoint, abstracting away complexities of multiple providers, API keys, and model management. Ideal for developers seeking a streamlined way to access and control various LLMs (OpenAI, Ollama, DeepSeek, etc.) through one consistent interface.
+
 ## 🚀 Overview
-
-A powerful and flexible proxy/router for Large Language Model (LLM) APIs, designed to streamline your application's interaction with various LLM providers. This project centralizes LLM access, allowing you to seamlessly integrate and manage diverse services like **DeepSeek, OpenRouter, OpenAI, and Ollama** from a single, unified endpoint. It offers features like intelligent model routing, dynamic configuration, robust authentication, detailed logging, and precise cost calculation, providing unparalleled flexibility in managing your LLM infrastructure.
-
-## 💡 Why LLM Router?
-
-In the rapidly evolving landscape of Large Language Models, managing multiple providers and ensuring consistent, cost-effective, and scalable access can be challenging. The NNP LLM Router addresses these complexities by offering:
-
-*   **Simplified Integration:** Abstract away the complexities of different LLM APIs. Interact with all your models through a single, unified interface.
-*   **Vendor Agnostic:** Avoid vendor lock-in. Easily switch between providers or integrate new ones without rewriting your application's core logic.
-*   **Cost Optimization:** Centralized cost tracking and the ability to route requests to the most cost-effective models.
-*   **Enhanced Control & Observability:** Gain granular control over model access, user permissions, and comprehensive insights into LLM usage patterns and costs.
-*   **Scalability & Reliability:** Build a more robust and scalable LLM infrastructure by centralizing traffic and managing provider failovers.
-*   **Future-Proofing:** Easily adapt to new LLM advancements and providers without significant architectural changes.
-
-## 🌐 Supported LLM Providers
-
-The NNP LLM Router is designed to be highly flexible and supports integration with a variety of Large Language Model (LLM) providers. Below is a list of currently supported and tested providers:
-
-*   **OpenAI compatible**
-*   **Ollama** (Local instances supported, see configuration details below)
-
-**Note on Anthropic:** While the router's architecture supports Anthropic, it has not been thoroughly tested.
+This project provides a unified and flexible API gateway for various Large Language Models (LLMs) and AI services. It acts as a single entry point, abstracting away the complexities of managing multiple LLM providers, their unique APIs, and diverse authentication methods. For enthusiasts and developers working with a multitude of AI tools (like Ollama, DeepSeek, OpenRouter, OpenAI, Mistral, and more), the LLM Router simplifies integration by offering a single OpenAI-compatible endpoint. This eliminates the need to track individual API keys, handle varying data formats, or constantly monitor model updates across different platforms.
 
 ## ✨ Features
+*   **Unified API Endpoint:** Provides a single OpenAI-compatible API endpoint for all integrated LLM providers, streamlining your application's interaction with various models.
+*   **Flexible Access Control:** Allows granular control over model access. For each API key, you can define a specific list of models that are permitted for use, enhancing security and resource management.
+*   **Provider Agnostic:** Seamlessly integrates with different LLM providers, enabling you to switch or combine models from various sources without changing your application's code.
+*   **Supported Providers:**
+    *   OpenAI-compatible APIs (including Chat Completions, Embeddings, and Speech-to-Text/STT)
+    *   Ollama
 
-*   **Intelligent Routing:** Directs LLM requests to the provider based on your configuration.
-*   **Multi-Provider Agnostic:** Seamlessly integrate with diverse LLM services (e.g., OpenAI, Anthropic).
-*   **Dynamic Configuration:** Adjust providers, models, and API keys on the fly without service downtime.
-*   **Secure Access:** Implement API key-based authentication and fine-grained model access control.
-*   **Comprehensive Observability:** Detailed logging of requests, responses, token usage, and associated costs.
-*   **Automated Cost Tracking:** Accurately calculates LLM usage expenses based on token consumption and pricing.
+## 🌐 Supported Endpoints
+The LLM Router provides an OpenAI-compatible API interface, supporting the following endpoints:
 
-## 🛠️ Quick Start with Docker Compose
+*   **GET `/health`**: Basic health check to ensure the service is running.
+*   **GET `/v1/models`**: Lists all models available through the router, filtered by the API key's permissions.
+*   **GET `/v1/models/{model_id}`**: Retrieves detailed information about a specific model.
+*   **POST `/v1/chat/completions`**: Handles chat completion requests, routing them to the appropriate LLM provider.
+*   **POST `/v1/embeddings`**: Generates embeddings for text inputs using configured embedding models.
+*   **POST `/v1/audio/transcriptions`**: Transcribes audio files into text using configured transcription models.
 
-This section guides you through setting up and running the NNP LLM Router using Docker Compose.
+## 🏗️ Architecture
+The LLM Router sits between your application and various LLM providers, routing requests to the appropriate service and normalizing responses to an OpenAI-compatible format.
 
-### Prerequisites
+```mermaid
+graph TD
+    A[Your Application] --> B(LLM Router);
+    B --> C{OpenAI API};
+    B --> D{Ollama};
+    B --> E{DeepSeek};
+    B --> F{OpenRouter};
+    B --> G{Mistral};
+    B --> H{Other LLM Providers};
+    C --> I[OpenAI Models];
+    D --> J[Ollama Models];
+    E --> K[DeepSeek Models];
+    F --> L[OpenRouter Models];
+    G --> M[Mistral Models];
+    H --> N[Other Models];
+```
 
-Ensure you have Docker and Docker Compose installed on your system.
+## ⚙️ Configuration
+The LLM Router is highly configurable, allowing you to manage API keys, define models, and set up providers through simple YAML files and environment variables. The configuration flow is designed to be logical: first define your providers, then the models that use those providers, and finally the user API keys that grant access to specific models.
 
-### Configuration
+### Environment Variables (`.env`)
+Create a `.env` file in the project root to store your sensitive API keys. This file is not committed to version control. An example `.env.example` is provided.
 
-Before running the router, you need to set up your configuration files and environment variables.
+```ini
+# Example .env file
+OPENAI_API_KEY="sk-your-openai-key"
+DEEPSEEK_API_KEY="sk-your-deepseek-key"
+OPENROUTER_API_KEY="sk-your-openrouter-key"
+TABBY_API_KEY="sk-your-tabby-key"
+TRANSCRIPTIONS_API_KEY="sk-your-transcriptions-key"
+```
 
-1.  **Configuration Files:**
-    Create or modify the following files within the `config/` directory:
-    *   `config/providers.yaml`: Define your LLM providers and their specific settings (e.g., API endpoints, types).
-    *   `config/models.yaml`: Configure the LLM models, their mapping to providers, and any custom parameters.
-    *   `config/user_keys.yaml`: Manage API keys for accessing the router and specify which models each key can use.
+### Model and Provider Configuration (`config/` directory)
+The `config/` directory contains YAML files that define your providers, models, and user API keys.
 
-### Ollama Provider Specifics
-
-The router supports integration with local Ollama instances. When configuring Ollama in `config/providers.yaml`, ensure the `base_url` is correctly set for your environment:
+#### 1. `config/providers.yaml`
+This file configures the details for each LLM provider, including their type, base URL, and the environment variable where their API key is stored.
 
 ```yaml
- ollama:
-   type: ollama
-   base_url: http://192.168.1.52:11434/api # Replace with your Ollama instance's IP/hostname
+providers:
+  openai:
+    type: openai
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+  deepseek:
+    type: openai # DeepSeek is OpenAI API compatible
+    base_url: https://api.deepseek.com/v1
+    api_key_env: DEEPSEEK_API_KEY
+  openrouter:
+    type: openai # OpenRouter is OpenAI API compatible
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: OPENROUTER_API_KEY
+    headers:
+      HTTP-Referer: "https://my.space"
+      X-Title: "my llm router"
+  orange:  # Local ORANGE server example
+    type: openai
+    base_url: http://192.168.1.52:5010/v1
+    api_key_env: TABBY_API_KEY
+  transcriber:
+    type: openai
+    base_url: http://192.168.1.52:5042/v1
+    api_key_env: TRANSCRIPTIONS_API_KEY
+  ollama:
+    type: ollama
+    base_url: http://192.168.1.52:11434/api
 ```
 
-2.  **Environment Variables:**
-    Create a `.env` file in the root directory of this project. This file will store sensitive information like your LLM provider API keys.
-    Example:
-    ```
-    OPENAI_API_KEY=your_openai_api_key_here
-    ANTHROPIC_API_KEY=your_anthropic_api_key_here
-    ```
-    *Replace `your_openai_api_key_here` and `your_anthropic_api_key_here` with your actual API keys.*
+#### 2. `config/models.yaml`
+After defining your providers, this file defines the available models, their associated providers, and any specific configurations. Each model must reference a provider defined in `config/providers.yaml`.
 
-### Running the Router
-
-1.  Navigate to the root directory of this project in your terminal.
-2.  Build and start the Docker containers:
-    ```bash
-    docker-compose up --build -d
-    ```
-    This command builds the necessary Docker images (if they don't exist or have changed) and starts the services in detached mode.
-
-3.  The NNP LLM Router API will be accessible at `http://localhost:8777`.
-
-### Health Check
-
-Verify that the service is running correctly by accessing the health endpoint:
+```yaml
+models:
+  deepseek/chat:
+    provider: deepseek
+    provider_model_name: deepseek-chat
+  deepseek/reasoner:
+    provider: deepseek
+    provider_model_name: deepseek-reasoner
+  anthropic/sonnet:
+    provider: openrouter
+    provider_model_name: anthropic/claude-sonnet-4
+  gemini/mini:
+    provider: openrouter
+    provider_model_name: google/gemini-2.0-flash-001
+  gemini/chat:
+    provider: openrouter
+    provider_model_name: google/gemini-2.5-flash-preview-05-20
+  gemini/pro:
+    provider: openrouter
+    provider_model_name: google/gemini-2.5-pro
+  mistral/mistral-small:
+    provider: openrouter
+    provider_model_name: mistralai/mistral-small-3.2-24b-instruct
+    options:
+      provider:
+        only: ["mistral"]
+  mistral/devstral-small:
+    provider: openrouter
+    provider_model_name: mistralai/devstral-small
+    options:
+      provider:
+        only: ["mistral"]
+  minimax/reasoner:
+    provider: openrouter
+    provider_model_name: minimax/minimax-m1
+    options:
+      provider:
+        only: ["minimax"]
+  local/orange/small:
+    provider: orange
+    provider_model_name: dummy
+  embeddings/dummy:
+    provider: orange
+    provider_model_name: dummy
+    is_hidden: true
+  stt/dummy:
+    provider: transcriber
+    provider_model_name: dummy
+    is_hidden: true
+  ollama/gemma3n:
+    provider: ollama
+    provider_model_name: gemma3n
 ```
-GET http://localhost:8777/health
+
+#### 3. `config/user_keys.yaml`
+Finally, this file defines the API keys that your users will use to access the LLM Router, and which models each key is allowed to access. Each `allowed_models` entry must correspond to a model defined in `config/models.yaml`.
+
+```yaml
+user_keys:
+  debug:
+    api_key: dummy
+    allowed_models: [] # Empty list means access to all models
+  full:
+    api_key: dummy_full
+    allowed_models: [] # Empty list means access to all models
+  short:
+    api_key: dummy_short
+    allowed_models: # If list is present, only these models are allowed
+      - gemini/chat
+      - gemini/pro
+      - deepseek/chat
+      - deepseek/reasoner
 ```
-A successful response indicates the router is operational.
 
-## 🚀 Usage Examples
+## 🚀 Getting Started
+To get the LLM Router up and running, you'll need Docker and Docker Compose installed.
 
-The NNP LLM Router acts as a central point for all your LLM interactions. Below are examples demonstrating how to use the `/v1/chat/completions` endpoint, which mimics the OpenAI Chat Completions API.
+### Prerequisites
+*   [Docker](https://docs.docker.com/get-docker/)
+*   [Docker Compose](https://docs.docker.com/compose/install/)
 
-### Example 1: Basic Chat Completion
+### Running the Service
+Navigate to the project's root directory in your terminal and execute the following command:
 
-To get a simple chat completion, send a POST request to `/v1/chat/completions` with your desired model and messages.
+```bash
+docker compose up -d
+```
+This command will build the Docker image (if not already built) and start the LLM Router service, accessible by default on `http://localhost:8777`.
+
+## 💡 Usage Examples
+Once the LLM Router service is running, you can interact with it using `curl` or any HTTP client. Replace `YOUR_API_KEY` with one of the API keys defined in `config/user_keys.yaml` (e.g., `dummy`, `dummy_full`, `dummy_short`).
+
+### Chat Completions
+Send a chat completion request to an LLM.
 
 ```bash
 curl -X POST http://localhost:8777/v1/chat/completions \
-     -H "Content-Type: application/json" \
-     -H "Authorization: Bearer YOUR_ROUTER_API_KEY" \
-     -d '{
-           "model": "your-configured-model-id",
-           "messages": [
-             {"role": "system", "content": "You are a helpful assistant."},
-             {"role": "user", "content": "What is the capital of France?"}
-           ]
-         }'
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -d '{
+    "model": "deepseek/chat",
+    "messages": [
+      {"role": "user", "content": "Hello, how are you?"}
+    ]
+  }'
 ```
 
-*Replace `YOUR_ROUTER_API_KEY` with an API key configured in `config/user_keys.yaml` and `your-configured-model-id` with an ID from `config/models.yaml`.*
-
-### Example 2: Streaming Responses
-
-For real-time updates, you can enable streaming by adding `"stream": true` to your request.
+### Embeddings
+Generate embeddings for a given text using a configured embedding model.
 
 ```bash
-curl -X POST http://localhost:8777/v1/chat/completions \
-     -H "Content-Type: application/json" \
-     -H "Authorization: Bearer YOUR_ROUTER_API_KEY" \
-     -d '{
-           "model": "your-configured-model-id",
-           "messages": [
-             {"role": "user", "content": "Tell me a long story about a space explorer."},
-           ],
-           "stream": true
-         }'
+curl -X POST http://localhost:8777/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -d '{
+    "model": "embeddings/dummy",
+    "input": "The quick brown fox jumps over the lazy dog."
+  }'
 ```
 
-### Example 3: Specifying Temperature and Max Tokens
-
-You can also pass additional parameters like `temperature` and `max_tokens` to control the generation behavior.
-
-```bash
-curl -X POST http://localhost:8777/v1/chat/completions \
-     -H "Content-Type: application/json" \
-     -H "Authorization: Bearer YOUR_ROUTER_API_KEY" \
-     -d '{
-           "model": "your-configured-model-id",
-           "messages": [
-             {"role": "user", "content": "Write a short poem about nature."},
-           ],
-           "temperature": 0.7,
-           "max_tokens": 50
-         }'
-```
-
-### Example 4: Creating Embeddings
-
-To generate embeddings for a given text, send a POST request to `/v1/embeddings`.
-
-```bash
-curl -X POST "http://localhost:8777/v1/embeddings" \
-     -H "Content-Type: application/json" \
-     -H "Authorization: Bearer YOUR_ROUTER_API_KEY" \
-     -d '{
-           "model": "embeddings/dummy",
-           "input": "Hello, world!"
-         }'
-```
-*Replace `YOUR_ROUTER_API_KEY` with an API key configured in `config/user_keys.yaml` and `embeddings/dummy` with your configured embeddings model ID.*
-
-### Example 5: Creating Audio Transcriptions
-
-To transcribe an audio file, send a POST request to `/v1/audio/transcriptions` with your audio file and the desired transcription model.
+### Audio Transcriptions
+Transcribe an audio file using a configured transcription model.
+*Note: For transcription, you typically need to send a multipart/form-data request.*
 
 ```bash
 curl -X POST http://localhost:8777/v1/audio/transcriptions \
-    -H "Content-Type: multipart/form-data" \
-    -H "Authorization: Bearer YOUR_ROUTER_API_KEY" \
-    -F "audio_file=@your_audio_file.ogg" \
-    -F "model=transcriptions/dummy" \
-    -F "response_format=json" \
-    -F "temperature=0.0" \
-    -F "language=en" \
-    -F "return_timestamps=false"
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -F "file=@/path/to/your/audio.ogg" \
+  -F "model=stt/dummy" \
+  -F "response_format=json"
 ```
-*Replace `YOUR_ROUTER_API_KEY` with an API key configured in `config/user_keys.yaml`, `your_audio_file.ogg` with the path to your audio file, and `transcriptions/dummy` with your configured transcription model ID.*
-
-## 🔗 API Endpoints
-
-The router exposes a set of RESTful API endpoints for interaction:
-
-*   `GET /health`: Checks the service health and readiness.
-*   `GET /v1/models`: Retrieves a list of all configured LLM models.
-*   `GET /v1/models/{model_id}`: Fetches detailed information for a specific model by its ID.
-*   `POST /v1/chat/completions`: The primary endpoint for chat completion requests. It adheres to the standard OpenAI Chat Completions API request format and intelligently routes requests to the appropriate LLM provider.
-*   `POST /v1/embeddings`: The endpoint for generating embeddings. It adheres to the standard OpenAI Embeddings API request format and routes requests to the configured embeddings provider.
-*   `POST /v1/audio/transcriptions`: The endpoint for transcribing audio. It adheres to the standard OpenAI Audio Transcriptions API request format and routes requests to the configured transcription provider.
