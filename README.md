@@ -2,7 +2,7 @@
 
 ## 🚀 Overview
 
-A powerful and flexible proxy/router for Large Language Model (LLM) APIs, designed to streamline your application's interaction with various LLM providers. This project centralizes LLM access, allowing you to seamlessly integrate and manage diverse services like **DeepSeek, OpenRouter, and OpenAI** from a single, unified endpoint. It offers features like intelligent model routing, dynamic configuration, robust authentication, detailed logging, and precise cost calculation, providing unparalleled flexibility in managing your LLM infrastructure.
+A powerful and flexible proxy/router for Large Language Model (LLM) APIs, designed to streamline your application's interaction with various LLM providers. This project centralizes LLM access, allowing you to seamlessly integrate and manage diverse services like **DeepSeek, OpenRouter, OpenAI, and Ollama** from a single, unified endpoint. It offers features like intelligent model routing, dynamic configuration, robust authentication, detailed logging, and precise cost calculation, providing unparalleled flexibility in managing your LLM infrastructure.
 
 ## 💡 Why LLM Router?
 
@@ -24,6 +24,17 @@ In the rapidly evolving landscape of Large Language Models, managing multiple pr
 *   **Comprehensive Observability:** Detailed logging of requests, responses, token usage, and associated costs.
 *   **Automated Cost Tracking:** Accurately calculates LLM usage expenses based on token consumption and pricing.
 
+## 🌐 Supported LLM Providers
+
+The NNP LLM Router is designed to be highly flexible and supports integration with a variety of Large Language Model (LLM) providers. Below is a list of currently supported and tested providers:
+
+*   **DeepSeek**
+*   **OpenRouter**
+*   **OpenAI**
+*   **Ollama** (Local instances supported, see configuration details below)
+
+**Note on Anthropic:** While the router's architecture supports Anthropic, it has not been thoroughly tested.
+
 ## 🛠️ Quick Start with Docker Compose
 
 This section guides you through setting up and running the NNP LLM Router using Docker Compose.
@@ -41,6 +52,16 @@ Before running the router, you need to set up your configuration files and envir
     *   `config/providers.yaml`: Define your LLM providers and their specific settings (e.g., API endpoints, types).
     *   `config/models.yaml`: Configure the LLM models, their mapping to providers, and any custom parameters.
     *   `config/user_keys.yaml`: Manage API keys for accessing the router and specify which models each key can use.
+
+### Ollama Provider Specifics
+
+The router supports integration with local Ollama instances. When configuring Ollama in `config/providers.yaml`, ensure the `base_url` is correctly set for your environment:
+
+```yaml
+ ollama:
+   type: ollama
+   base_url: http://192.168.1.52:11434/api # Replace with your Ollama instance's IP/hostname
+```
 
 2.  **Environment Variables:**
     Create a `.env` file in the root directory of this project. This file will store sensitive information like your LLM provider API keys.

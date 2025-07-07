@@ -1,6 +1,6 @@
 user_keys:
   debug:
-    api_key: dummy
+    api_key: nnp-v1-16c34d52d13a9f02d9f417fa593bab5ba8d599ccb4a1023581a3c08ab383fa715
     allowed_models: [] # Доступ ко всем моделям
   full:
     api_key: nnp-v1-bf03fba300415668661028e5601c4e28ec03f3ba944659d67e1a4cbb41eac9b7

@@ -1,5 +1,6 @@
 import httpx
 import json
+import time # Added import for time
 from typing import Dict, Any, Tuple
 
 from fastapi import HTTPException, status, Request
@@ -97,36 +98,90 @@ class ChatService:
             if isinstance(response_data, StreamingResponse):
                 # For streaming responses, we need to iterate through the stream
                 # to get the full content and calculate tokens/cost from provider
-                async def generate_and_log():
+                provider_type = provider_config.get("type")
+                async def generate_and_log(provider_type: str):
                     full_content = ""
                     stream_completed_usage = None
                     
                     async for chunk in response_data.body_iterator:
-                        # Attempt to decode chunk and parse as SSE
                         try:
                             decoded_chunk = chunk.decode('utf-8')
-                            # SSEs can have multiple data lines, split them
-                            for line in decoded_chunk.split('\n'):
-                                if line.startswith('data: '):
-                                    json_data = line[len('data: '):].strip()
-                                    if json_data == '[DONE]':
+                            
+                            # Handle OpenAI-style SSE (data: {json})
+                            if decoded_chunk.startswith('data: '):
+                                for line in decoded_chunk.split('\n'):
+                                    if line.startswith('data: '):
+                                        json_data = line[len('data: '):].strip()
+                                        if json_data == '[DONE]':
+                                            yield b"data: [DONE]\n\n"
+                                            continue
+                                        try:
+                                            data = json.loads(json_data)
+                                            # Accumulate content from delta
+                                            if 'choices' in data and len(data['choices']) > 0:
+                                                delta_content = data['choices'][0].get('delta', {}).get('content')
+                                                if delta_content:
+                                                    full_content += delta_content
+                                            # Check for usage object (typically in the last chunk)
+                                            if 'usage' in data:
+                                                stream_completed_usage = data['usage']
+                                            yield f"data: {json.dumps(data)}\n\n".encode('utf-8')
+                                        except json.JSONDecodeError:
+                                            pass # Malformed JSON, ignore or log
+                            
+                            # Handle Ollama-style raw JSON (no "data: " prefix)
+                            elif provider_type == "ollama":
+                                for line in decoded_chunk.split('\n'):
+                                    line = line.strip()
+                                    if not line:
                                         continue
-                                    
-                                    data = json.loads(json_data)
-                                    
-                                    # Accumulate content from delta
-                                    if 'choices' in data and len(data['choices']) > 0:
-                                        delta_content = data['choices'][0].get('delta', {}).get('content')
+
+                                    try:
+                                        data = json.loads(line)
+                                        
+                                        # Check for 'done' field to identify the last chunk and usage
+                                        if data.get('done'):
+                                            if 'prompt_eval_count' in data: # Ollama specific usage
+                                                stream_completed_usage = {
+                                                    "prompt_tokens": data.get("prompt_eval_count", 0),
+                                                    "completion_tokens": data.get("eval_count", 0)
+                                                }
+                                            elif 'usage' in data: # OpenAI-like usage
+                                                stream_completed_usage = data['usage']
+                                            
+                                            # Send [DONE] message
+                                            yield b"data: [DONE]\n\n"
+                                            continue # Stop processing after DONE
+
+                                        # Extract content from Ollama's message structure
+                                        delta_content = data.get('message', {}).get('content', '')
                                         if delta_content:
                                             full_content += delta_content
-                                    
-                                    # Check for usage object (typically in the last chunk)
-                                    if 'usage' in data:
-                                        stream_completed_usage = data['usage']
-                        except (UnicodeDecodeError, json.JSONDecodeError):
-                            # If not decodable or not valid JSON, yield as is
-                            pass
-                        yield chunk
+
+                                        # Construct OpenAI-compatible streaming chunk
+                                        openai_chunk = {
+                                            "id": f"chatcmpl-{request_id}", # Re-use request_id for consistency
+                                            "object": "chat.completion.chunk",
+                                            "created": int(time.time()), # Use current timestamp
+                                            "model": requested_model,
+                                            "choices": [
+                                                {
+                                                    "index": 0,
+                                                    "delta": {"content": delta_content},
+                                                    "logprobs": None,
+                                                    "finish_reason": None
+                                                }
+                                            ]
+                                        }
+                                        yield f"data: {json.dumps(openai_chunk)}\n\n".encode('utf-8')
+
+                                    except json.JSONDecodeError:
+                                        pass # Malformed JSON, ignore or log
+                            else:
+                                # Fallback for unknown streaming formats, yield as is
+                                yield chunk
+                        except UnicodeDecodeError:
+                            pass # Handle cases where chunk is not valid UTF-8
 
                     # After the stream is complete, log the full information
                     prompt_tokens = 0
@@ -153,7 +208,7 @@ class ChatService:
                             }
                         }
                     )
-                return StreamingResponse(generate_and_log(), media_type=response_data.media_type)
+                return StreamingResponse(generate_and_log(provider_type), media_type=response_data.media_type)
             
             else:
                 usage = response_data.get("usage", {})

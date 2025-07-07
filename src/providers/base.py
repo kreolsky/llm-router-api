@@ -10,7 +10,7 @@ class BaseProvider:
         self.base_url = config.get("base_url")
         self.api_key_env = config.get("api_key_env")
         self.headers = config.get("headers", {})
-        self.api_key = os.environ.get(self.api_key_env)
+        self.api_key = os.environ.get(self.api_key_env) if self.api_key_env else None
         self.client = client # Store the httpx client
 
         if not self.base_url:

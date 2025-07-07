@@ -13,27 +13,40 @@ class OllamaProvider(BaseProvider):
         self.headers["Content-Type"] = "application/json"
 
     async def chat_completions(self, request_body: Dict[str, Any], provider_model_name: str, model_config: Dict[str, Any]) -> Any:
-        # Transform request: Replace the model name with the provider's specific model name
-        request_body["model"] = provider_model_name
-        
-        # Merge options from model_config into the request_body
-        options = model_config.get("options")
-        if options:
-            request_body = deep_merge(request_body, options)
+        ollama_request_body = {
+            "model": provider_model_name,
+            "messages": request_body.get("messages", []),
+            "stream": request_body.get("stream", False)
+        }
 
-        # Ensure stream is handled correctly
-        stream = request_body.get("stream", False)
+        # Map OpenAI-like parameters to Ollama's 'options'
+        ollama_options = {}
+        if "temperature" in request_body:
+            ollama_options["temperature"] = request_body["temperature"]
+        if "top_p" in request_body:
+            ollama_options["top_p"] = request_body["top_p"]
+        if "max_tokens" in request_body:
+            ollama_options["num_predict"] = request_body["max_tokens"]
+        if "stop" in request_body:
+            ollama_options["stop"] = request_body["stop"]
+        if "presence_penalty" in request_body:
+            ollama_options["presence_penalty"] = request_body["presence_penalty"]
+        if "frequency_penalty" in request_body:
+            ollama_options["frequency_penalty"] = request_body["frequency_penalty"]
+        
+        if ollama_options:
+            ollama_request_body["options"] = ollama_options
 
         try:
-            if stream:
-                return await self._stream_request(self.client, "/chat", request_body)
+            if ollama_request_body["stream"]:
+                return await self._stream_request(self.client, "/chat", ollama_request_body)
             else:
-                response = await self.client.post(f"{self.base_url}/chat", 
-                                             headers=self.headers, 
-                                             json=request_body,
+                response = await self.client.post(f"{self.base_url}/chat",
+                                             headers=self.headers,
+                                             json=ollama_request_body,
                                              timeout=600)
                 response.raise_for_status()
-                return JSONResponse(content=response.json())
+                return response.json()
         except httpx.HTTPStatusError as e:
             raise HTTPException(
                 status_code=e.response.status_code,
@@ -46,21 +59,20 @@ class OllamaProvider(BaseProvider):
             )
 
     async def embeddings(self, request_body: Dict[str, Any], provider_model_name: str, model_config: Dict[str, Any]) -> Any:
-        # Transform request: Replace the model name with the provider's specific model name
-        request_body["model"] = provider_model_name
-        
-        # Merge options from model_config into the request_body
-        options = model_config.get("options")
-        if options:
-            request_body = deep_merge(request_body, options)
+        # Ollama embeddings API expects 'model' and 'prompt'
+        # The incoming request_body is OpenAI-compatible, with 'input'
+        ollama_request_body = {
+            "model": provider_model_name,
+            "prompt": request_body.get("input") # Map OpenAI 'input' to Ollama 'prompt'
+        }
 
         try:
-            response = await self.client.post(f"{self.base_url}/embeddings", 
-                                             headers=self.headers, 
-                                             json=request_body,
+            response = await self.client.post(f"{self.base_url}/embeddings",
+                                             headers=self.headers,
+                                             json=ollama_request_body,
                                              timeout=600)
             response.raise_for_status()
-            return JSONResponse(content=response.json())
+            return response.json()
         except httpx.HTTPStatusError as e:
             raise HTTPException(
                 status_code=e.response.status_code,

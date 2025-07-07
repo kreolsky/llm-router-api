@@ -49,9 +49,6 @@ models:
     provider: transcriber
     provider_model_name: dummy
     is_hidden: true
-  ollama/llama2:
+  ollama/gemma3n:
     provider: ollama
-    provider_model_name: llama2
-  ollama/mistral:
-    provider: ollama
-    provider_model_name: mistral
+    provider_model_name: gemma3n
