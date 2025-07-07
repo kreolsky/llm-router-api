@@ -2,11 +2,12 @@ import httpx
 import logging
 from typing import Dict, Any, Tuple
 from fastapi import HTTPException, status, UploadFile
+import base64 # Added base64
+import io # Added io
 
 from ..core.config_manager import ConfigManager
 from ..services.model_service import ModelService
-from ..providers import get_provider_instance
-from ..utils.cost_calculator import CostCalculator
+from ..providers.openai import OpenAICompatibleProvider
 
 logger = logging.getLogger("nnp-llm-router")
 
@@ -15,16 +16,13 @@ class TranscriptionService:
         self.config_manager = config_manager
         self.client = client
         self.model_service = model_service
-        # self.cost_calculator = CostCalculator(config_manager) # Removed as it's not instantiated with arguments
 
-    async def create_transcription(self, audio_file: UploadFile, model_id: str, auth_data: Tuple[str, str, Any], response_format: str = "json", temperature: float = 0.0, language: str = None) -> Any:
-        user_id, _, _ = auth_data # Unpack only the user_id, discard api_key and allowed_models
+    async def _process_transcription_request(self, audio_data: bytes, filename: str, content_type: str, model_id: str, auth_data: Tuple[str, str, Any], response_format: str = "json", temperature: float = 0.0, language: str = None, return_timestamps: bool = False) -> Any:
+        user_id, api_key, _ = auth_data
         logger.info(f"User {user_id} requesting transcription for model {model_id}")
 
         try:
             model_config = await self.model_service.retrieve_model(model_id)
-            # retrieve_model raises HTTPException if model not found, so no need for if not model_config
-
             provider_name = model_config.get("provider")
             provider_model_name = model_config.get("provider_model_name")
             
@@ -41,27 +39,27 @@ class TranscriptionService:
                     detail={"error": {"message": f"Provider '{provider_name}' not found.", "code": "provider_not_found"}},
                 )
             
-            provider_instance = get_provider_instance(provider_config.get("type"), provider_config, self.client)
+            # Instantiate WhisperTranscriptionProvider directly
+            provider_instance = OpenAICompatibleProvider(provider_config, self.client)
             
-            # Prepare the request body for the provider
-            # The provider will handle the file upload and other parameters
             request_params = {
                 "model": provider_model_name,
                 "response_format": response_format,
                 "temperature": temperature,
+                "return_timestamps": return_timestamps, # Pass return_timestamps
             }
             if language:
                 request_params["language"] = language
 
-            # Call the provider's transcription method
             response = await provider_instance.transcriptions(
-                audio_file=audio_file,
-                request_params=request_params,
-                model_config=model_config
+                audio_data=audio_data, # Pass raw audio data
+                filename=filename,
+                content_type=content_type,
+                model_id=provider_model_name,
+                api_key=api_key,
+                base_url=provider_config.get("base_url"),
+                **request_params
             )
-
-            # TODO: Implement cost calculation for transcription
-            # self.cost_calculator.record_usage(user_id, model_id, prompt_tokens, completion_tokens, "chat")
 
             return response
 
@@ -74,3 +72,18 @@ class TranscriptionService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": {"message": f"An unexpected error occurred: {e}", "code": "internal_server_error"}},
             )
+
+    async def create_transcription(self, audio_file: UploadFile, model_id: str, auth_data: Tuple[str, str, Any], response_format: str = "json", temperature: float = 0.0, language: str = None, return_timestamps: bool = False) -> Any:
+        audio_data = await audio_file.read()
+        return await self._process_transcription_request(
+            audio_data=audio_data,
+            filename=audio_file.filename,
+            content_type=audio_file.content_type,
+            model_id=model_id,
+            auth_data=auth_data,
+            response_format=response_format,
+            temperature=temperature,
+            language=language,
+            return_timestamps=return_timestamps # Pass return_timestamps
+        )
+

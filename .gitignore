@@ -21,3 +21,4 @@ logs/
 # Other
 *.sqlite3
 *.db
+_help

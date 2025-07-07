@@ -81,5 +81,11 @@ def setup_logging():
     file_handler.setFormatter(file_formatter)
     logger.addHandler(file_handler)
 
+    # Console handler
+    console_handler = logging.StreamHandler()
+    console_formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    console_handler.setFormatter(console_formatter)
+    logger.addHandler(console_handler)
+
     # Ensure logger propagates to handlers
     logger.propagate = True
