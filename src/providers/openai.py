@@ -1,10 +1,7 @@
 import httpx
-import json
 from typing import Dict, Any
-from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi import HTTPException, status
-import io # Added io
-from ..logging.config import logger # Import logger
+import io
 
 from .base import BaseProvider
 from ..utils.deep_merge import deep_merge # Assuming deep_merge is in src/utils
@@ -47,6 +44,31 @@ class OpenAICompatibleProvider(BaseProvider):
                 detail={"error": {"message": f"Network error communicating with provider: {e}", "code": "provider_network_error"}},
             )
 
+    def _prepare_transcription_headers(self, api_key: str) -> Dict[str, str]:
+        return {"Authorization": f"Bearer {api_key}"}
+
+    def _prepare_transcription_files(self, audio_data: bytes, filename: str, content_type: str) -> Dict[str, Any]:
+        return {"file": (filename, io.BytesIO(audio_data), content_type)}
+
+    def _process_transcription_params(self, **kwargs) -> Dict[str, Any]:
+        transcription_params = {}
+        if 'language' in kwargs:
+            transcription_params['language'] = kwargs['language']
+        if 'temperature' in kwargs:
+            transcription_params['temperature'] = kwargs['temperature']
+        if 'prompt' in kwargs:
+            transcription_params['prompt'] = kwargs['prompt']
+        if 'response_format' in kwargs:
+            transcription_params['response_format'] = kwargs['response_format']
+        
+        # Handle return_timestamps logic
+        if 'return_timestamps' in kwargs and kwargs['return_timestamps']:
+            transcription_params['response_format'] = 'verbose_json'
+        elif 'return_timestamps' in kwargs and not kwargs['return_timestamps'] and 'response_format' not in kwargs:
+            transcription_params['response_format'] = 'json'
+        
+        return transcription_params
+
     async def transcriptions(
         self,
         audio_data: bytes,
@@ -60,30 +82,10 @@ class OpenAICompatibleProvider(BaseProvider):
         """
         Sends audio data for transcription to the OpenAI-compatible service.
         """
-        headers = {
-            "Authorization": f"Bearer {api_key}"
-        }
+        headers = self._prepare_transcription_headers(api_key)
+        files = self._prepare_transcription_files(audio_data, filename, content_type)
+        transcription_params = self._process_transcription_params(**kwargs)
         
-        # Prepare the multipart form data
-        files = {"file": (filename, io.BytesIO(audio_data), content_type)}
-        
-        # Extract transcription-specific parameters from kwargs
-        transcription_params = {}
-        if 'language' in kwargs:
-            transcription_params['language'] = kwargs['language']
-        if 'temperature' in kwargs:
-            transcription_params['temperature'] = kwargs['temperature']
-        if 'prompt' in kwargs:
-            transcription_params['prompt'] = kwargs['prompt']
-        if 'response_format' in kwargs:
-            transcription_params['response_format'] = kwargs['response_format']
-        if 'return_timestamps' in kwargs and kwargs['return_timestamps']:
-            # If return_timestamps is True, set response_format to verbose_json
-            transcription_params['response_format'] = 'verbose_json'
-        elif 'return_timestamps' in kwargs and not kwargs['return_timestamps'] and 'response_format' not in kwargs:
-            # If return_timestamps is False and response_format is not explicitly set, default to json
-            transcription_params['response_format'] = 'json'
-
         data = {"model": model_id, **transcription_params}
 
         try:

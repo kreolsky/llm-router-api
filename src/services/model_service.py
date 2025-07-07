@@ -1,18 +1,42 @@
 import httpx
 import os
 import time
-import logging
-from typing import Dict, Any
+from typing import Dict, Any, Tuple
 
 from fastapi import HTTPException, status
 
 from ..core.config_manager import ConfigManager
-from ..logging.config import logger # Import logger from logging_config
+from ..logging.config import logger
 
 class ModelService:
     def __init__(self, config_manager: ConfigManager, httpx_client: httpx.AsyncClient):
         self.config_manager = config_manager
         self.httpx_client = httpx_client
+
+    async def _get_provider_api_details(self, provider_config: Dict[str, Any]) -> Tuple[str, str, Dict[str, str]]:
+        """Extracts base URL, API key, and headers for a given provider."""
+        provider_base_url = provider_config.get("base_url")
+        provider_api_key_env = provider_config.get("api_key_env")
+        provider_api_key = os.getenv(provider_api_key_env)
+
+        if not provider_base_url or not provider_api_key:
+            logger.warning(f"Missing base_url or API key for provider {provider_config.get('name', 'unknown')}")
+            return None, None, {}
+
+        headers = {
+            "Authorization": f"Bearer {provider_api_key}",
+            "Content-Type": "application/json"
+        }
+        if "headers" in provider_config:
+            headers.update(provider_config["headers"])
+        return provider_base_url, provider_api_key, headers
+
+    async def _fetch_provider_models(self, base_url: str, headers: Dict[str, str], client: httpx.AsyncClient) -> Dict[str, Any]:
+        """Fetches models list from a provider's API."""
+        provider_models_list_url = f"{base_url}/models"
+        response = await client.get(provider_models_list_url, headers=headers)
+        response.raise_for_status()
+        return response.json()
 
     async def _get_model_details_from_provider(self, model_id: str, current_config: Dict[str, Any], client: httpx.AsyncClient) -> Dict[str, Any]:
         model_data = current_config.get("models", {}).get(model_id)
@@ -28,38 +52,25 @@ class ModelService:
 
         additional_model_details = {}
         try:
-            provider_base_url = provider_config.get("base_url")
-            provider_api_key_env = provider_config.get("api_key_env")
-            provider_api_key = os.getenv(provider_api_key_env)
+            base_url, api_key, headers = await self._get_provider_api_details(provider_config)
+            if not base_url or not api_key:
+                return {}
 
-            if not provider_base_url or not provider_api_key:
-                logger.warning(f"Missing base_url or API key for provider {provider_name}")
-            else:
-                provider_models_list_url = f"{provider_base_url}/models"
-                headers = {
-                    "Authorization": f"Bearer {provider_api_key}",
-                    "Content-Type": "application/json"
-                }
-                if "headers" in provider_config:
-                    headers.update(provider_config["headers"])
-
-                provider_response = await client.get(provider_models_list_url, headers=headers)
-                provider_response.raise_for_status()
-                provider_models_data = provider_response.json()
+            provider_models_data = await self._fetch_provider_models(base_url, headers, client)
                     
-                found_provider_model = None
-                for p_model in provider_models_data.get("data", []):
-                    if p_model.get("id") == provider_model_name:
-                        found_provider_model = p_model
-                        break
-                
-                if found_provider_model:
-                    additional_model_details["description"] = found_provider_model.get("description")
-                    additional_model_details["context_length"] = found_provider_model.get("context_length")
-                    additional_model_details["architecture"] = found_provider_model.get("architecture")
-                    additional_model_details["pricing"] = found_provider_model.get("pricing")
-                else:
-                    logger.warning(f"Provider model '{provider_model_name}' not found in provider's model list for {provider_name}")
+            found_provider_model = None
+            for p_model in provider_models_data.get("data", []):
+                if p_model.get("id") == provider_model_name:
+                    found_provider_model = p_model
+                    break
+            
+            if found_provider_model:
+                additional_model_details["description"] = found_provider_model.get("description")
+                additional_model_details["context_length"] = found_provider_model.get("context_length")
+                additional_model_details["architecture"] = found_provider_model.get("architecture")
+                additional_model_details["pricing"] = found_provider_model.get("pricing")
+            else:
+                logger.warning(f"Provider model '{provider_model_name}' not found in provider's model list for {provider_name}")
 
         except httpx.HTTPStatusError as e:
             logger.error(f"HTTP error fetching model details from provider {provider_name}: {e.response.status_code} - {e.response.text}", extra={"error_message": e.response.text, "error_code": f"provider_http_error_{e.response.status_code}"}, exc_info=True)

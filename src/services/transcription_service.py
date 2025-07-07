@@ -2,8 +2,6 @@ import httpx
 import logging
 from typing import Dict, Any, Tuple
 from fastapi import HTTPException, status, UploadFile
-import base64 # Added base64
-import io # Added io
 
 from ..core.config_manager import ConfigManager
 from ..services.model_service import ModelService
@@ -17,48 +15,51 @@ class TranscriptionService:
         self.client = client
         self.model_service = model_service
 
+    async def _validate_model_and_provider(self, model_id: str) -> Tuple[Dict[str, Any], Dict[str, Any], str, str]:
+        model_config = await self.model_service.retrieve_model(model_id)
+        provider_name = model_config.get("provider")
+        provider_model_name = model_config.get("provider_model_name")
+
+        if not provider_name or not provider_model_name:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"error": {"message": f"Model '{model_id}' is not correctly configured with a provider or provider model name.", "code": "model_config_error"}},
+            )
+
+        provider_config = self.config_manager.get_config().get("providers", {}).get(provider_name)
+        if not provider_config:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"error": {"message": f"Provider '{provider_name}' not found.", "code": "provider_not_found"}},
+            )
+        return model_config, provider_config, provider_name, provider_model_name
+
+    async def _get_provider_instance(self, provider_config: Dict[str, Any]) -> OpenAICompatibleProvider:
+        return OpenAICompatibleProvider(provider_config, self.client)
+
     async def _process_transcription_request(self, audio_data: bytes, filename: str, content_type: str, model_id: str, auth_data: Tuple[str, str, Any], response_format: str = "json", temperature: float = 0.0, language: str = None, return_timestamps: bool = False) -> Any:
         user_id, api_key, _ = auth_data
         logger.info(f"User {user_id} requesting transcription for model {model_id}")
 
         try:
-            model_config = await self.model_service.retrieve_model(model_id)
-            provider_name = model_config.get("provider")
-            provider_model_name = model_config.get("provider_model_name")
-            
-            if not provider_name or not provider_model_name:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail={"error": {"message": f"Model '{model_id}' is not correctly configured with a provider or provider model name.", "code": "model_config_error"}},
-                )
-
-            provider_config = self.config_manager.get_config().get("providers", {}).get(provider_name)
-            if not provider_config:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail={"error": {"message": f"Provider '{provider_name}' not found.", "code": "provider_not_found"}},
-                )
-            
-            # Instantiate WhisperTranscriptionProvider directly
-            provider_instance = OpenAICompatibleProvider(provider_config, self.client)
+            model_config, provider_config, provider_name, provider_model_name = await self._validate_model_and_provider(model_id)
+            provider_instance = await self._get_provider_instance(provider_config)
             
             request_params = {
-                "model": provider_model_name,
+                "model_id": provider_model_name,
                 "response_format": response_format,
                 "temperature": temperature,
-                "return_timestamps": return_timestamps, # Pass return_timestamps
+                "return_timestamps": return_timestamps,
+                "language": language,
+                "api_key": api_key,
+                "base_url": provider_config.get("base_url"),
             }
-            if language:
-                request_params["language"] = language
 
             response = await provider_instance.transcriptions(
-                audio_data=audio_data, # Pass raw audio data
+                audio_data=audio_data,
                 filename=filename,
                 content_type=content_type,
-                model_id=provider_model_name,
-                api_key=api_key,
-                base_url=provider_config.get("base_url"),
-                **request_params
+                **{k: v for k, v in request_params.items() if v is not None} # Filter out None values
             )
 
             return response
