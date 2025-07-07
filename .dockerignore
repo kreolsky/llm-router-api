@@ -1,0 +1,9 @@
+.git
+.vscode
+__pycache__
+*.pyc
+*.log
+logs/
+tests/
+.env
+.DS_Store

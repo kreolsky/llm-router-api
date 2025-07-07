@@ -47,3 +47,9 @@ models:
   stt/dummy:
     provider: transcriber
     provider_model_name: dummy
+  ollama/llama2:
+    provider: ollama
+    provider_model_name: llama2
+  ollama/mistral:
+    provider: ollama
+    provider_model_name: mistral

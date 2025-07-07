@@ -15,10 +15,12 @@ class BaseProvider:
 
         if not self.base_url:
             raise ValueError("Provider base_url is not configured.")
-        if not self.api_key:
-            raise ValueError(f"API key for {self.api_key_env} is not set in environment variables.")
-
-        self.headers["Authorization"] = f"Bearer {self.api_key}"
+        
+        # Only set API key and Authorization header if api_key_env is provided
+        if self.api_key_env:
+            if not self.api_key:
+                raise ValueError(f"API key for {self.api_key_env} is not set in environment variables.")
+            self.headers["Authorization"] = f"Bearer {self.api_key}"
 
     async def _stream_request(self, client: httpx.AsyncClient, url_path: str, request_body: Dict[str, Any]) -> StreamingResponse:
         async def generate():

@@ -17,16 +17,17 @@ class ModelService:
         """Extracts base URL, API key, and headers for a given provider."""
         provider_base_url = provider_config.get("base_url")
         provider_api_key_env = provider_config.get("api_key_env")
-        provider_api_key = os.getenv(provider_api_key_env)
+        provider_api_key = os.getenv(provider_api_key_env) if provider_api_key_env else None
 
-        if not provider_base_url or not provider_api_key:
-            logger.warning(f"Missing base_url or API key for provider {provider_config.get('name', 'unknown')}")
+        if not provider_base_url:
+            logger.warning(f"Missing base_url for provider {provider_config.get('name', 'unknown')}")
             return None, None, {}
 
         headers = {
-            "Authorization": f"Bearer {provider_api_key}",
             "Content-Type": "application/json"
         }
+        if provider_api_key:
+            headers["Authorization"] = f"Bearer {provider_api_key}"
         if "headers" in provider_config:
             headers.update(provider_config["headers"])
         return provider_base_url, provider_api_key, headers

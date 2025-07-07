@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request, HTTPException, status, Depends, File, Form
 from typing import Optional
 import uvicorn
 import logging
+import httpx
 from typing import Dict, Any
 
 from ..core.config_manager import ConfigManager
@@ -23,8 +24,6 @@ app = FastAPI()
 # Initialize ConfigManager
 config_manager = ConfigManager()
 app.state.config_manager = config_manager
-
-import httpx # Add httpx import
 
 @app.on_event("startup")
 async def startup_event():

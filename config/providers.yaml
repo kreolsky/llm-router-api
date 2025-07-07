@@ -22,3 +22,6 @@ providers:
     type: openai
     base_url: http://192.168.1.52:5042/v1
     api_key_env: TRANSCRIPTIONS_API_KEY
+  ollama:
+    type: ollama
+    base_url: http://localhost:11434/api
