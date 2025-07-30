@@ -23,3 +23,5 @@ logs/
 *.sqlite3
 *.db
 _help
+TODO.md
+

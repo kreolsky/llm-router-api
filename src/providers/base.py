@@ -1,9 +1,11 @@
 import httpx
 import os
+import json # Import json for parsing error responses
 from typing import Dict, Any, AsyncGenerator
 from fastapi.responses import StreamingResponse, JSONResponse
 
 from ..utils.deep_merge import deep_merge
+from ..core.exceptions import ProviderAPIError, ProviderNetworkError, ProviderStreamError # Import custom exceptions
 
 class BaseProvider:
     def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient):
@@ -28,9 +30,38 @@ class BaseProvider:
                                      headers=self.headers, 
                                      json=request_body,
                                      timeout=600) as response:
-                response.raise_for_status()
-                async for chunk in response.aiter_bytes():
-                    yield chunk
+              try:
+                  response.raise_for_status()
+              except httpx.HTTPStatusError as e:
+                  # Attempt to parse error message from provider's response body
+                  error_message = f"Provider API error: {e.response.status_code} - {e.response.text}"
+                  error_code = "provider_api_error"
+                  try:
+                      error_json = e.response.json()
+                      if "error" in error_json and "message" in error_json["error"]:
+                          error_message = error_json["error"]["message"]
+                          if "code" in error_json["error"]:
+                              error_code = error_json["error"]["code"]
+                      elif "message" in error_json:
+                          error_message = error_json["message"]
+                  except json.JSONDecodeError:
+                      pass # If not JSON, use the default error_message
+                  
+                  raise ProviderStreamError(
+                      message=error_message,
+                      status_code=e.response.status_code,
+                      error_code=error_code,
+                      original_exception=e
+                  ) from e
+              except httpx.RequestError as e:
+                  # Raise custom network error
+                  raise ProviderNetworkError(
+                      message=f"Network or connection error to provider: {e}",
+                      original_exception=e
+                  ) from e
+              
+              async for chunk in response.aiter_bytes():
+                  yield chunk
         return StreamingResponse(generate(), media_type="text/event-stream")
 
     async def chat_completions(self, request_body: Dict[str, Any], provider_model_name: str, model_config: Dict[str, Any]) -> Any:

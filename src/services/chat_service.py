@@ -10,6 +10,7 @@ from ..core.config_manager import ConfigManager
 from ..providers import get_provider_instance
 from .model_service import ModelService
 from ..logging.config import logger
+from ..core.exceptions import ProviderAPIError, ProviderNetworkError, ProviderStreamError # Import custom exceptions
 
 class ChatService:
     def __init__(self, config_manager: ConfigManager, httpx_client: httpx.AsyncClient, model_service: ModelService):
@@ -41,10 +42,44 @@ class ChatService:
                 self._log_non_streaming_response(request_id, user_id, requested_model, response_data)
                 return JSONResponse(content=response_data)
             
+        except httpx.HTTPStatusError as e:
+            # This catches 4xx or 5xx responses from the external API
+            error_message = f"Provider API error: {e.response.status_code} - {e.response.text}"
+            error_code = "provider_api_error"
+            status_code = e.response.status_code if 400 <= e.response.status_code < 600 else status.HTTP_500_INTERNAL_SERVER_ERROR
+            
+            # Attempt to parse error message from provider's response body
+            try:
+                error_json = e.response.json()
+                if "error" in error_json and "message" in error_json["error"]:
+                    error_message = error_json["error"]["message"]
+                    if "code" in error_json["error"]:
+                        error_code = error_json["error"]["code"]
+                elif "message" in error_json: # Some providers might just have a 'message' field
+                    error_message = error_json["message"]
+            except json.JSONDecodeError:
+                pass # If not JSON, use the default error_message
+
+            self._log_http_exception(HTTPException(status_code=status_code, detail={"error": {"message": error_message, "code": error_code}}), request_id, user_id, requested_model)
+            raise HTTPException(
+                status_code=status_code,
+                detail={"error": {"message": error_message, "code": error_code}},
+            )
+        except httpx.RequestError as e:
+            # This catches network errors, timeouts, etc.
+            error_message = f"Network or connection error to provider: {e}"
+            error_code = "provider_network_error"
+            self._log_unexpected_exception(e, request_id, user_id, requested_model) # Log with exc_info
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"error": {"message": error_message, "code": error_code}},
+            )
         except HTTPException as e:
+            # This catches HTTPExceptions raised by our own validation logic
             self._log_http_exception(e, request_id, user_id, requested_model)
             raise e
         except Exception as e:
+            # Catch any other unexpected errors
             self._log_unexpected_exception(e, request_id, user_id, requested_model)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -122,28 +157,51 @@ class ChatService:
         full_content = ""
         stream_completed_usage = None
         
-        async for chunk in response_data.body_iterator:
-            try:
-                decoded_chunk = chunk.decode('utf-8')
-                
-                if decoded_chunk.startswith('data: '):
-                    full_content, stream_completed_usage = self._process_openai_sse_chunk(decoded_chunk, full_content, stream_completed_usage)
-                    yield chunk # Yield original chunk for OpenAI SSE
-                elif provider_type == "ollama":
-                    processed_chunk, new_full_content, new_stream_completed_usage = self._process_ollama_chunk(decoded_chunk, full_content, stream_completed_usage, requested_model, request_id)
-                    full_content = new_full_content
-                    stream_completed_usage = new_stream_completed_usage
-                    if processed_chunk: # Only yield if there's a valid chunk to yield
-                        yield processed_chunk
-                else:
-                    yield chunk
-            except UnicodeDecodeError:
-                pass # Handle cases where chunk is not valid UTF-8
+        try:
+            async for chunk in response_data.body_iterator:
+                try:
+                    decoded_chunk = chunk.decode('utf-8')
+                    
+                    if decoded_chunk.startswith('data: '):
+                        full_content, stream_completed_usage = self._process_openai_sse_chunk(decoded_chunk, full_content, stream_completed_usage, request_id, user_id)
+                        yield chunk # Yield original chunk for OpenAI SSE
+                    elif provider_type == "ollama":
+                        processed_chunk, new_full_content, new_stream_completed_usage = self._process_ollama_chunk(decoded_chunk, full_content, stream_completed_usage, requested_model, request_id, user_id)
+                        full_content = new_full_content
+                        stream_completed_usage = new_stream_completed_usage
+                        if processed_chunk: # Only yield if there's a valid chunk to yield
+                            yield processed_chunk
+                    else:
+                        yield chunk
+                except UnicodeDecodeError:
+                    logger.warning(f"UnicodeDecodeError in stream for request {request_id}. Skipping chunk.", extra={"request_id": request_id, "user_id": user_id, "log_type": "warning"})
+                    # Continue to next chunk if decoding fails
+                    continue
+                except json.JSONDecodeError as e:
+                    logger.error(f"JSONDecodeError in stream for request {request_id}: {e}. Malformed chunk received.", extra={"request_id": request_id, "user_id": user_id, "log_type": "error", "exception": str(e)})
+                    yield self._format_sse_error(f"Malformed JSON received from provider: {e}", "malformed_json", status.HTTP_502_BAD_GATEWAY)
+                    break # Terminate stream on critical JSON error
+                except ProviderStreamError as e:
+                    logger.error(f"ProviderStreamError in stream for request {request_id}: {e.message}", extra={"request_id": request_id, "user_id": user_id, "log_type": "error", "status_code": e.status_code, "error_code": e.error_code, "original_exception": str(e.original_exception)})
+                    yield self._format_sse_error(e.message, e.error_code, e.status_code)
+                    break # Terminate stream on provider error
+                except ProviderNetworkError as e:
+                    logger.error(f"ProviderNetworkError in stream for request {request_id}: {e.message}", extra={"request_id": request_id, "user_id": user_id, "log_type": "error", "original_exception": str(e.original_exception)})
+                    yield self._format_sse_error(e.message, "provider_network_error", status.HTTP_503_SERVICE_UNAVAILABLE)
+                    break # Terminate stream on network error
+                except Exception as e:
+                    logger.error(f"Unexpected error in stream for request {request_id}: {e}", extra={"request_id": request_id, "user_id": user_id, "log_type": "error", "exception": str(e)}, exc_info=True)
+                    yield self._format_sse_error(f"An unexpected error occurred during streaming: {e}", "unexpected_streaming_error", status.HTTP_500_INTERNAL_SERVER_ERROR)
+                    break # Terminate stream on unexpected error
+        except Exception as e:
+            # This outer catch is for exceptions that might occur before the inner loop starts
+            logger.error(f"Critical error before stream iteration for request {request_id}: {e}", extra={"request_id": request_id, "user_id": user_id, "log_type": "error", "exception": str(e)}, exc_info=True)
+            yield self._format_sse_error(f"A critical error occurred before streaming: {e}", "critical_streaming_error", status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         self._log_streaming_completion(request_id, user_id, requested_model, full_content, stream_completed_usage)
         yield b"data: [DONE]\n\n" # Ensure DONE message is sent at the very end
 
-    def _process_openai_sse_chunk(self, decoded_chunk: str, full_content: str, stream_completed_usage: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+    def _process_openai_sse_chunk(self, decoded_chunk: str, full_content: str, stream_completed_usage: Dict[str, Any], request_id: str, user_id: str) -> Tuple[str, Dict[str, Any]]:
         for line in decoded_chunk.split('\n'):
             if line.startswith('data: '):
                 json_data = line[len('data: '):].strip()
@@ -157,11 +215,12 @@ class ChatService:
                             full_content += delta_content
                     if 'usage' in data:
                         stream_completed_usage = data['usage']
-                except json.JSONDecodeError:
-                    pass
+                except json.JSONDecodeError as e:
+                    # Re-raise JSONDecodeError to be caught by _stream_response_handler
+                    raise e
         return full_content, stream_completed_usage
 
-    def _process_ollama_chunk(self, decoded_chunk: str, full_content: str, stream_completed_usage: Dict[str, Any], requested_model: str, request_id: str) -> Tuple[bytes, str, Dict[str, Any]]:
+    def _process_ollama_chunk(self, decoded_chunk: str, full_content: str, stream_completed_usage: Dict[str, Any], requested_model: str, request_id: str, user_id: str) -> Tuple[bytes, str, Dict[str, Any]]:
         processed_chunk = b""
         for line in decoded_chunk.split('\n'):
             line = line.strip()
@@ -199,8 +258,9 @@ class ChatService:
                     ]
                 }
                 processed_chunk = f"data: {json.dumps(openai_chunk)}\n\n".encode('utf-8')
-            except json.JSONDecodeError:
-                pass
+            except json.JSONDecodeError as e:
+                # Re-raise JSONDecodeError to be caught by _stream_response_handler
+                raise e
         return processed_chunk, full_content, stream_completed_usage
 
     def _log_streaming_completion(self, request_id: str, user_id: str, requested_model: str, full_content: str, stream_completed_usage: Dict[str, Any]):
@@ -224,6 +284,30 @@ class ChatService:
                 }
             }
         )
+
+    def _format_sse_error(self, message: str, code: str, status_code: int) -> bytes:
+        """Formats an error message into an SSE-compatible chunk."""
+        error_payload = {
+            "id": f"chatcmpl-error-{int(time.time())}", # Unique ID for the error chunk
+            "object": "chat.completion.chunk",
+            "created": int(time.time()),
+            "model": "error_model", # Placeholder model name for error
+            "choices": [], # Empty choices array for error messages
+            "error": {
+                "message": message,
+                "type": "api_error", # Generic type for now, can be more specific
+                "code": code,
+                "status": status_code
+            }
+        }
+        # For streaming errors, some clients expect the error object directly at the top level
+        # or within a 'data' field that is not a 'chat.completion.chunk' object.
+        # However, to maintain SSE compatibility and allow clients to parse it,
+        # we'll keep it as a chunk but with an empty choices array and the error object.
+        # If the client still interprets this as a message, we might need to send
+        # a non-chunked JSON error response instead for non-streaming errors,
+        # or a different SSE format for streaming errors.
+        return f"data: {json.dumps(error_payload)}\n\n".encode('utf-8')
 
     def _log_non_streaming_response(self, request_id: str, user_id: str, requested_model: str, response_data: Dict[str, Any]):
         usage = response_data.get("usage", {})
