@@ -1,7 +1,7 @@
+"""
+Обновленный ChatService после рефакторинга
+"""
 import httpx
-import json
-import time
-import codecs
 from typing import Dict, Any, Tuple
 
 from fastapi import HTTPException, status, Request
@@ -10,16 +10,46 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from ..core.config_manager import ConfigManager
 from ..providers import get_provider_instance
 from .model_service import ModelService
-from ..logging.config import logger
-from ..core.exceptions import ProviderAPIError, ProviderNetworkError, ProviderStreamError # Import custom exceptions
+from .chat.validator import ChatRequestValidator
+from .chat.buffer_manager import StreamBufferManager
+from .chat.format_processor import StreamFormatProcessor
+from .chat.error_handler import StreamingErrorHandler
+from .chat.logger import ChatLogger
+from .chat.streaming_handler import StreamingHandler
+
 
 class ChatService:
+    """Координация компонентов обработки чат-запросов"""
+    
     def __init__(self, config_manager: ConfigManager, httpx_client: httpx.AsyncClient, model_service: ModelService):
         self.config_manager = config_manager
         self.httpx_client = httpx_client
         self.model_service = model_service
-
+        
+        # Инициализация компонентов
+        self.validator = ChatRequestValidator(config_manager)
+        self.buffer_manager = StreamBufferManager()
+        self.format_processor = StreamFormatProcessor()
+        self.error_handler = StreamingErrorHandler()
+        self.logger = ChatLogger()
+        self.streaming_handler = StreamingHandler(
+            self.buffer_manager, 
+            self.format_processor, 
+            self.error_handler, 
+            self.logger
+        )
+    
     async def chat_completions(self, request: Request, auth_data: Tuple[str, str, list]) -> Any:
+        """
+        Основной метод обработки чат-запросов
+        
+        Args:
+            request: FastAPI запрос
+            auth_data: Данные аутентификации (project_name, api_key, allowed_models)
+            
+        Returns:
+            StreamingResponse или JSONResponse
+        """
         project_name, api_key, allowed_models = auth_data
         request_id = request.state.request_id
         user_id = project_name
@@ -27,405 +57,46 @@ class ChatService:
         request_body = await request.json()
         requested_model = request_body.get("model")
 
-        self._log_chat_completion_request(request_id, user_id, requested_model, request_body)
+        # Логирование запроса
+        self.logger.log_request(request_id, user_id, requested_model, request_body)
 
+        # Валидация
         model_config, provider_name, provider_model_name, provider_config = \
-            self._validate_request_and_model(requested_model, allowed_models, api_key, project_name, request_id, user_id)
+            self.validator.validate_request(
+                requested_model, allowed_models, api_key, project_name, request_id, user_id
+            )
 
-        provider_instance = self._get_provider_instance(provider_config, request_id, user_id)
+        # Получение провайдера
+        try:
+            provider_instance = get_provider_instance(provider_config.get("type"), provider_config, self.httpx_client)
+        except ValueError as e:
+            error_detail = {"error": {"message": f"Provider configuration error: {e}", "code": "provider_config_error"}}
+            self.logger.log_error(Exception(f"Provider configuration error: {e}"), request_id, user_id, requested_model)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=error_detail,
+            )
         
         try:
             response_data = await provider_instance.chat_completions(request_body, provider_model_name, model_config)
             
             if isinstance(response_data, StreamingResponse):
-                return StreamingResponse(self._stream_response_handler(response_data, provider_config.get("type"), requested_model, request_id, user_id), media_type=response_data.media_type)
+                return StreamingResponse(
+                    self.streaming_handler.handle_stream(
+                        response_data, provider_config.get("type"), requested_model, request_id, user_id
+                    ), 
+                    media_type=response_data.media_type
+                )
             else:
-                self._log_non_streaming_response(request_id, user_id, requested_model, response_data)
+                self.logger.log_response(request_id, user_id, requested_model, response_data)
                 return JSONResponse(content=response_data)
             
-        except httpx.HTTPStatusError as e:
-            # This catches 4xx or 5xx responses from the external API
-            error_message = f"Provider API error: {e.response.status_code} - {e.response.text}"
-            error_code = "provider_api_error"
-            status_code = e.response.status_code if 400 <= e.response.status_code < 600 else status.HTTP_500_INTERNAL_SERVER_ERROR
-            
-            # Attempt to parse error message from provider's response body
-            try:
-                error_json = e.response.json()
-                if "error" in error_json and "message" in error_json["error"]:
-                    error_message = error_json["error"]["message"]
-                    if "code" in error_json["error"]:
-                        error_code = error_json["error"]["code"]
-                elif "message" in error_json: # Some providers might just have a 'message' field
-                    error_message = error_json["message"]
-            except json.JSONDecodeError:
-                pass # If not JSON, use the default error_message
-
-            self._log_http_exception(HTTPException(status_code=status_code, detail={"error": {"message": error_message, "code": error_code}}), request_id, user_id, requested_model)
-            raise HTTPException(
-                status_code=status_code,
-                detail={"error": {"message": error_message, "code": error_code}},
-            )
-        except httpx.RequestError as e:
-            # This catches network errors, timeouts, etc.
-            error_message = f"Network or connection error to provider: {e}"
-            error_code = "provider_network_error"
-            self._log_unexpected_exception(e, request_id, user_id, requested_model) # Log with exc_info
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={"error": {"message": error_message, "code": error_code}},
-            )
         except HTTPException as e:
-            # This catches HTTPExceptions raised by our own validation logic
-            self._log_http_exception(e, request_id, user_id, requested_model)
+            self.logger.log_error(e, request_id, user_id, requested_model)
             raise e
         except Exception as e:
-            # Catch any other unexpected errors
-            self._log_unexpected_exception(e, request_id, user_id, requested_model)
+            self.logger.log_error(e, request_id, user_id, requested_model)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": {"message": f"An unexpected error occurred: {e}", "code": "unexpected_error"}},
             )
-
-    def _log_chat_completion_request(self, request_id: str, user_id: str, requested_model: str, request_body: Dict[str, Any]):
-        logger.info(
-            "Chat Completion Request",
-            extra={
-                "log_type": "request",
-                "request_id": request_id,
-                "user_id": user_id,
-                "model_id": requested_model,
-                "request_body_summary": {
-                    "model": requested_model,
-                    "messages_count": len(request_body.get("messages", [])),
-                    "first_message_content": request_body.get("messages", [{}])[0].get("content") if request_body.get("messages") else None
-                }
-            }
-        )
-
-    def _validate_request_and_model(self, requested_model: str, allowed_models: list, api_key: str, project_name: str, request_id: str, user_id: str) -> Tuple[Dict[str, Any], str, str, Dict[str, Any]]:
-        if not requested_model:
-            error_detail = {"error": {"message": "Model not specified in request", "code": "model_not_specified"}}
-            logger.error("Model not specified in request", extra={"detail": error_detail, "request_id": request_id, "user_id": user_id, "log_type": "error"})
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error_detail,
-            )
-
-        if allowed_models and requested_model not in allowed_models:
-            error_detail = {"error": {"message": f"Model '{requested_model}' not allowed for this API key", "code": "model_not_allowed"}}
-            logger.error(f"Model '{requested_model}' not allowed for API key", extra={"detail": error_detail, "api_key": api_key, "project_name": project_name, "request_id": request_id, "user_id": user_id, "log_type": "error"})
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=error_detail,
-            )
-
-        current_config = self.config_manager.get_config()
-        models = current_config.get("models", {})
-        model_config = models.get(requested_model)
-        if not model_config:
-            error_detail = {"error": {"message": f"Model '{requested_model}' not found in configuration", "code": "model_not_found"}}
-            logger.error(f"Model '{requested_model}' not found in configuration", extra={"detail": error_detail, "request_id": request_id, "user_id": user_id, "log_type": "error"})
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=error_detail,
-            )
-
-        provider_name = model_config.get("provider")
-        provider_model_name = model_config.get("provider_model_name", requested_model)
-        provider_config = current_config.get("providers", {}).get(provider_name)
-        if not provider_config:
-            error_detail = {"error": {"message": f"Provider '{provider_name}' for model '{requested_model}' not found in configuration", "code": "provider_not_found"}}
-            logger.error(f"Provider '{provider_name}' for model '{requested_model}' not found", extra={"detail": error_detail, "request_id": request_id, "user_id": user_id, "log_type": "error"})
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=error_detail,
-            )
-        return model_config, provider_name, provider_model_name, provider_config
-
-    def _get_provider_instance(self, provider_config: Dict[str, Any], request_id: str, user_id: str):
-        try:
-            return get_provider_instance(provider_config.get("type"), provider_config, self.httpx_client)
-        except ValueError as e:
-            error_detail = {"error": {"message": f"Provider configuration error: {e}", "code": "provider_config_error"}}
-            logger.error(f"Provider configuration error: {e}", extra={"detail": error_detail, "request_id": request_id, "user_id": user_id, "log_type": "error"})
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=error_detail,
-            )
-
-    async def _stream_response_handler(self, response_data: StreamingResponse, provider_type: str, requested_model: str, request_id: str, user_id: str):
-        full_content = ""
-        stream_completed_usage = None
-        
-        # UTF-8 incremental decoder to handle multi-byte characters split across chunks
-        utf8_decoder = codecs.getincrementaldecoder('utf-8')(errors='ignore')
-        
-        # Buffers for incomplete SSE/JSON lines
-        sse_buffer = ""
-        json_buffer = ""
-        
-        # Track if stream encountered an error
-        stream_has_error = False
-        
-        # Auto-detect stream format (None = not detected yet, 'sse' or 'ndjson')
-        stream_format = None
-        first_chunk = True
-        
-        try:
-            async for chunk in response_data.body_iterator:
-                try:
-                    # Use incremental decoder to handle UTF-8 boundaries
-                    decoded_chunk = utf8_decoder.decode(chunk, final=False)
-                    
-                    # If decoded_chunk is empty, it means the chunk was part of a multi-byte character
-                    if not decoded_chunk:
-                        continue
-                    
-                    # Auto-detect format from first chunk
-                    if first_chunk:
-                        first_chunk = False
-                        if 'data:' in decoded_chunk or decoded_chunk.startswith(':'):
-                            stream_format = 'sse'
-                            logger.info(f"Auto-detected SSE format for request {request_id}",
-                                      extra={"request_id": request_id, "provider_type": provider_type})
-                        else:
-                            stream_format = 'ndjson'
-                            logger.info(f"Auto-detected NDJSON format for request {request_id}",
-                                      extra={"request_id": request_id, "provider_type": provider_type})
-                    
-                    # Handle based on detected format
-                    if stream_format == 'ndjson':
-                        # NDJSON format (Ollama-style)
-                        json_buffer += decoded_chunk
-                        lines = json_buffer.split('\n')
-                        json_buffer = lines[-1]  # Keep the incomplete line
-                        
-                        for line in lines[:-1]:
-                            if line.strip():
-                                processed_chunk, full_content, stream_completed_usage = self._process_ollama_line(
-                                    line, full_content, stream_completed_usage, requested_model, request_id, user_id
-                                )
-                                if processed_chunk:
-                                    yield processed_chunk
-                    elif stream_format == 'sse':
-                        # SSE format (OpenAI-style)
-                        sse_buffer += decoded_chunk
-                        
-                        # SSE events are separated by double newline
-                        while '\n\n' in sse_buffer:
-                            event, sse_buffer = sse_buffer.split('\n\n', 1)
-                            if event.strip():
-                                full_content, stream_completed_usage = self._process_openai_sse_event(
-                                    event, full_content, stream_completed_usage, request_id, user_id
-                                )
-                                # Send the event with proper SSE formatting
-                                yield f"{event}\n\n".encode('utf-8')
-                    else:
-                        # Fallback: if format not detected yet, buffer the chunk
-                        sse_buffer += decoded_chunk
-                                
-                except json.JSONDecodeError as e:
-                    logger.error(f"JSONDecodeError in stream for request {request_id}: {e}. Malformed chunk received.", extra={"request_id": request_id, "user_id": user_id, "log_type": "error", "exception": str(e)})
-                    yield self._format_sse_error(f"Malformed JSON received from provider: {e}", "malformed_json", status.HTTP_502_BAD_GATEWAY)
-                    stream_has_error = True
-                    break
-                except ProviderStreamError as e:
-                    logger.error(f"ProviderStreamError in stream for request {request_id}: {e.message}", extra={"request_id": request_id, "user_id": user_id, "log_type": "error", "status_code": e.status_code, "error_code": e.error_code, "original_exception": str(e.original_exception)})
-                    yield self._format_sse_error(e.message, e.error_code, e.status_code)
-                    stream_has_error = True
-                    break
-                except ProviderNetworkError as e:
-                    logger.error(f"ProviderNetworkError in stream for request {request_id}: {e.message}", extra={"request_id": request_id, "user_id": user_id, "log_type": "error", "original_exception": str(e.original_exception)})
-                    yield self._format_sse_error(e.message, "provider_network_error", status.HTTP_503_SERVICE_UNAVAILABLE)
-                    stream_has_error = True
-                    break
-                except Exception as e:
-                    logger.error(f"Unexpected error in stream for request {request_id}: {e}", extra={"request_id": request_id, "user_id": user_id, "log_type": "error", "exception": str(e)}, exc_info=True)
-                    yield self._format_sse_error(f"An unexpected error occurred during streaming: {e}", "unexpected_streaming_error", status.HTTP_500_INTERNAL_SERVER_ERROR)
-                    stream_has_error = True
-                    break
-                    
-        except Exception as e:
-            logger.error(f"Critical error before stream iteration for request {request_id}: {e}", extra={"request_id": request_id, "user_id": user_id, "log_type": "error", "exception": str(e)}, exc_info=True)
-            yield self._format_sse_error(f"A critical error occurred before streaming: {e}", "critical_streaming_error", status.HTTP_500_INTERNAL_SERVER_ERROR)
-            stream_has_error = True
-
-        # Process any remaining data in buffers if no error occurred
-        if not stream_has_error:
-            # Process buffer based on detected format
-            if stream_format == 'sse' and sse_buffer.strip():
-                full_content, stream_completed_usage = self._process_openai_sse_event(
-                    sse_buffer, full_content, stream_completed_usage, request_id, user_id
-                )
-                yield f"{sse_buffer}\n\n".encode('utf-8')
-            elif stream_format == 'ndjson' and json_buffer.strip():
-                try:
-                    processed_chunk, full_content, stream_completed_usage = self._process_ollama_line(
-                        json_buffer, full_content, stream_completed_usage, requested_model, request_id, user_id
-                    )
-                    if processed_chunk:
-                        yield processed_chunk
-                except:
-                    pass  # Ignore errors in final buffer processing
-            
-            self._log_streaming_completion(request_id, user_id, requested_model, full_content, stream_completed_usage)
-            yield b"data: [DONE]\n\n"
-        else:
-            logger.warning(f"Stream terminated with error for request {request_id}, skipping [DONE]",
-                         extra={"request_id": request_id, "user_id": user_id, "log_type": "warning"})
-
-    def _process_openai_sse_event(self, event: str, full_content: str, stream_completed_usage: Dict[str, Any], request_id: str, user_id: str) -> Tuple[str, Dict[str, Any]]:
-        """Process a complete SSE event (may contain multiple data: lines)"""
-        for line in event.split('\n'):
-            line = line.strip()
-            
-            # Skip SSE comments
-            if line.startswith(':'):
-                continue
-            
-            if line.startswith('data: '):
-                json_data = line[6:].strip()  # Remove 'data: ' prefix
-                if json_data == '[DONE]':
-                    continue
-                try:
-                    data = json.loads(json_data)
-                    
-                    # Handle error objects in SSE data
-                    if 'error' in data:
-                        logger.error(f"Error in SSE data for request {request_id}: {data['error']}",
-                                   extra={"request_id": request_id, "error_data": data['error']})
-                        continue
-                    
-                    if 'choices' in data and len(data['choices']) > 0:
-                        delta_content = data['choices'][0].get('delta', {}).get('content')
-                        if delta_content:
-                            full_content += delta_content
-                    if 'usage' in data:
-                        stream_completed_usage = data['usage']
-                except json.JSONDecodeError as e:
-                    raise e
-        return full_content, stream_completed_usage
-
-    def _process_ollama_line(self, line: str, full_content: str, stream_completed_usage: Dict[str, Any], requested_model: str, request_id: str, user_id: str) -> Tuple[bytes, str, Dict[str, Any]]:
-        """Process a single NDJSON line from Ollama"""
-        processed_chunk = b""
-        try:
-            data = json.loads(line)
-            if data.get('done'):
-                if 'prompt_eval_count' in data:
-                    stream_completed_usage = {
-                        "prompt_tokens": data.get("prompt_eval_count", 0),
-                        "completion_tokens": data.get("eval_count", 0)
-                    }
-                elif 'usage' in data:
-                    stream_completed_usage = data['usage']
-                return processed_chunk, full_content, stream_completed_usage
-            
-            delta_content = data.get('message', {}).get('content', '')
-            if delta_content:
-                full_content += delta_content
-
-            openai_chunk = {
-                "id": f"chatcmpl-{request_id}",
-                "object": "chat.completion.chunk",
-                "created": int(time.time()),
-                "model": requested_model,
-                "choices": [
-                    {
-                        "index": 0,
-                        "delta": {"content": delta_content},
-                        "logprobs": None,
-                        "finish_reason": None
-                    }
-                ]
-            }
-            processed_chunk = f"data: {json.dumps(openai_chunk)}\n\n".encode('utf-8')
-        except json.JSONDecodeError as e:
-            raise e
-        return processed_chunk, full_content, stream_completed_usage
-
-    def _log_streaming_completion(self, request_id: str, user_id: str, requested_model: str, full_content: str, stream_completed_usage: Dict[str, Any]):
-        prompt_tokens = stream_completed_usage.get("prompt_tokens", 0) if stream_completed_usage else 0
-        completion_tokens = stream_completed_usage.get("completion_tokens", 0) if stream_completed_usage else 0
-        finish_reason = "stop"
-
-        logger.info(
-            "Chat Completion Response",
-            extra={
-                "log_type": "response",
-                "request_id": request_id,
-                "user_id": user_id,
-                "model_id": requested_model,
-                "http_status_code": status.HTTP_200_OK,
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "response_body_summary": {
-                    "finish_reason": finish_reason,
-                    "content_preview": full_content
-                }
-            }
-        )
-
-    def _format_sse_error(self, message: str, code: str, status_code: int) -> bytes:
-        """
-        Formats an error message in OpenAI-compatible SSE format.
-        Sends error as a separate SSE event, not as a chat.completion.chunk.
-        """
-        error_payload = {
-            "error": {
-                "message": message,
-                "type": "api_error",
-                "code": code,
-                "param": None
-            }
-        }
-        return f"data: {json.dumps(error_payload)}\n\n".encode('utf-8')
-
-    def _log_non_streaming_response(self, request_id: str, user_id: str, requested_model: str, response_data: Dict[str, Any]):
-        usage = response_data.get("usage", {})
-        prompt_tokens = usage.get("prompt_tokens", 0)
-        completion_tokens = usage.get("completion_tokens", 0)
-
-        logger.info(
-            "Chat Completion Response",
-            extra={
-                "log_type": "response",
-                "request_id": request_id,
-                "user_id": user_id,
-                "model_id": requested_model,
-                "http_status_code": status.HTTP_200_OK,
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "response_body_summary": {
-                    "finish_reason": response_data.get("choices", [{}])[0].get("finish_reason"),
-                    "content_preview": response_data.get("choices", [{}])[0].get("message", {}).get("content", "")
-                }
-            }
-        )
-
-    def _log_http_exception(self, e: HTTPException, request_id: str, user_id: str, requested_model: str):
-        logger.error(
-            f"HTTPException from provider: {e.detail.get('error', {}).get('message', str(e))}",
-            extra={
-                "status_code": e.status_code,
-                "detail": e.detail,
-                "request_id": request_id,
-                "user_id": user_id,
-                "model_id": requested_model,
-                "log_type": "error"
-            }
-        )
-
-    def _log_unexpected_exception(self, e: Exception, request_id: str, user_id: str, requested_model: str):
-        logger.error(
-            f"An unexpected error occurred: {e}",
-            extra={
-                "detail": {"error": {"message": f"An unexpected error occurred: {e}", "code": "unexpected_error"}},
-                "request_id": request_id,
-                "user_id": user_id,
-                "model_id": requested_model,
-                "log_type": "error"
-            },
-            exc_info=True
-        )
