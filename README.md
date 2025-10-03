@@ -1,70 +1,88 @@
 # LLM Router
 
 ## TLDR;
-**LLM Router** is a unified API gateway for diverse Large Language Models (LLMs) and AI services. It simplifies integration by providing a single OpenAI-compatible endpoint, abstracting away complexities of multiple providers, API keys, and model management. Ideal for developers seeking a streamlined way to access and control various LLMs (OpenAI, Ollama, DeepSeek, etc.) through one consistent interface.
+**LLM Router** is a unified API gateway for diverse Large Language Models (LLMs) and AI services. Built with modern architecture and SOLID principles, it provides a single OpenAI-compatible endpoint that abstracts away the complexities of multiple providers, API keys, and model management. Perfect for developers who need a robust, scalable solution to access various LLMs (OpenAI, Ollama, DeepSeek, etc.) through one consistent interface.
 
 ## 🚀 Overview
-This project provides a unified and flexible API gateway for various Large Language Models (LLMs) and AI services. It acts as a single entry point, abstracting away the complexities of managing multiple LLM providers, their unique APIs, and diverse authentication methods. For enthusiasts and developers working with a multitude of AI tools (like Ollama, DeepSeek, OpenRouter, OpenAI, Mistral, and more), the LLM Router simplifies integration by offering a single OpenAI-compatible endpoint. This eliminates the need to track individual API keys, handle varying data formats, or constantly monitor model updates across different platforms.
+LLM Router is a production-ready API gateway that bridges your applications with multiple LLM providers. Built with FastAPI and following SOLID architectural principles, it offers:
 
-## ✨ Features
-*   **Unified API Endpoint:** Provides a single OpenAI-compatible API endpoint for all integrated LLM providers, streamlining your application's interaction with various models.
-*   **Flexible Access Control:** Allows granular control over model access. For each API key, you can define a specific list of models that are permitted for use, enhancing security and resource management.
-*   **Provider Agnostic:** Seamlessly integrates with different LLM providers, enabling you to switch or combine models from various sources without changing your application's code.
-*   **Supported Providers:**
-    *   OpenAI-compatible APIs (including Chat Completions, Embeddings, and Speech-to-Text/STT)
-    *   Ollama
+- **Modular Architecture**: Clean separation of concerns with specialized components
+- **High Performance**: Optimized streaming with UTF-8 handling and efficient buffering
+- **Enterprise Security**: Granular access control and API key management
+- **Provider Agnostic**: Seamlessly integrate OpenAI-compatible APIs and Ollama
+- **Developer Friendly**: OpenAI-compatible API with comprehensive documentation
+
+## ✨ Key Features
+*   **Unified API Endpoint**: Single OpenAI-compatible endpoint for all LLM providers
+*   **Modular Architecture**: Built with SOLID principles for maintainability and testability
+*   **Advanced Streaming**: Optimized UTF-8 processing with buffer management for multi-language support
+*   **Flexible Access Control**: Granular model-level permissions per API key
+*   **Provider Agnostic**: Easy integration with OpenAI-compatible APIs and Ollama
+*   **Production Ready**: Comprehensive error handling, logging, and monitoring
+*   **Developer Experience**: OpenAI-compatible API with extensive examples
 
 ## 🌐 Supported Endpoints
-The LLM Router provides an OpenAI-compatible API interface, supporting the following endpoints:
+The LLM Router provides a complete OpenAI-compatible API interface:
 
-*   **GET `/health`**: Basic health check to ensure the service is running.
-*   **GET `/v1/models`**: Lists all models available through the router, filtered by the API key's permissions.
-*   **GET `/v1/models/{model_id}`**: Retrieves detailed information about a specific model.
-*   **POST `/v1/chat/completions`**: Handles chat completion requests, routing them to the appropriate LLM provider.
-*   **POST `/v1/embeddings`**: Generates embeddings for text inputs using configured embedding models.
-*   **POST `/v1/audio/transcriptions`**: Transcribes audio files into text using configured transcription models.
+*   **GET `/health`**: Service health check and monitoring
+*   **GET `/v1/models`**: List available models (filtered by API key permissions)
+*   **GET `/v1/models/{model_id}`**: Get detailed model information
+*   **POST `/v1/chat/completions`**: Advanced chat completion with streaming support
+*   **POST `/v1/embeddings`**: Generate text embeddings with optimized performance
+*   **POST `/v1/audio/transcriptions`**: Speech-to-text transcription services
 
 ## 🏗️ Architecture
-The LLM Router sits between your application and various LLM providers, routing requests to the appropriate service and normalizing responses to an OpenAI-compatible format.
+Built with modern software engineering practices, LLM Router features a clean, modular architecture:
 
 ```mermaid
 graph TD
-    A[Your Application] --> B(LLM Router);
-    B --> C{OpenAI API};
-    B --> D{Ollama};
-    B --> E{DeepSeek};
-    B --> F{OpenRouter};
-    B --> G{Mistral};
-    B --> H{Other LLM Providers};
-    C --> I[OpenAI Models];
-    D --> J[Ollama Models];
-    E --> K[DeepSeek Models];
-    F --> L[OpenRouter Models];
-    G --> M[Mistral Models];
-    H --> N[Other Models];
+    A[Your Application] --> B[LLM Router API];
+    B --> C[Core Services];
+    C --> D[Chat Service];
+    C --> E[Model Service];
+    C --> F[Embedding Service];
+    C --> G[Transcription Service];
+    
+    D --> H[Chat Components];
+    H --> I[Request Validator];
+    H --> J[Stream Handler];
+    H --> K[Buffer Manager];
+    H --> L[Format Processor];
+    H --> M[Error Handler];
+    H --> N[Logger];
+    
+    B --> O[Provider Layer];
+    O --> P[OpenAI Provider];
+    O --> Q[Ollama Provider];
+    O --> R[Custom Providers];
+    
+    B --> S[Core Layer];
+    S --> T[Config Manager];
+    S --> U[Auth System];
+    S --> V[Exception Handling];
 ```
 
-## ⚙️ Configuration
-The LLM Router is highly configurable, allowing you to manage API keys, define models, and set up providers through simple YAML files and environment variables. The configuration flow is designed to be logical: first define your providers, then the models that use those providers, and finally the user API keys that grant access to specific models.
+### Architecture Highlights
+- **Service Layer**: Modular services handling specific functionality
+- **Component Architecture**: Each service is composed of specialized components
+- **Provider Pattern**: Extensible provider system for easy integration
+- **Core Services**: Centralized configuration, authentication, and error handling
 
-### Environment Variables (`.env`)
-Create a `.env` file in the project root to store your sensitive API keys. This file is not committed to version control. An example `.env.example` is provided.
+## 🚀 Quick Start
 
-```ini
-# Example .env file
-OPENAI_API_KEY="sk-your-openai-key"
-DEEPSEEK_API_KEY="sk-your-deepseek-key"
-OPENROUTER_API_KEY="sk-your-openrouter-key"
-TABBY_API_KEY="sk-your-tabby-key"
-TRANSCRIPTIONS_API_KEY="sk-your-transcriptions-key"
+### Prerequisites
+- [Docker](https://docs.docker.com/get-docker/)
+- [Docker Compose](https://docs.docker.com/compose/install/)
+
+### 1. Clone and Setup
+```bash
+git clone <repository-url>
+cd nnp-llm-router
+cp .env.example .env  # Configure your API keys
 ```
 
-### Model and Provider Configuration (`config/` directory)
-The `config/` directory contains YAML files that define your providers, models, and user API keys.
-
-#### 1. `config/providers.yaml`
-This file configures the details for each LLM provider, including their type, base URL, and the environment variable where their API key is stored.
-
+### 2. Configure Providers
+Edit `config/providers.yaml`:
 ```yaml
 providers:
   openai:
@@ -72,160 +90,364 @@ providers:
     base_url: https://api.openai.com/v1
     api_key_env: OPENAI_API_KEY
   deepseek:
-    type: openai # DeepSeek is OpenAI API compatible
+    type: openai
+    base_url: https://api.deepseek.com/v1
+    api_key_env: DEEPSEEK_API_KEY
+  ollama:
+    type: ollama
+    base_url: http://localhost:11434/api
+```
+
+### 3. Configure Models
+Edit `config/models.yaml`:
+```yaml
+models:
+  openai/gpt-4:
+    provider: openai
+    provider_model_name: gpt-4
+  ollama/llama:
+    provider: ollama
+    provider_model_name: llama3.1
+```
+
+### 4. Configure Access
+Edit `config/user_keys.yaml`:
+```yaml
+user_keys:
+  developer:
+    api_key: your-api-key-here
+    allowed_models: []  # Empty = access to all models
+  restricted:
+    api_key: restricted-key
+    allowed_models: ["openai/gpt-4"]
+```
+
+### 5. Run the Service
+```bash
+docker compose up -d
+```
+
+The service will be available at `http://localhost:8777`
+
+## 💡 Usage Examples
+
+### Basic Chat Completion
+```bash
+curl -X POST http://localhost:8777/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-api-key" \
+  -d '{
+    "model": "openai/gpt-4",
+    "messages": [
+      {"role": "user", "content": "Hello! Tell me about AI."}
+    ],
+    "max_tokens": 100
+  }'
+```
+
+### Streaming Chat with Multi-language Support
+```bash
+curl -X POST http://localhost:8777/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-api-key" \
+  -H "Accept: text/event-stream" \
+  -d '{
+    "model": "openai/gpt-4",
+    "messages": [
+      {"role": "user", "content": "Привет! Расскажи о машинном обучении на русском 🤖"}
+    ],
+    "stream": true,
+    "max_tokens": 200
+  }'
+```
+
+### Generate Embeddings
+```bash
+curl -X POST http://localhost:8777/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-api-key" \
+  -d '{
+    "model": "openai/text-embedding-ada-002",
+    "input": "The quick brown fox jumps over the lazy dog."
+  }'
+```
+
+### Audio Transcription
+```bash
+curl -X POST http://localhost:8777/v1/audio/transcriptions \
+  -H "Authorization: Bearer your-api-key" \
+  -F "file=@audio.mp3" \
+  -F "model=whisper/1" \
+  -F "response_format=json"
+```
+
+## ⚙️ Configuration
+
+### Environment Variables
+Create `.env` file in the project root:
+```ini
+# OpenAI Configuration
+OPENAI_API_KEY="sk-your-openai-key"
+
+# DeepSeek Configuration  
+DEEPSEEK_API_KEY="sk-your-deepseek-key"
+
+# OpenRouter Configuration
+OPENROUTER_API_KEY="sk-your-openrouter-key"
+
+# Custom Providers
+TABBY_API_KEY="your-tabby-key"
+TRANSCRIPTIONS_API_KEY="your-transcription-key"
+```
+
+### Provider Configuration (`config/providers.yaml`)
+Define your LLM providers with their specific configurations:
+
+```yaml
+providers:
+  # OpenAI-Compatible Providers
+  openai:
+    type: openai
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+  deepseek:
+    type: openai
     base_url: https://api.deepseek.com/v1
     api_key_env: DEEPSEEK_API_KEY
   openrouter:
-    type: openai # OpenRouter is OpenAI API compatible
+    type: openai
     base_url: https://openrouter.ai/api/v1
     api_key_env: OPENROUTER_API_KEY
     headers:
-      HTTP-Referer: "https://my.space"
-      X-Title: "my llm router"
-  orange:  # Local ORANGE server example
-    type: openai
-    base_url: http://192.168.1.52:5010/v1
-    api_key_env: TABBY_API_KEY
-  transcriber:
-    type: openai
-    base_url: http://192.168.1.52:5042/v1
-    api_key_env: TRANSCRIPTIONS_API_KEY
+      HTTP-Referer: "https://yourapp.com"
+      X-Title: "LLM Router"
+  
+  # Local Providers
   ollama:
     type: ollama
-    base_url: http://192.168.1.52:11434/api
+    base_url: http://localhost:11434/api
+  tabby:
+    type: openai
+    base_url: http://localhost:5010/v1
+    api_key_env: TABBY_API_KEY
 ```
 
-#### 2. `config/models.yaml`
-After defining your providers, this file defines the available models, their associated providers, and any specific configurations. Each model must reference a provider defined in `config/providers.yaml`.
+### Model Configuration (`config/models.yaml`)
+Define available models with their provider mappings:
 
 ```yaml
 models:
+  # OpenAI Models
+  openai/gpt-4:
+    provider: openai
+    provider_model_name: gpt-4
+  openai/gpt-3.5:
+    provider: openai
+    provider_model_name: gpt-3.5-turbo
+  
+  # DeepSeek Models
   deepseek/chat:
     provider: deepseek
     provider_model_name: deepseek-chat
   deepseek/reasoner:
     provider: deepseek
     provider_model_name: deepseek-reasoner
-  anthropic/sonnet:
-    provider: openrouter
-    provider_model_name: anthropic/claude-sonnet-4
-  gemini/mini:
-    provider: openrouter
-    provider_model_name: google/gemini-2.0-flash-001
-  gemini/chat:
-    provider: openrouter
-    provider_model_name: google/gemini-2.5-flash-preview-05-20
-  gemini/pro:
-    provider: openrouter
-    provider_model_name: google/gemini-2.5-pro
-  mistral/mistral-small:
-    provider: openrouter
-    provider_model_name: mistralai/mistral-small-3.2-24b-instruct
-    options:
-      provider:
-        only: ["mistral"]
-  mistral/devstral-small:
-    provider: openrouter
-    provider_model_name: mistralai/devstral-small
-    options:
-      provider:
-        only: ["mistral"]
-  minimax/reasoner:
-    provider: openrouter
-    provider_model_name: minimax/minimax-m1
-    options:
-      provider:
-        only: ["minimax"]
-  local/orange/small:
-    provider: orange
-    provider_model_name: dummy
-  embeddings/dummy:
-    provider: orange
-    provider_model_name: dummy
-    is_hidden: true
-  stt/dummy:
-    provider: transcriber
-    provider_model_name: dummy
-    is_hidden: true
-  ollama/gemma3n:
+  
+  # Ollama Models
+  ollama/llama3:
     provider: ollama
-    provider_model_name: gemma3n
+    provider_model_name: llama3.1
+  ollama/mistral:
+    provider: ollama
+    provider_model_name: mistral
+  
+  # Hidden Models (not listed in /v1/models)
+  embeddings/local:
+    provider: tabby
+    provider_model_name: text-embedding
+    is_hidden: true
 ```
 
-#### 3. `config/user_keys.yaml`
-Finally, this file defines the API keys that your users will use to access the LLM Router, and which models each key is allowed to access. Each `allowed_models` entry must correspond to a model defined in `config/models.yaml`.
+### Access Control (`config/user_keys.yaml`)
+Define API keys and their model permissions:
 
 ```yaml
 user_keys:
-  debug:
-    api_key: dummy
-    allowed_models: [] # Empty list means access to all models
-  full:
-    api_key: dummy_full
-    allowed_models: [] # Empty list means access to all models
-  short:
-    api_key: dummy_short
-    allowed_models: # If list is present, only these models are allowed
-      - gemini/chat
-      - gemini/pro
+  # Full access to all models
+  admin:
+    api_key: admin-key-123
+    allowed_models: []
+  
+  # Restricted access to specific models
+  developer:
+    api_key: dev-key-456
+    allowed_models:
+      - openai/gpt-4
       - deepseek/chat
-      - deepseek/reasoner
+      - ollama/llama3
+  
+  # Debug access (limited models)
+  debug:
+    api_key: debug-key-789
+    allowed_models:
+      - openai/gpt-3.5
 ```
 
-## 🚀 Getting Started
-To get the LLM Router up and running, you'll need Docker and Docker Compose installed.
+## 🔧 Development
 
-### Prerequisites
-*   [Docker](https://docs.docker.com/get-docker/)
-*   [Docker Compose](https://docs.docker.com/compose/install/)
+### Architecture Overview
+The project follows a clean architecture pattern with clear separation of concerns:
 
-### Running the Service
-Navigate to the project's root directory in your terminal and execute the following command:
+```
+src/
+├── api/                    # FastAPI endpoints and middleware
+├── core/                  # Core services (config, auth, exceptions)
+├── services/              # Business logic services
+│   ├── chat/              # Chat service components
+│   ├── embedding_service.py
+│   ├── model_service.py
+│   └── transcription_service.py
+├── providers/             # LLM provider implementations
+└── utils/                 # Utility functions
+```
 
+### Key Components
+
+#### Chat Service Architecture
+The chat service is built with a modular component architecture:
+
+- **Validator**: Request validation and model permissions
+- **Logger**: Structured logging with request tracing
+- **Stream Handler**: Coordinates streaming operations
+- **Buffer Manager**: UTF-8 safe buffer management
+- **Format Processor**: Handles SSE/NDJSON format conversion
+- **Error Handler**: Streaming error management
+
+#### Provider System
+Extensible provider architecture supporting:
+- OpenAI-compatible APIs
+- Ollama local models
+- Custom provider implementations
+
+### Testing
+Run the comprehensive test suite:
 ```bash
+# Run all tests
+python -m pytest tests/
+
+# Run specific test categories
+python tests/test_models.py
+python tests/test_streaming_fixes.py
+python tests/test_chat_service_refactored.py
+```
+
+### Development Setup
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Run in development mode
+uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
+
+# Run with hot-reload for config
+python -m watchfiles uvicorn src.api.main:app --reload
+```
+
+## 📊 Performance & Monitoring
+
+### Performance Optimizations
+- **UTF-8 Streaming**: Safe handling of multi-byte characters across chunks
+- **Buffer Management**: Efficient memory usage for streaming responses
+- **Connection Pooling**: Reusable HTTP connections to providers
+- **Async Processing**: Non-blocking I/O for high concurrency
+
+### Monitoring
+The service includes comprehensive logging:
+- Request/response logging with tracing IDs
+- Performance metrics (processing time, token counts)
+- Error tracking with contextual information
+- Provider performance monitoring
+
+### Health Checks
+```bash
+# Service health
+curl http://localhost:8777/health
+
+# Check model availability
+curl http://localhost:8777/v1/models
+```
+
+## 🔒 Security Features
+
+### Access Control
+- API key-based authentication
+- Granular model-level permissions
+- Request validation and sanitization
+- Secure configuration management
+
+### Provider Security
+- Secure API key storage via environment variables
+- HTTPS enforcement for external providers
+- Request/response encryption support
+- Rate limiting capabilities
+
+## 🚀 Production Deployment
+
+### Docker Deployment
+```bash
+# Build and run
 docker compose up -d
-```
-This command will build the Docker image (if not already built) and start the LLM Router service, accessible by default on `http://localhost:8777`.
 
-## 💡 Usage Examples
-Once the LLM Router service is running, you can interact with it using `curl` or any HTTP client. Replace `YOUR_API_KEY` with one of the API keys defined in `config/user_keys.yaml` (e.g., `dummy`, `dummy_full`, `dummy_short`).
+# Scale for production
+docker compose up -d --scale api=3
 
-### Chat Completions
-Send a chat completion request to an LLM.
-
-```bash
-curl -X POST http://localhost:8777/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -d '{
-    "model": "deepseek/chat",
-    "messages": [
-      {"role": "user", "content": "Hello, how are you?"}
-    ]
-  }'
+# Monitor logs
+docker compose logs -f api
 ```
 
-### Embeddings
-Generate embeddings for a given text using a configured embedding model.
+### Environment Variables for Production
+```ini
+# Performance
+UVICORN_WORKERS=4
+UVICORN_TIMEOUT=300
 
-```bash
-curl -X POST http://localhost:8777/v1/embeddings \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -d '{
-    "model": "embeddings/dummy",
-    "input": "The quick brown fox jumps over the lazy dog."
-  }'
+# Security
+CORS_ORIGINS=https://yourdomain.com
+API_KEY_ENCRYPTION=true
+
+# Monitoring
+LOG_LEVEL=info
+METRICS_ENABLED=true
 ```
 
-### Audio Transcriptions
-Transcribe an audio file using a configured transcription model.
-*Note: For transcription, you typically need to send a multipart/form-data request.*
+### Monitoring and Observability
+- Health check endpoints
+- Structured logging with JSON format
+- Performance metrics collection
+- Error tracking and alerting
 
-```bash
-curl -X POST http://localhost:8777/v1/audio/transcriptions \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -F "file=@/path/to/your/audio.ogg" \
-  -F "model=stt/dummy" \
-  -F "response_format=json"
-```
+## 🤝 Contributing
+
+We welcome contributions! Please see our contributing guidelines:
+
+1. Fork the repository
+2. Create a feature branch
+3. Follow the existing code style and patterns
+4. Add comprehensive tests
+5. Submit a pull request with detailed description
+
+## 📄 License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## 🆘 Support
+
+For support and questions:
+- Create an issue on GitHub
+- Check the documentation
+- Review the test examples
+- Join our community discussions
+
+---
+
+**Built with ❤️ using modern Python practices and SOLID architectural principles**
