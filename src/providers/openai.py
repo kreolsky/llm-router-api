@@ -27,10 +27,21 @@ class OpenAICompatibleProvider(BaseProvider):
             if stream:
                 return await self._stream_request(self.client, "/chat/completions", request_body)
             else:
-                response = await self.client.post(f"{self.base_url}/chat/completions", 
-                                             headers=self.headers, 
+                # Optimized timeout for non-streaming chat completions
+                # - connect: 10s to establish connection
+                # - read: 60s for full response (most responses are much faster)
+                # - write: 10s to send request
+                # - pool: 10s to get connection from pool
+                non_stream_timeout = httpx.Timeout(
+                    connect=10.0,
+                    read=60.0,
+                    write=10.0,
+                    pool=10.0
+                )
+                response = await self.client.post(f"{self.base_url}/chat/completions",
+                                             headers=self.headers,
                                              json=request_body,
-                                             timeout=600) # Increased timeout for potentially long responses
+                                             timeout=non_stream_timeout)
                 response.raise_for_status()
                 return response.json()
         except httpx.HTTPStatusError as e:
@@ -119,10 +130,17 @@ class OpenAICompatibleProvider(BaseProvider):
             request_body = deep_merge(request_body, options)
 
         try:
-            response = await self.client.post(f"{self.base_url}/embeddings", 
-                                             headers=self.headers, 
+            # Optimized timeout for embeddings (usually faster than chat)
+            embeddings_timeout = httpx.Timeout(
+                connect=10.0,
+                read=30.0,   # Embeddings are typically fast
+                write=10.0,
+                pool=10.0
+            )
+            response = await self.client.post(f"{self.base_url}/embeddings",
+                                             headers=self.headers,
                                              json=request_body,
-                                             timeout=600)
+                                             timeout=embeddings_timeout)
             response.raise_for_status()
             return response.json()
         except httpx.HTTPStatusError as e:

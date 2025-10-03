@@ -1,27 +1,39 @@
 providers:
   openai:
     type: openai
-    base_url: https://api.openai.com/v1
+    base_url: https://nnp.space/api/openai/NbHbDxz-RaEcv+Wa7vPH4bx/v1
     api_key_env: OPENAI_API_KEY
   deepseek:
-    type: openai # DeepSeek совместим с OpenAI API
+    type: openai # Совместим с OpenAI API
     base_url: https://api.deepseek.com/v1
     api_key_env: DEEPSEEK_API_KEY
+  kimi:
+    type: openai
+    base_url: https://api.moonshot.ai/v1
+    api_key_env: KIMI_API_KEY
   openrouter:
-    type: openai # OpenRouter совместим с OpenAI API
+    type: openai
     base_url: https://openrouter.ai/api/v1
     api_key_env: OPENROUTER_API_KEY
     headers:
       HTTP-Referer: "https://nnp.space"
       X-Title: "nnp.space"
-  orange:  # Локальный сервер ORANGE
+  orange:
     type: openai
-    base_url: http://192.168.1.52:5010/v1
+    base_url: http://10.10.1.20:5010/v1
+    api_key_env: ORANGE_API_KEY
+  embedding:
+    type: openai
+    base_url: http://10.10.1.20:5020/v1
+    api_key_env: ORANGE_API_KEY
+  box:
+    type: openai
+    base_url: http://10.10.7.20:5010/v1
     api_key_env: ORANGE_API_KEY
   transcriber:
     type: openai
-    base_url: http://192.168.1.52:5042/v1
+    base_url: http://10.10.1.20:5042/v1
     api_key_env: TRANSCRIPTIONS_API_KEY
   ollama:
     type: ollama
-    base_url: http://192.168.1.52:11434/api
+    base_url: http://10.10.1.20:11434/api

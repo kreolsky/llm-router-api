@@ -1,6 +1,7 @@
 import httpx
 import json
 import time
+import codecs
 from typing import Dict, Any, Tuple
 
 from fastapi import HTTPException, status, Request
@@ -157,58 +158,145 @@ class ChatService:
         full_content = ""
         stream_completed_usage = None
         
+        # UTF-8 incremental decoder to handle multi-byte characters split across chunks
+        utf8_decoder = codecs.getincrementaldecoder('utf-8')(errors='ignore')
+        
+        # Buffers for incomplete SSE/JSON lines
+        sse_buffer = ""
+        json_buffer = ""
+        
+        # Track if stream encountered an error
+        stream_has_error = False
+        
+        # Auto-detect stream format (None = not detected yet, 'sse' or 'ndjson')
+        stream_format = None
+        first_chunk = True
+        
         try:
             async for chunk in response_data.body_iterator:
                 try:
-                    decoded_chunk = chunk.decode('utf-8')
+                    # Use incremental decoder to handle UTF-8 boundaries
+                    decoded_chunk = utf8_decoder.decode(chunk, final=False)
                     
-                    if decoded_chunk.startswith('data: '):
-                        full_content, stream_completed_usage = self._process_openai_sse_chunk(decoded_chunk, full_content, stream_completed_usage, request_id, user_id)
-                        yield chunk # Yield original chunk for OpenAI SSE
-                    elif provider_type == "ollama":
-                        processed_chunk, new_full_content, new_stream_completed_usage = self._process_ollama_chunk(decoded_chunk, full_content, stream_completed_usage, requested_model, request_id, user_id)
-                        full_content = new_full_content
-                        stream_completed_usage = new_stream_completed_usage
-                        if processed_chunk: # Only yield if there's a valid chunk to yield
-                            yield processed_chunk
+                    # If decoded_chunk is empty, it means the chunk was part of a multi-byte character
+                    if not decoded_chunk:
+                        continue
+                    
+                    # Auto-detect format from first chunk
+                    if first_chunk:
+                        first_chunk = False
+                        if 'data:' in decoded_chunk or decoded_chunk.startswith(':'):
+                            stream_format = 'sse'
+                            logger.info(f"Auto-detected SSE format for request {request_id}",
+                                      extra={"request_id": request_id, "provider_type": provider_type})
+                        else:
+                            stream_format = 'ndjson'
+                            logger.info(f"Auto-detected NDJSON format for request {request_id}",
+                                      extra={"request_id": request_id, "provider_type": provider_type})
+                    
+                    # Handle based on detected format
+                    if stream_format == 'ndjson':
+                        # NDJSON format (Ollama-style)
+                        json_buffer += decoded_chunk
+                        lines = json_buffer.split('\n')
+                        json_buffer = lines[-1]  # Keep the incomplete line
+                        
+                        for line in lines[:-1]:
+                            if line.strip():
+                                processed_chunk, full_content, stream_completed_usage = self._process_ollama_line(
+                                    line, full_content, stream_completed_usage, requested_model, request_id, user_id
+                                )
+                                if processed_chunk:
+                                    yield processed_chunk
+                    elif stream_format == 'sse':
+                        # SSE format (OpenAI-style)
+                        sse_buffer += decoded_chunk
+                        
+                        # SSE events are separated by double newline
+                        while '\n\n' in sse_buffer:
+                            event, sse_buffer = sse_buffer.split('\n\n', 1)
+                            if event.strip():
+                                full_content, stream_completed_usage = self._process_openai_sse_event(
+                                    event, full_content, stream_completed_usage, request_id, user_id
+                                )
+                                # Send the event with proper SSE formatting
+                                yield f"{event}\n\n".encode('utf-8')
                     else:
-                        yield chunk
-                except UnicodeDecodeError:
-                    logger.warning(f"UnicodeDecodeError in stream for request {request_id}. Skipping chunk.", extra={"request_id": request_id, "user_id": user_id, "log_type": "warning"})
-                    # Continue to next chunk if decoding fails
-                    continue
+                        # Fallback: if format not detected yet, buffer the chunk
+                        sse_buffer += decoded_chunk
+                                
                 except json.JSONDecodeError as e:
                     logger.error(f"JSONDecodeError in stream for request {request_id}: {e}. Malformed chunk received.", extra={"request_id": request_id, "user_id": user_id, "log_type": "error", "exception": str(e)})
                     yield self._format_sse_error(f"Malformed JSON received from provider: {e}", "malformed_json", status.HTTP_502_BAD_GATEWAY)
-                    break # Terminate stream on critical JSON error
+                    stream_has_error = True
+                    break
                 except ProviderStreamError as e:
                     logger.error(f"ProviderStreamError in stream for request {request_id}: {e.message}", extra={"request_id": request_id, "user_id": user_id, "log_type": "error", "status_code": e.status_code, "error_code": e.error_code, "original_exception": str(e.original_exception)})
                     yield self._format_sse_error(e.message, e.error_code, e.status_code)
-                    break # Terminate stream on provider error
+                    stream_has_error = True
+                    break
                 except ProviderNetworkError as e:
                     logger.error(f"ProviderNetworkError in stream for request {request_id}: {e.message}", extra={"request_id": request_id, "user_id": user_id, "log_type": "error", "original_exception": str(e.original_exception)})
                     yield self._format_sse_error(e.message, "provider_network_error", status.HTTP_503_SERVICE_UNAVAILABLE)
-                    break # Terminate stream on network error
+                    stream_has_error = True
+                    break
                 except Exception as e:
                     logger.error(f"Unexpected error in stream for request {request_id}: {e}", extra={"request_id": request_id, "user_id": user_id, "log_type": "error", "exception": str(e)}, exc_info=True)
                     yield self._format_sse_error(f"An unexpected error occurred during streaming: {e}", "unexpected_streaming_error", status.HTTP_500_INTERNAL_SERVER_ERROR)
-                    break # Terminate stream on unexpected error
+                    stream_has_error = True
+                    break
+                    
         except Exception as e:
-            # This outer catch is for exceptions that might occur before the inner loop starts
             logger.error(f"Critical error before stream iteration for request {request_id}: {e}", extra={"request_id": request_id, "user_id": user_id, "log_type": "error", "exception": str(e)}, exc_info=True)
             yield self._format_sse_error(f"A critical error occurred before streaming: {e}", "critical_streaming_error", status.HTTP_500_INTERNAL_SERVER_ERROR)
+            stream_has_error = True
 
-        self._log_streaming_completion(request_id, user_id, requested_model, full_content, stream_completed_usage)
-        yield b"data: [DONE]\n\n" # Ensure DONE message is sent at the very end
+        # Process any remaining data in buffers if no error occurred
+        if not stream_has_error:
+            # Process buffer based on detected format
+            if stream_format == 'sse' and sse_buffer.strip():
+                full_content, stream_completed_usage = self._process_openai_sse_event(
+                    sse_buffer, full_content, stream_completed_usage, request_id, user_id
+                )
+                yield f"{sse_buffer}\n\n".encode('utf-8')
+            elif stream_format == 'ndjson' and json_buffer.strip():
+                try:
+                    processed_chunk, full_content, stream_completed_usage = self._process_ollama_line(
+                        json_buffer, full_content, stream_completed_usage, requested_model, request_id, user_id
+                    )
+                    if processed_chunk:
+                        yield processed_chunk
+                except:
+                    pass  # Ignore errors in final buffer processing
+            
+            self._log_streaming_completion(request_id, user_id, requested_model, full_content, stream_completed_usage)
+            yield b"data: [DONE]\n\n"
+        else:
+            logger.warning(f"Stream terminated with error for request {request_id}, skipping [DONE]",
+                         extra={"request_id": request_id, "user_id": user_id, "log_type": "warning"})
 
-    def _process_openai_sse_chunk(self, decoded_chunk: str, full_content: str, stream_completed_usage: Dict[str, Any], request_id: str, user_id: str) -> Tuple[str, Dict[str, Any]]:
-        for line in decoded_chunk.split('\n'):
+    def _process_openai_sse_event(self, event: str, full_content: str, stream_completed_usage: Dict[str, Any], request_id: str, user_id: str) -> Tuple[str, Dict[str, Any]]:
+        """Process a complete SSE event (may contain multiple data: lines)"""
+        for line in event.split('\n'):
+            line = line.strip()
+            
+            # Skip SSE comments
+            if line.startswith(':'):
+                continue
+            
             if line.startswith('data: '):
-                json_data = line[len('data: '):].strip()
+                json_data = line[6:].strip()  # Remove 'data: ' prefix
                 if json_data == '[DONE]':
                     continue
                 try:
                     data = json.loads(json_data)
+                    
+                    # Handle error objects in SSE data
+                    if 'error' in data:
+                        logger.error(f"Error in SSE data for request {request_id}: {data['error']}",
+                                   extra={"request_id": request_id, "error_data": data['error']})
+                        continue
+                    
                     if 'choices' in data and len(data['choices']) > 0:
                         delta_content = data['choices'][0].get('delta', {}).get('content')
                         if delta_content:
@@ -216,51 +304,45 @@ class ChatService:
                     if 'usage' in data:
                         stream_completed_usage = data['usage']
                 except json.JSONDecodeError as e:
-                    # Re-raise JSONDecodeError to be caught by _stream_response_handler
                     raise e
         return full_content, stream_completed_usage
 
-    def _process_ollama_chunk(self, decoded_chunk: str, full_content: str, stream_completed_usage: Dict[str, Any], requested_model: str, request_id: str, user_id: str) -> Tuple[bytes, str, Dict[str, Any]]:
+    def _process_ollama_line(self, line: str, full_content: str, stream_completed_usage: Dict[str, Any], requested_model: str, request_id: str, user_id: str) -> Tuple[bytes, str, Dict[str, Any]]:
+        """Process a single NDJSON line from Ollama"""
         processed_chunk = b""
-        for line in decoded_chunk.split('\n'):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                data = json.loads(line)
-                if data.get('done'):
-                    if 'prompt_eval_count' in data:
-                        stream_completed_usage = {
-                            "prompt_tokens": data.get("prompt_eval_count", 0),
-                            "completion_tokens": data.get("eval_count", 0)
-                        }
-                    elif 'usage' in data:
-                        stream_completed_usage = data['usage']
-                    # Do not return early, let the loop finish and _stream_response_handler handle [DONE]
-                    continue
-                
-                delta_content = data.get('message', {}).get('content', '')
-                if delta_content:
-                    full_content += delta_content
+        try:
+            data = json.loads(line)
+            if data.get('done'):
+                if 'prompt_eval_count' in data:
+                    stream_completed_usage = {
+                        "prompt_tokens": data.get("prompt_eval_count", 0),
+                        "completion_tokens": data.get("eval_count", 0)
+                    }
+                elif 'usage' in data:
+                    stream_completed_usage = data['usage']
+                return processed_chunk, full_content, stream_completed_usage
+            
+            delta_content = data.get('message', {}).get('content', '')
+            if delta_content:
+                full_content += delta_content
 
-                openai_chunk = {
-                    "id": f"chatcmpl-{request_id}",
-                    "object": "chat.completion.chunk",
-                    "created": int(time.time()),
-                    "model": requested_model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {"content": delta_content},
-                            "logprobs": None,
-                            "finish_reason": None
-                        }
-                    ]
-                }
-                processed_chunk = f"data: {json.dumps(openai_chunk)}\n\n".encode('utf-8')
-            except json.JSONDecodeError as e:
-                # Re-raise JSONDecodeError to be caught by _stream_response_handler
-                raise e
+            openai_chunk = {
+                "id": f"chatcmpl-{request_id}",
+                "object": "chat.completion.chunk",
+                "created": int(time.time()),
+                "model": requested_model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": delta_content},
+                        "logprobs": None,
+                        "finish_reason": None
+                    }
+                ]
+            }
+            processed_chunk = f"data: {json.dumps(openai_chunk)}\n\n".encode('utf-8')
+        except json.JSONDecodeError as e:
+            raise e
         return processed_chunk, full_content, stream_completed_usage
 
     def _log_streaming_completion(self, request_id: str, user_id: str, requested_model: str, full_content: str, stream_completed_usage: Dict[str, Any]):
@@ -286,27 +368,18 @@ class ChatService:
         )
 
     def _format_sse_error(self, message: str, code: str, status_code: int) -> bytes:
-        """Formats an error message into an SSE-compatible chunk."""
+        """
+        Formats an error message in OpenAI-compatible SSE format.
+        Sends error as a separate SSE event, not as a chat.completion.chunk.
+        """
         error_payload = {
-            "id": f"chatcmpl-error-{int(time.time())}", # Unique ID for the error chunk
-            "object": "chat.completion.chunk",
-            "created": int(time.time()),
-            "model": "error_model", # Placeholder model name for error
-            "choices": [], # Empty choices array for error messages
             "error": {
                 "message": message,
-                "type": "api_error", # Generic type for now, can be more specific
+                "type": "api_error",
                 "code": code,
-                "status": status_code
+                "param": None
             }
         }
-        # For streaming errors, some clients expect the error object directly at the top level
-        # or within a 'data' field that is not a 'chat.completion.chunk' object.
-        # However, to maintain SSE compatibility and allow clients to parse it,
-        # we'll keep it as a chunk but with an empty choices array and the error object.
-        # If the client still interprets this as a message, we might need to send
-        # a non-chunked JSON error response instead for non-streaming errors,
-        # or a different SSE format for streaming errors.
         return f"data: {json.dumps(error_payload)}\n\n".encode('utf-8')
 
     def _log_non_streaming_response(self, request_id: str, user_id: str, requested_model: str, response_data: Dict[str, Any]):

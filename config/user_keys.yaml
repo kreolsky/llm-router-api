@@ -1,14 +1,26 @@
 user_keys:
   debug:
+    api_key: dummy
+  continue:
+    api_key: nnp-v1-91afa1510b7e0c9d27b713ac0cc7a458775271f348d86c7ae823bf08f891e89a
+  kilo-code:
+    api_key: nnp-v1-7572dd61f31870061fd4b9c809272a9070b36d7f6383171f71876e170ba2d07a
+  dead-internet:
     api_key: nnp-v1-16c34d52d13a9f02d9f417fa593bab5ba8d599ccb4a1023581a3c08ab383fa715
-    allowed_models: [] # Доступ ко всем моделям
-  full:
-    api_key: nnp-v1-bf03fba300415668661028e5601c4e28ec03f3ba944659d67e1a4cbb41eac9b7
-    allowed_models: [] # Доступ ко всем моделям
-  short:
-    api_key: nnp-v1-b3a36caabbd16fe8bd045f16966f137252b5a680ecbd6475f346eb6897d75462
+    allowed_models: []
+  bro-kilo-code:
+    api_key: nnp-v1-0897e56c94bc3fadec3c3e2a4378aa683919419d6127ced3b04a6785fbed7b57
+    allowed_models:
+      - glm/air
+      - local/orange
+  cir-online:
+    api_key: nnp-v1-6341ca3e67258db05c384d89c00eea3af998984cc8378ec45f606d4091cf827df
     allowed_models: # Если список пуст или отсутствует, доступны все модели
+      - gemini/mini
       - gemini/chat
-      - gemini/pro
+#      - gemini/pro
       - deepseek/chat
       - deepseek/reasoner
+      - local/orange
+      - embeddings/dummy
+      - stt/dummy

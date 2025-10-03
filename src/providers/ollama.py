@@ -41,10 +41,18 @@ class OllamaProvider(BaseProvider):
             if ollama_request_body["stream"]:
                 return await self._stream_request(self.client, "/chat", ollama_request_body)
             else:
+                # Ollama can be slower than cloud providers (especially for large models)
+                # Optimized timeout for non-streaming
+                ollama_timeout = httpx.Timeout(
+                    connect=15.0,  # Slightly longer for local/slow connections
+                    read=120.0,    # 2 minutes for large model responses
+                    write=10.0,
+                    pool=10.0
+                )
                 response = await self.client.post(f"{self.base_url}/chat",
                                              headers=self.headers,
                                              json=ollama_request_body,
-                                             timeout=600)
+                                             timeout=ollama_timeout)
                 response.raise_for_status()
                 return response.json()
         except httpx.HTTPStatusError as e:
@@ -67,10 +75,17 @@ class OllamaProvider(BaseProvider):
         }
 
         try:
+            # Ollama embeddings timeout
+            embeddings_timeout = httpx.Timeout(
+                connect=15.0,
+                read=60.0,   # Embeddings can take time for large texts
+                write=10.0,
+                pool=10.0
+            )
             response = await self.client.post(f"{self.base_url}/embeddings",
                                              headers=self.headers,
                                              json=ollama_request_body,
-                                             timeout=600)
+                                             timeout=embeddings_timeout)
             response.raise_for_status()
             return response.json()
         except httpx.HTTPStatusError as e:

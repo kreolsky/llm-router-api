@@ -25,11 +25,24 @@ class BaseProvider:
             self.headers["Authorization"] = f"Bearer {self.api_key}"
 
     async def _stream_request(self, client: httpx.AsyncClient, url_path: str, request_body: Dict[str, Any]) -> StreamingResponse:
+        """Stream request with optimized timeouts for streaming"""
+        # Optimized timeout for streaming:
+        # - connect: 10s to establish connection
+        # - read: 30s between chunks (if no chunk in 30s, timeout)
+        # - write: 10s to send request
+        # - pool: 10s to get connection from pool
+        stream_timeout = httpx.Timeout(
+            connect=10.0,
+            read=30.0,    # Time between chunks, not total time
+            write=10.0,
+            pool=10.0
+        )
+        
         async def generate():
-            async with client.stream("POST", f"{self.base_url}{url_path}", 
-                                     headers=self.headers, 
+            async with client.stream("POST", f"{self.base_url}{url_path}",
+                                     headers=self.headers,
                                      json=request_body,
-                                     timeout=600) as response:
+                                     timeout=stream_timeout) as response:
               try:
                   response.raise_for_status()
               except httpx.HTTPStatusError as e:
