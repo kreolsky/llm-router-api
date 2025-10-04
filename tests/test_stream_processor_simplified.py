@@ -3,7 +3,7 @@
 """
 import pytest
 import json
-from src.services.chat_service import StreamProcessor
+from src.services.chat_service.stream_processor import StreamProcessor
 
 
 class TestStreamProcessorSimplified:

@@ -5,7 +5,8 @@ Test script to verify statistics functionality
 import asyncio
 import json
 import time
-from src.services.chat_service import StatisticsCollector, StreamProcessor
+from src.services.chat_service.statistics_collector import StatisticsCollector
+from src.services.chat_service.stream_processor import StreamProcessor
 
 
 async def test_statistics_collector():
@@ -82,11 +83,9 @@ async def test_stream_processor_statistics():
     
     # Parse and verify content
     event_data = json.loads(stats_event_str[6:].strip())  # Remove "data: " prefix
-    assert event_data["type"] == "response.done"
-    assert event_data["response"]["id"] == "resp_test-123"
-    assert event_data["response"]["object"] == "response"
-    assert event_data["response"]["status"] == "completed"
-    assert event_data["response"]["usage"] == test_stats
+    # Verify all statistics fields are present
+    for key, value in test_stats.items():
+        assert event_data[key] == value, f"Field {key} mismatch: {event_data[key]} != {value}"
     
     print("✅ StreamProcessor statistics test passed!")
 

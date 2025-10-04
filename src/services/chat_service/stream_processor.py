@@ -1,90 +1,68 @@
+"""
+Stream Processor Module
 
+This module provides the StreamProcessor class for handling streaming responses
+from various AI providers and converting them to standardized SSE format.
+
+The StreamProcessor is a unified processor that replaces multiple previous
+streaming components. It handles both SSE (Server-Sent Events) and NDJSON
+(Newline Delimited JSON) formats from various providers including OpenAI,
+Anthropic, Ollama, and others.
+
+Key Features:
+- Automatic format detection (SSE vs NDJSON)
+- Buffer management for incomplete data chunks
+- UTF-8 decoding with error handling
+- Error handling and formatting for streaming responses
+- Statistics collection integration
+- Support for multiple provider-specific response formats
 """
-Упрощенный ChatService со встроенным StreamProcessor
-"""
-import httpx
+
+import codecs
 import json
 import time
-import codecs
-from typing import Dict, Any, Tuple, AsyncGenerator, Optional, List
+from typing import Dict, Any, AsyncGenerator, Optional, List
 
-from fastapi import HTTPException, status, Request
-from fastapi.responses import JSONResponse, StreamingResponse
-
-from ..core.config_manager import ConfigManager
-from ..providers import get_provider_instance
-from .model_service import ModelService
-from ..core.exceptions import ProviderStreamError, ProviderNetworkError
-from ..logging.config import logger
-
-
-class StatisticsCollector:
-    """
-    Сборщик статистики для ответов модели
-    """
-    
-    def __init__(self):
-        self.start_time = None
-        self.prompt_end_time = None
-        self.completion_end_time = None
-        self.prompt_tokens = 0
-        self.completion_tokens = 0
-        self.total_tokens = 0
-    
-    def start_timing(self):
-        """Начинает отсчет времени"""
-        self.start_time = time.time()
-    
-    def mark_prompt_complete(self, prompt_tokens: int = 0):
-        """Отмечает завершение обработки промпта"""
-        self.prompt_end_time = time.time()
-        self.prompt_tokens = prompt_tokens
-    
-    def mark_completion_complete(self, completion_tokens: int = 0):
-        """Отмечает завершение генерации ответа"""
-        self.completion_end_time = time.time()
-        self.completion_tokens = completion_tokens
-        self.total_tokens = self.prompt_tokens + self.completion_tokens
-    
-    def get_statistics(self) -> Dict[str, Any]:
-        """Возвращает полную статистику"""
-        if not self.start_time:
-            return {}
-        
-        total_time = time.time() - self.start_time
-        
-        # Рассчитываем время обработки промпта
-        prompt_time = self.prompt_end_time - self.start_time if self.prompt_end_time else 0
-        
-        # Рассчитываем время генерации ответа
-        completion_time = self.completion_end_time - self.prompt_end_time if self.completion_end_time and self.prompt_end_time else 0
-        
-        # Рассчитываем токены в секунду
-        prompt_tokens_per_sec = self.prompt_tokens / prompt_time if prompt_time > 0 else 0
-        completion_tokens_per_sec = self.completion_tokens / completion_time if completion_time > 0 else 0
-        
-        return {
-            "prompt_tokens": self.prompt_tokens,
-            "prompt_time": round(prompt_time, 2),
-            "prompt_tokens_per_sec": round(prompt_tokens_per_sec, 2),
-            "completion_tokens": self.completion_tokens,
-            "completion_time": round(completion_time, 2),
-            "completion_tokens_per_sec": round(completion_tokens_per_sec, 2),
-            "total_tokens": self.total_tokens,
-            "total_time": round(total_time, 2)
-        }
+from src.logging.config import logger
+from src.core.exceptions import ProviderStreamError, ProviderNetworkError
+from .statistics_collector import StatisticsCollector
 
 
 class StreamProcessor:
     """
-    Единый процессор для всего стриминга - заменяет 4 старых класса
-    Приоритет: простота поддержки и производительность
+    Unified processor for handling streaming responses from AI providers.
+    
+    This class replaces multiple previous streaming components with a single
+    unified processor that handles both SSE and NDJSON formats from various
+    providers (OpenAI, Anthropic, Ollama, etc.).
+    
+    The processor automatically detects the stream format, manages buffers for
+    incomplete data chunks, handles UTF-8 decoding, and converts provider-specific
+    formats to standardized SSE format for consistent client responses.
+    
+    Key Features:
+    - Automatic format detection (SSE vs NDJSON)
+    - Buffer management for incomplete data chunks
+    - Error handling and formatting
+    - Statistics collection integration
+    - UTF-8 decoding with error handling
+    - Support for multiple provider-specific response formats
+    
+    Attributes:
+        max_buffer_size (int): Maximum buffer size in bytes (default: 1MB)
+        utf8_decoder: Incremental UTF-8 decoder with error replacement
+        buffer (str): Accumulated data buffer for incomplete events
+        statistics (StatisticsCollector): Statistics collector instance
+        content_length (int): Length of processed content in characters
     """
     
     def __init__(self, max_buffer_size: int = 1024 * 1024):
         """
+        Initialize StreamProcessor.
+        
         Args:
-            max_buffer_size: Максимальный размер буфера в байтах
+            max_buffer_size (int): Maximum buffer size in bytes to prevent
+                memory exhaustion from malformed streams. Defaults to 1MB.
         """
         self.max_buffer_size = max_buffer_size
         self.utf8_decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
@@ -98,16 +76,29 @@ class StreamProcessor:
                            request_id: str,
                            user_id: str) -> AsyncGenerator[bytes, None]:
         """
-        Основной метод обработки стриминга
+        Main method for processing streaming responses.
+        
+        This method takes a raw provider stream and converts it to standardized
+        SSE format while handling errors and collecting statistics. It processes
+        the stream chunk by chunk, extracting events, and yielding formatted
+        SSE responses.
         
         Args:
-            provider_stream: Стрим от провайдера
-            model_id: ID модели
-            request_id: ID запроса
-            user_id: ID пользователя
+            provider_stream: Raw byte stream from the provider. This should be
+                an async generator yielding bytes chunks.
+            model_id: ID of the model being used for the request
+            request_id: Unique identifier for the request for logging and tracking
+            user_id: Identifier for the user making the request
             
         Yields:
-            SSE отформатированные чанки
+            bytes: SSE-formatted chunks ready for HTTP streaming. Each chunk
+                is properly formatted with "data: " prefix and double newline
+                termination.
+                
+        Raises:
+            ProviderStreamError: When stream processing encounters provider-specific errors
+            ProviderNetworkError: When network issues occur during stream processing
+            Exception: For unexpected errors during stream processing
         """
         logger.info("Starting stream processing", extra={
             "request_id": request_id,
@@ -510,261 +501,3 @@ class StreamProcessor:
         }
         
         return f"data: {json.dumps(statistics_event)}\n\n".encode('utf-8')
-    
-
-
-class ChatService:
-    """Упрощенная координация обработки чат-запросов"""
-    
-    def __init__(self, config_manager: ConfigManager, httpx_client: httpx.AsyncClient, model_service: ModelService):
-        self.config_manager = config_manager
-        self.httpx_client = httpx_client
-        self.model_service = model_service
-        
-        # Единый процессор вместо 4 отдельных компонентов
-        self.stream_processor = StreamProcessor()
-    
-    async def chat_completions(self, request: Request, auth_data: Tuple[str, str, list]) -> Any:
-        """
-        Основной метод обработки чат-запросов
-        
-        Args:
-            request: FastAPI запрос
-            auth_data: Данные аутентификации (project_name, api_key, allowed_models)
-            
-        Returns:
-            StreamingResponse или JSONResponse
-        """
-        project_name, api_key, allowed_models = auth_data
-        request_id = request.state.request_id
-        user_id = project_name
-
-        request_body = await request.json()
-        requested_model = request_body.get("model")
-
-        # Логирование запроса
-        logger.info(
-            "Chat Completion Request",
-            extra={
-                "log_type": "request",
-                "request_id": request_id,
-                "user_id": user_id,
-                "model_id": requested_model,
-                "request_body_summary": {
-                    "model": requested_model,
-                    "messages_count": len(request_body.get("messages", [])),
-                    "first_message_content": request_body.get("messages", [{}])[0].get("content") if request_body.get("messages") else None
-                }
-            }
-        )
-
-        # Валидация
-        if not requested_model:
-            error_detail = {"error": {"message": "Model not specified in request", "code": "model_not_specified"}}
-            logger.error(
-                "Model not specified in request",
-                extra={
-                    "request_id": request_id,
-                    "user_id": user_id,
-                    "log_type": "error",
-                    "detail": error_detail
-                }
-            )
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error_detail,
-            )
-
-        if allowed_models and requested_model not in allowed_models:
-            error_detail = {"error": {"message": f"Model '{requested_model}' not allowed for this API key", "code": "model_not_allowed"}}
-            logger.error(
-                f"Model '{requested_model}' not allowed for this API key",
-                extra={
-                    "request_id": request_id,
-                    "user_id": user_id,
-                    "model_id": requested_model,
-                    "log_type": "error",
-                    "detail": error_detail
-                }
-            )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=error_detail,
-            )
-
-        # Прямое извлечение конфигурации
-        current_config = self.config_manager.get_config()
-        models = current_config.get("models", {})
-        model_config = models.get(requested_model)
-        
-        if not model_config:
-            error_detail = {"error": {"message": f"Model '{requested_model}' not found in configuration", "code": "model_not_found"}}
-            logger.error(
-                f"Model '{requested_model}' not found in configuration",
-                extra={
-                    "request_id": request_id,
-                    "user_id": user_id,
-                    "model_id": requested_model,
-                    "log_type": "error",
-                    "detail": error_detail
-                }
-            )
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=error_detail,
-            )
-
-        # Получение конфигурации провайдера
-        provider_name = model_config.get("provider")
-        provider_model_name = model_config.get("provider_model_name", requested_model)
-        provider_config = current_config.get("providers", {}).get(provider_name)
-        
-        if not provider_config:
-            error_detail = {"error": {"message": f"Provider '{provider_name}' for model '{requested_model}' not found in configuration", "code": "provider_not_found"}}
-            logger.error(
-                f"Provider '{provider_name}' for model '{requested_model}' not found in configuration",
-                extra={
-                    "request_id": request_id,
-                    "user_id": user_id,
-                    "model_id": requested_model,
-                    "log_type": "error",
-                    "detail": error_detail
-                }
-            )
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=error_detail,
-            )
-
-        # Получение провайдера
-        try:
-            provider_instance = get_provider_instance(provider_config.get("type"), provider_config, self.httpx_client)
-        except ValueError as e:
-            error_detail = {"error": {"message": f"Provider configuration error: {e}", "code": "provider_config_error"}}
-            logger.error(
-                f"Provider configuration error: {e}",
-                extra={
-                    "request_id": request_id,
-                    "user_id": user_id,
-                    "model_id": requested_model,
-                    "log_type": "error",
-                    "detail": error_detail
-                }
-            )
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=error_detail,
-            )
-        
-        try:
-            # Начинаем отсчет времени для всего запроса
-            statistics = StatisticsCollector()
-            statistics.start_timing()
-            
-            response_data = await provider_instance.chat_completions(request_body, provider_model_name, model_config)
-            
-            if isinstance(response_data, StreamingResponse):
-                # Отмечаем завершение обработки промпта для стриминга
-                # Оцениваем токены промпта на основе входных сообщений
-                estimated_prompt_tokens = self._estimate_prompt_tokens(request_body)
-                statistics.mark_prompt_complete(estimated_prompt_tokens)
-                
-                # Используем новый упрощенный процессор
-                return StreamingResponse(
-                    self.stream_processor.process_stream(
-                        response_data.body_iterator, requested_model, request_id, user_id
-                    ),
-                    media_type=response_data.media_type
-                )
-            else:
-                # Отмечаем завершение обработки промпта для нестримингового ответа
-                usage = response_data.get("usage", {})
-                prompt_tokens = usage.get("prompt_tokens", 0)
-                completion_tokens = usage.get("completion_tokens", 0)
-                statistics.mark_prompt_complete(prompt_tokens)
-                statistics.mark_completion_complete(completion_tokens)
-                
-                # Получаем полную статистику
-                full_statistics = statistics.get_statistics()
-                
-                # Обновляем ответ с расширенной статистикой
-                enhanced_response = response_data.copy()
-                if "usage" not in enhanced_response:
-                    enhanced_response["usage"] = {}
-                
-                # Добавляем timing метрики к существующему usage
-                enhanced_response["usage"].update(full_statistics)
-                
-                logger.info(
-                    "Chat Completion Response",
-                    extra={
-                        "log_type": "response",
-                        "request_id": request_id,
-                        "user_id": user_id,
-                        "model_id": requested_model,
-                        "http_status_code": status.HTTP_200_OK,
-                        "prompt_tokens": prompt_tokens,
-                        "completion_tokens": completion_tokens,
-                        "statistics": full_statistics,
-                        "response_body_summary": {
-                            "finish_reason": response_data.get("choices", [{}])[0].get("finish_reason"),
-                            "content_preview": response_data.get("choices", [{}])[0].get("message", {}).get("content", "")
-                        }
-                    }
-                )
-                return JSONResponse(content=enhanced_response)
-            
-        except HTTPException as e:
-            logger.error(
-                f"HTTPException in chat_completions: {e.detail.get('error', {}).get('message', str(e))}",
-                extra={
-                    "status_code": e.status_code,
-                    "detail": e.detail,
-                    "request_id": request_id,
-                    "user_id": user_id,
-                    "model_id": requested_model,
-                    "log_type": "error"
-                }
-            )
-            raise e
-        except Exception as e:
-            logger.error(
-                f"Unexpected error in chat_completions: {e}",
-                extra={
-                    "request_id": request_id,
-                    "user_id": user_id,
-                    "model_id": requested_model,
-                    "log_type": "error"
-                },
-                exc_info=True
-            )
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": {"message": f"Internal server error: {e}", "code": "internal_server_error"}},
-            )
-    
-    def _estimate_prompt_tokens(self, request_body: Dict[str, Any]) -> int:
-        """
-        Приблизительная оценка количества токенов в промпте
-        На основе содержимого сообщений
-        """
-        messages = request_body.get("messages", [])
-        if not messages:
-            return 0
-        
-        total_text = ""
-        for message in messages:
-            content = message.get("content", "")
-            if isinstance(content, str):
-                total_text += content + " "
-            elif isinstance(content, list):
-                # Обработка мультимодального контента
-                for item in content:
-                    if isinstance(item, dict) and item.get("type") == "text":
-                        total_text += item.get("text", "") + " "
-        
-        # Используем ту же логику оценки, что и в StreamProcessor
-        words = len(total_text.split())
-        chars = len(total_text)
-        estimated_tokens = max(words, chars // 4)
-        return estimated_tokens
