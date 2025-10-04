@@ -1,4 +1,4 @@
-рв#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Test script to verify streaming functionality with local/orange and deepseek/chat models
 using dummy API key.
