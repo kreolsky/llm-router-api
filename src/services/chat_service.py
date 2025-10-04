@@ -224,27 +224,31 @@ class StreamProcessor:
         if not event_raw.strip():
             return None
         
-        for line in event_raw.split('\n'):
-            line = line.strip()
-            
-            # Пропускаем комментарии
-            if line.startswith(':'):
-                continue
-            
-            if line.startswith('data: '):
-                data_part = line[6:].strip()
+        try:
+            for line in event_raw.split('\n'):
+                line = line.strip()
                 
-                # [DONE] - валидное завершающее событие
-                if data_part == '[DONE]':
-                    return {'done': True}
+                # Пропускаем комментарии
+                if line.startswith(':'):
+                    continue
                 
-                # Парсим JSON
-                try:
-                    return json.loads(data_part)
-                except json.JSONDecodeError:
-                    return None
-        
-        return None
+                if line.startswith('data: '):
+                    data_part = line[6:].strip()
+                    
+                    # [DONE] - валидное завершающее событие
+                    if data_part == '[DONE]':
+                        return {'done': True}
+                    
+                    # Парсим JSON
+                    try:
+                        return json.loads(data_part)
+                    except json.JSONDecodeError:
+                        return None
+            
+            return None
+        except Exception as e:
+            logger.error(f"Error parsing SSE event: {e}", exc_info=True)
+            return None
     
     def _extract_ndjson_events(self, final: bool) -> List[Dict[str, Any]]:
         """Извлекает NDJSON события"""
@@ -267,7 +271,7 @@ class StreamProcessor:
         
         return events
     
-    async def _process_event_data(self, 
+    async def _process_event_data(self,
                                 event_data: Dict[str, Any],
                                 model_id: str,
                                 request_id: str,
@@ -291,9 +295,24 @@ class StreamProcessor:
         if 'error' in event_data:
             return self._format_error(Exception(event_data['error']))
         
-        # Завершающее событие
+        # Завершающее событие [DONE]
         if event_data.get('done'):
             return None
+        
+        # Проверяем на завершающее событие с finish_reason
+        if 'choices' in event_data:
+            choices = event_data.get('choices', [])
+            if choices:
+                choice = choices[0]
+                finish_reason = choice.get('finish_reason')
+                delta = choice.get('delta', {})
+                
+                # Если есть finish_reason и delta пустой - это завершающее событие
+                if finish_reason and not delta.get('content'):
+                    return None
+            else:
+                # Пустой список choices - пропускаем
+                return None
         
         # Извлекаем контент
         content = self._extract_content_from_data(event_data)
@@ -312,7 +331,11 @@ class StreamProcessor:
         """Извлекает контент из распарсенных данных"""
         # SSE формат (OpenAI)
         if 'choices' in event_data:
-            choice = event_data.get('choices', [{}])[0]
+            choices = event_data.get('choices', [])
+            if not choices:
+                return ""
+            
+            choice = choices[0]
             delta = choice.get('delta', {})
             
             # OpenAI формат: delta.content
