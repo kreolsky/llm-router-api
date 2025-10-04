@@ -11,7 +11,7 @@ from ..core.config_manager import ConfigManager
 from ..providers import get_provider_instance
 from .model_service import ModelService
 from .chat.validator import ChatRequestValidator
-from .chat.buffer_manager import StreamBufferManager
+from .chat.smart_buffer_manager import SmartStreamBufferManager
 from .chat.format_processor import StreamFormatProcessor
 from .chat.error_handler import StreamingErrorHandler
 from .chat.logger import ChatLogger
@@ -28,14 +28,14 @@ class ChatService:
         
         # Инициализация компонентов
         self.validator = ChatRequestValidator(config_manager)
-        self.buffer_manager = StreamBufferManager()
+        self.buffer_manager = SmartStreamBufferManager()
         self.format_processor = StreamFormatProcessor()
         self.error_handler = StreamingErrorHandler()
         self.logger = ChatLogger()
         self.streaming_handler = StreamingHandler(
-            self.buffer_manager, 
-            self.format_processor, 
-            self.error_handler, 
+            self.buffer_manager,
+            self.format_processor,
+            self.error_handler,
             self.logger
         )
     

@@ -6,7 +6,7 @@ from typing import AsyncGenerator
 
 from fastapi import status
 
-from .buffer_manager import StreamBufferManager
+from .smart_buffer_manager import SmartStreamBufferManager
 from .format_processor import StreamFormatProcessor
 from .error_handler import StreamingErrorHandler
 from .logger import ChatLogger
@@ -16,7 +16,7 @@ from ...logging.config import logger
 class StreamingHandler:
     """Координация обработки стриминга"""
     
-    def __init__(self, buffer_manager: StreamBufferManager, 
+    def __init__(self, buffer_manager: SmartStreamBufferManager,
                  format_processor: StreamFormatProcessor,
                  error_handler: StreamingErrorHandler,
                  chat_logger: ChatLogger):
@@ -49,27 +49,22 @@ class StreamingHandler:
         try:
             async for chunk in response_data.body_iterator:
                 try:
-                    # Обработка чанка
-                    decoded_chunk = self.buffer_manager.process_chunk(chunk)
+                    # Получаем полные события из чанка
+                    complete_events = self.buffer_manager.process_chunk(chunk)
                     
-                    if not decoded_chunk:
-                        continue
-                    
-                    # Определение формата при первом чанке
-                    if first_chunk:
-                        first_chunk = False
-                        stream_format = self.format_processor.detect_format(decoded_chunk)
-                        logger.info(f"Auto-detected {stream_format} format for request {request_id}",
-                                  extra={"request_id": request_id, "provider_type": provider_type})
-                    
-                    # Обработка в зависимости от формата
-                    if stream_format == 'ndjson':
-                        self.buffer_manager.add_to_json_buffer(decoded_chunk)
-                        lines = self.buffer_manager.get_json_lines()
+                    # Обрабатываем каждое полное событие
+                    for event in complete_events:
+                        # Определение формата при первом событии
+                        if first_chunk:
+                            first_chunk = False
+                            stream_format = self.format_processor.detect_format(event)
+                            logger.info(f"Auto-detected {stream_format} format for request {request_id}",
+                                      extra={"request_id": request_id, "provider_type": provider_type})
                         
-                        for line in lines:
+                        # Обработка в зависимости от формата
+                        if stream_format == 'ndjson':
                             processed_chunk, content, usage = self.format_processor.process_ndjson_line(
-                                line, model_id, request_id
+                                event, model_id, request_id
                             )
                             if content:
                                 full_content += content
@@ -78,11 +73,7 @@ class StreamingHandler:
                             if processed_chunk:
                                 yield processed_chunk
                                 
-                    elif stream_format == 'sse':
-                        self.buffer_manager.add_to_sse_buffer(decoded_chunk)
-                        events = self.buffer_manager.get_sse_events()
-                        
-                        for event in events:
+                        elif stream_format == 'sse':
                             full_content, stream_completed_usage = self.format_processor.process_sse_event(
                                 event, full_content, stream_completed_usage
                             )
@@ -105,17 +96,17 @@ class StreamingHandler:
         
         # Обработка оставшихся данных в буферах
         if not stream_has_error:
-            sse_buffer, json_buffer = self.buffer_manager.get_remaining_data()
+            remaining_data = self.buffer_manager.get_remaining_data()
             
-            if stream_format == 'sse' and sse_buffer.strip():
+            if stream_format == 'sse' and remaining_data.strip():
                 full_content, stream_completed_usage = self.format_processor.process_sse_event(
-                    sse_buffer, full_content, stream_completed_usage
+                    remaining_data, full_content, stream_completed_usage
                 )
-                yield f"{sse_buffer}\n\n".encode('utf-8')
-            elif stream_format == 'ndjson' and json_buffer.strip():
+                yield f"{remaining_data}\n\n".encode('utf-8')
+            elif stream_format == 'ndjson' and remaining_data.strip():
                 try:
                     processed_chunk, content, usage = self.format_processor.process_ndjson_line(
-                        json_buffer, model_id, request_id
+                        remaining_data, model_id, request_id
                     )
                     if content:
                         full_content += content
