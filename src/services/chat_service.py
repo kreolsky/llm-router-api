@@ -18,6 +18,63 @@ from ..core.exceptions import ProviderStreamError, ProviderNetworkError
 from ..logging.config import logger
 
 
+class StatisticsCollector:
+    """
+    Сборщик статистики для ответов модели
+    """
+    
+    def __init__(self):
+        self.start_time = None
+        self.prompt_end_time = None
+        self.completion_end_time = None
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.total_tokens = 0
+    
+    def start_timing(self):
+        """Начинает отсчет времени"""
+        self.start_time = time.time()
+    
+    def mark_prompt_complete(self, prompt_tokens: int = 0):
+        """Отмечает завершение обработки промпта"""
+        self.prompt_end_time = time.time()
+        self.prompt_tokens = prompt_tokens
+    
+    def mark_completion_complete(self, completion_tokens: int = 0):
+        """Отмечает завершение генерации ответа"""
+        self.completion_end_time = time.time()
+        self.completion_tokens = completion_tokens
+        self.total_tokens = self.prompt_tokens + self.completion_tokens
+    
+    def get_statistics(self) -> Dict[str, Any]:
+        """Возвращает полную статистику"""
+        if not self.start_time:
+            return {}
+        
+        total_time = time.time() - self.start_time
+        
+        # Рассчитываем время обработки промпта
+        prompt_time = self.prompt_end_time - self.start_time if self.prompt_end_time else 0
+        
+        # Рассчитываем время генерации ответа
+        completion_time = self.completion_end_time - self.prompt_end_time if self.completion_end_time and self.prompt_end_time else 0
+        
+        # Рассчитываем токены в секунду
+        prompt_tokens_per_sec = self.prompt_tokens / prompt_time if prompt_time > 0 else 0
+        completion_tokens_per_sec = self.completion_tokens / completion_time if completion_time > 0 else 0
+        
+        return {
+            "prompt_tokens": self.prompt_tokens,
+            "prompt_time": round(prompt_time, 2),
+            "prompt_tokens_per_sec": round(prompt_tokens_per_sec, 2),
+            "completion_tokens": self.completion_tokens,
+            "completion_time": round(completion_time, 2),
+            "completion_tokens_per_sec": round(completion_tokens_per_sec, 2),
+            "total_tokens": self.total_tokens,
+            "total_time": round(total_time, 2)
+        }
+
+
 class StreamProcessor:
     """
     Единый процессор для всего стриминга - заменяет 4 старых класса
@@ -32,8 +89,10 @@ class StreamProcessor:
         self.max_buffer_size = max_buffer_size
         self.utf8_decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
         self.buffer = ""
+        self.statistics = StatisticsCollector()
+        self.content_length = 0
     
-    async def process_stream(self, 
+    async def process_stream(self,
                            provider_stream: AsyncGenerator[bytes, None],
                            model_id: str,
                            request_id: str,
@@ -56,8 +115,12 @@ class StreamProcessor:
             "model": model_id
         })
         
+        # Начинаем отсчет времени
+        self.statistics.start_timing()
+        
         full_content = ""
         stream_has_error = False
+        first_token_received = False
         
         try:
             event_count = 0
@@ -76,6 +139,13 @@ class StreamProcessor:
                                 event_data, model_id, request_id, full_content
                             )
                             if chunk_bytes:
+                                # Отмечаем получение первого токена
+                                if not first_token_received:
+                                    first_token_received = True
+                                    # Оцениваем токены промпта (приблизительно)
+                                    # ВАЖНО: full_content здесь еще пустой, поэтому используем 0
+                                    self.statistics.mark_prompt_complete(0)
+                                
                                 yield chunk_bytes
                                 # Обновляем контент для следующего события
                                 full_content = self._extract_content(event_data, full_content)
@@ -113,12 +183,24 @@ class StreamProcessor:
                     )
                     if chunk_bytes:
                         yield chunk_bytes
+                        # Обновляем контент для оставшихся событий
+                        full_content = self._extract_content(event_data, full_content)
+            
+            # Отмечаем завершение генерации и рассчитываем токены
+            estimated_completion_tokens = self._estimate_tokens(full_content)
+            self.statistics.mark_completion_complete(estimated_completion_tokens)
+            
+            # Отправляем финальное событие со статистикой
+            statistics = self.statistics.get_statistics()
+            if statistics:
+                yield self._format_statistics_event(statistics, request_id, model_id)
             
             logger.info("Stream completed", extra={
                 "request_id": request_id,
                 "user_id": user_id,
                 "model": model_id,
-                "content_length": len(full_content)
+                "content_length": len(full_content),
+                "statistics": statistics
             })
             
             yield b"data: [DONE]\n\n"
@@ -398,6 +480,37 @@ class StreamProcessor:
         """Очищает буфер и сбрасывает декодер"""
         self.buffer = ""
         self.utf8_decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
+    
+    def _estimate_tokens(self, text: str) -> int:
+        """
+        Приблизительная оценка количества токенов в тексте
+        Использует эмпирическое правило: ~4 символа на токен для английского текста
+        """
+        if not text:
+            return 0
+        # Более точная оценка: учитываем пробелы и знаки препинания
+        words = len(text.split())
+        chars = len(text)
+        # Комбинированная оценка: учитываем и слова, и символы
+        estimated_tokens = max(words, chars // 4)
+        return estimated_tokens
+    
+    def _format_statistics_event(self, statistics: Dict[str, Any], request_id: str, model_id: str) -> bytes:
+        """Форматирует событие со статистикой в SSE формате"""
+        # Форматируем статистику в ожидаемом формате
+        statistics_event = {
+            "prompt_tokens": statistics.get("prompt_tokens", 0),
+            "prompt_time": statistics.get("prompt_time", 0),
+            "prompt_tokens_per_sec": statistics.get("prompt_tokens_per_sec", 0),
+            "completion_tokens": statistics.get("completion_tokens", 0),
+            "completion_time": statistics.get("completion_time", 0),
+            "completion_tokens_per_sec": statistics.get("completion_tokens_per_sec", 0),
+            "total_tokens": statistics.get("total_tokens", 0),
+            "total_time": statistics.get("total_time", 0)
+        }
+        
+        return f"data: {json.dumps(statistics_event)}\n\n".encode('utf-8')
+    
 
 
 class ChatService:
@@ -544,9 +657,18 @@ class ChatService:
             )
         
         try:
+            # Начинаем отсчет времени для всего запроса
+            statistics = StatisticsCollector()
+            statistics.start_timing()
+            
             response_data = await provider_instance.chat_completions(request_body, provider_model_name, model_config)
             
             if isinstance(response_data, StreamingResponse):
+                # Отмечаем завершение обработки промпта для стриминга
+                # Оцениваем токены промпта на основе входных сообщений
+                estimated_prompt_tokens = self._estimate_prompt_tokens(request_body)
+                statistics.mark_prompt_complete(estimated_prompt_tokens)
+                
                 # Используем новый упрощенный процессор
                 return StreamingResponse(
                     self.stream_processor.process_stream(
@@ -555,10 +677,24 @@ class ChatService:
                     media_type=response_data.media_type
                 )
             else:
+                # Отмечаем завершение обработки промпта для нестримингового ответа
                 usage = response_data.get("usage", {})
                 prompt_tokens = usage.get("prompt_tokens", 0)
                 completion_tokens = usage.get("completion_tokens", 0)
-
+                statistics.mark_prompt_complete(prompt_tokens)
+                statistics.mark_completion_complete(completion_tokens)
+                
+                # Получаем полную статистику
+                full_statistics = statistics.get_statistics()
+                
+                # Обновляем ответ с расширенной статистикой
+                enhanced_response = response_data.copy()
+                if "usage" not in enhanced_response:
+                    enhanced_response["usage"] = {}
+                
+                # Добавляем timing метрики к существующему usage
+                enhanced_response["usage"].update(full_statistics)
+                
                 logger.info(
                     "Chat Completion Response",
                     extra={
@@ -569,13 +705,14 @@ class ChatService:
                         "http_status_code": status.HTTP_200_OK,
                         "prompt_tokens": prompt_tokens,
                         "completion_tokens": completion_tokens,
+                        "statistics": full_statistics,
                         "response_body_summary": {
                             "finish_reason": response_data.get("choices", [{}])[0].get("finish_reason"),
                             "content_preview": response_data.get("choices", [{}])[0].get("message", {}).get("content", "")
                         }
                     }
                 )
-                return JSONResponse(content=response_data)
+                return JSONResponse(content=enhanced_response)
             
         except HTTPException as e:
             logger.error(
@@ -591,4 +728,43 @@ class ChatService:
             )
             raise e
         except Exception as e:
-            logger
+            logger.error(
+                f"Unexpected error in chat_completions: {e}",
+                extra={
+                    "request_id": request_id,
+                    "user_id": user_id,
+                    "model_id": requested_model,
+                    "log_type": "error"
+                },
+                exc_info=True
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"error": {"message": f"Internal server error: {e}", "code": "internal_server_error"}},
+            )
+    
+    def _estimate_prompt_tokens(self, request_body: Dict[str, Any]) -> int:
+        """
+        Приблизительная оценка количества токенов в промпте
+        На основе содержимого сообщений
+        """
+        messages = request_body.get("messages", [])
+        if not messages:
+            return 0
+        
+        total_text = ""
+        for message in messages:
+            content = message.get("content", "")
+            if isinstance(content, str):
+                total_text += content + " "
+            elif isinstance(content, list):
+                # Обработка мультимодального контента
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        total_text += item.get("text", "") + " "
+        
+        # Используем ту же логику оценки, что и в StreamProcessor
+        words = len(total_text.split())
+        chars = len(total_text)
+        estimated_tokens = max(words, chars // 4)
+        return estimated_tokens
