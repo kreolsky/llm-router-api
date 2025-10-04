@@ -9,6 +9,11 @@ providers:
     base_url: https://api.deepseek.com/v1
     api_key_env: DEEPSEEK_API_KEY
     stream_format: sse
+  zai:
+    type: openai
+    base_url: https://api.z.ai/api/paas/v4
+    api_key_env: ZAI_API_KEY
+    stream_format: sse
   kimi:
     type: openai
     base_url: https://api.moonshot.ai/v1

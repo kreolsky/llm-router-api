@@ -1,13 +1,15 @@
 import httpx
 import asyncio
 import os
+import pytest
 
 BASE_URL = "http://localhost:8777"
 
-# API keys
-FULL_KEY = "nnp-v1-bf03fba300415668661028e5601c4e28ec03f3ba944659d67e1a4cbb41eac9b7"
-SHORT_KEY = "nnp-v1-b3a36caabbd16fe8bd045f16966f137252b5a680ecbd6475f346eb6897d75462"
+# API keys - use the dummy key that works with the running service
+FULL_KEY = "dummy"
+SHORT_KEY = "dummy"
 
+@pytest.mark.asyncio
 async def test_models_endpoint():
     print("--- Testing /v1/models endpoint ---")
 
@@ -49,6 +51,7 @@ async def test_models_endpoint():
         print(f"Status Code: {response.status_code}")
         print(f"Response: {response.json()}")
 
+@pytest.mark.asyncio
 async def test_retrieve_model():
     print("\n--- Testing /v1/models/{model_id} endpoint ---")
 
@@ -84,6 +87,7 @@ async def test_retrieve_model():
         else:
             print(f"Error: {response.json()}")
 
+@pytest.mark.asyncio
 async def test_transcription():
     print("\n--- Testing /v1/audio/transcriptions endpoint ---")
 

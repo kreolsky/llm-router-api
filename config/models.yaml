@@ -5,21 +5,15 @@ models:
   deepseek/reasoner:
     provider: deepseek
     provider_model_name: deepseek-reasoner
-  kimi/chat:
-    provider: kimi
-    provider_model_name: kimi-k2-0905-preview
+#  kimi/chat:
+#    provider: kimi
+#    provider_model_name: kimi-k2-0905-preview
   glm/air:
-    provider: openrouter
-    provider_model_name: z-ai/glm-4.5-air
-    options:
-      provider:
-        only: ["z-ai"]
+    provider: zai
+    provider_model_name: glm-4.5-air
   glm/chat:
-    provider: openrouter
-    provider_model_name: z-ai/glm-4.6
-    options:
-      provider:
-        only: ["z-ai"]
+    provider: zai
+    provider_model_name: glm-4.6
   anthropic/sonnet:
     provider: openrouter
     provider_model_name: anthropic/claude-sonnet-4.5
@@ -32,18 +26,18 @@ models:
   gemini/pro:
     provider: openrouter
     provider_model_name: google/gemini-2.5-pro
-  mistral/dev/medium:
+  mistral/medium:
     provider: openrouter
-    provider_model_name: mistralai/devstral-medium
+    provider_model_name: mistralai/mistral-medium-3.1
     options:
       provider:
         only: ["mistral"]
-  minimax/reasoner:
-    provider: openrouter
-    provider_model_name: minimax/minimax-m1
-    options:
-      provider:
-        only: ["minimax"]
+#  minimax/reasoner:
+#    provider: openrouter
+#    provider_model_name: minimax/minimax-m1
+#    options:
+#      provider:
+#        only: ["minimax"]
   local/orange:
     provider: orange
     provider_model_name: dummy

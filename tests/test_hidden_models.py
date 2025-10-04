@@ -1,13 +1,14 @@
 import httpx
 import asyncio
 import os
+import pytest
 
 BASE_URL = "http://localhost:8777"
 
-# API keys (assuming these are available from config/user_keys.yaml or environment)
-# For testing, we'll use a placeholder. In a real scenario, these would be loaded securely.
-FULL_KEY = "nnp-v1-bf03fba300415668661028e5601c4e28ec03f3ba944659d67e1a4cbb41eac9b7"
+# API keys - use the dummy key that works with the running service
+FULL_KEY = "dummy"
 
+@pytest.mark.asyncio
 async def test_hidden_models_visibility():
     print("\n--- Testing /v1/models endpoint with hidden models ---")
 
@@ -29,6 +30,7 @@ async def test_hidden_models_visibility():
         assert "deepseek/chat" in model_ids, "Visible model 'deepseek/chat' should be in the list"
         print("Test for hidden models in /v1/models passed.")
 
+@pytest.mark.asyncio
 async def test_retrieve_hidden_model():
     print("\n--- Testing /v1/models/{model_id} endpoint for hidden models ---")
 
@@ -52,6 +54,7 @@ async def test_retrieve_hidden_model():
         
         print("Test for retrieving hidden models via /v1/models/{model_id} passed.")
 
+@pytest.mark.asyncio
 async def test_embedding_model_functionality():
     print("\n--- Testing /v1/embeddings endpoint with hidden model ---")
 
