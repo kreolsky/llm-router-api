@@ -14,6 +14,7 @@ from typing import List, Dict, Any
 # Тестовая конфигурация
 BASE_URL = "http://localhost:8777"
 API_KEY = "dummy"  # Из config/user_keys.yaml
+TEST_MODEL = "local/orange"  # Модель для тестирования
 
 # ANSI color codes for output
 GREEN = "\033[92m"
@@ -88,7 +89,7 @@ class SmartBufferingTester:
         print_test("Очень маленькие чанки")
         
         payload = {
-            "model": "deepseek/chat",
+            "model": TEST_MODEL,
             "messages": [{"role": "user", "content": "Hi"}],
             "stream": True,
             "max_tokens": 10
@@ -150,7 +151,7 @@ class SmartBufferingTester:
         
         for i, text in enumerate(test_cases):
             payload = {
-                "model": "deepseek/chat",
+                "model": TEST_MODEL,
                 "messages": [{"role": "user", "content": f"Ответь: {text}"}],
                 "stream": True,
                 "max_tokens": 20
@@ -199,7 +200,7 @@ class SmartBufferingTester:
         # Поскольку мы используем OpenAI совместимый провайдер, 
         # должен быть только SSE формат
         payload = {
-            "model": "deepseek/chat",
+            "model": TEST_MODEL,
             "messages": [{"role": "user", "content": "Test"}],
             "stream": True,
             "max_tokens": 10
@@ -248,7 +249,7 @@ class SmartBufferingTester:
         print_test("Большие ответы")
         
         payload = {
-            "model": "deepseek/chat",
+            "model": TEST_MODEL,
             "messages": [{"role": "user", "content": "Write a detailed explanation about artificial intelligence in 1000 words"}],
             "stream": True,
             "max_tokens": 500
@@ -305,7 +306,7 @@ class SmartBufferingTester:
         # Этот тест проверяет устойчивость к обрывам соединения
         # Мы не можем реально оборвать соединение, но можем проверить таймауты
         payload = {
-            "model": "deepseek/chat",
+            "model": TEST_MODEL,
             "messages": [{"role": "user", "content": "Test"}],
             "stream": True,
             "max_tokens": 10
@@ -346,7 +347,7 @@ class SmartBufferingTester:
         
         # Этот тест проверяет обработку ошибок в JSON
         payload = {
-            "model": "deepseek/chat",
+            "model": TEST_MODEL,
             "messages": [{"role": "user", "content": "Test"}],
             "stream": True,
             "max_tokens": 10
@@ -396,7 +397,7 @@ class SmartBufferingTester:
         print_test("Быстрые последовательные запросы")
         
         payload = {
-            "model": "deepseek/chat",
+            "model": TEST_MODEL,
             "messages": [{"role": "user", "content": "Quick test"}],
             "stream": True,
             "max_tokens": 5
@@ -469,7 +470,7 @@ class SmartBufferingTester:
         
         for i, text in enumerate(test_cases):
             payload = {
-                "model": "deepseek/chat",
+                "model": TEST_MODEL,
                 "messages": [{"role": "user", "content": f"Echo: {text}"}],
                 "stream": True,
                 "max_tokens": 20
@@ -515,7 +516,7 @@ class SmartBufferingTester:
         print_test("Пустые и неполные события")
         
         payload = {
-            "model": "deepseek/chat",
+            "model": TEST_MODEL,
             "messages": [{"role": "user", "content": "Test"}],
             "stream": True,
             "max_tokens": 10
@@ -582,7 +583,7 @@ class SmartBufferingTester:
         
         for i, text in enumerate(test_cases):
             payload = {
-                "model": "deepseek/chat",
+                "model": TEST_MODEL,
                 "messages": [{"role": "user", "content": f"Repeat: {text}"}],
                 "stream": True,
                 "max_tokens": 30

@@ -2,18 +2,18 @@
 Экспорт компонентов чат-сервиса
 """
 
-from .validator import ChatRequestValidator
-from .buffer_manager import StreamBufferManager
+from .smart_buffer_manager import SmartStreamBufferManager
 from .format_processor import StreamFormatProcessor
 from .error_handler import StreamingErrorHandler
-from .logger import ChatLogger
 from .streaming_handler import StreamingHandler
+from .parsed_event import ParsedStreamEvent
+from .format_detector import StreamFormatDetector
 
 __all__ = [
-    'ChatRequestValidator',
-    'StreamBufferManager',
+    'SmartStreamBufferManager',
     'StreamFormatProcessor',
     'StreamingErrorHandler',
-    'ChatLogger',
-    'StreamingHandler'
+    'StreamingHandler',
+    'ParsedStreamEvent',
+    'StreamFormatDetector'
 ]

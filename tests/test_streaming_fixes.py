@@ -11,6 +11,7 @@ import httpx
 # Test configuration
 BASE_URL = "http://localhost:8777"
 API_KEY = "dummy"  # From config/user_keys.yaml
+TEST_MODEL = "local/orange"  # Модель для тестирования
 
 # ANSI color codes for output
 GREEN = "\033[92m"
@@ -38,7 +39,7 @@ async def test_utf8_emoji_russian(client: httpx.AsyncClient):
     print_test("UTF-8 with Emoji and Russian Text")
     
     payload = {
-        "model": "deepseek/chat",
+        "model": TEST_MODEL,
         "messages": [
             {"role": "user", "content": "Ответь на русском с эмодзи: привет! 🚀💻🔥"}
         ],
@@ -107,7 +108,7 @@ async def test_long_response(client: httpx.AsyncClient):
     print_test("Long Streaming Response")
     
     payload = {
-        "model": "deepseek/chat",
+        "model": TEST_MODEL,
         "messages": [
             {"role": "user", "content": "Write a detailed explanation about Python programming in 500 words"}
         ],
@@ -169,7 +170,7 @@ async def test_mixed_content(client: httpx.AsyncClient):
     print_test("Mixed Languages and Special Characters")
     
     payload = {
-        "model": "deepseek/chat",
+        "model": TEST_MODEL,
         "messages": [
             {"role": "user", "content": "Напиши короткий ответ на русском и английском с emoji: что такое AI? 🤖"}
         ],
