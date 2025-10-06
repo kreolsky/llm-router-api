@@ -82,8 +82,8 @@ class ModelService:
         
         return additional_model_details
 
-    async def list_models(self, auth_data: Tuple[str, str, list]) -> Dict[str, Any]:
-        _, _, allowed_models = auth_data
+    async def list_models(self, auth_data: Tuple[str, str, list, list]) -> Dict[str, Any]:
+        _, _, allowed_models, _ = auth_data
         current_config = self.config_manager.get_config()
         models_config = current_config.get("models", {})
         
@@ -120,8 +120,8 @@ class ModelService:
                 })
         return {"object": "list", "data": models_list}
 
-    async def retrieve_model(self, model_id: str, auth_data: Tuple[str, str, list]) -> Dict[str, Any]:
-        _, _, allowed_models = auth_data
+    async def retrieve_model(self, model_id: str, auth_data: Tuple[str, str, list, list]) -> Dict[str, Any]:
+        _, _, allowed_models, _ = auth_data
 
         # Check if the model is allowed for this user
         if allowed_models and model_id not in allowed_models:

@@ -13,8 +13,8 @@ class EmbeddingService:
         self.config_manager = config_manager
         self.httpx_client = httpx_client
 
-    async def create_embeddings(self, request: Request, auth_data: Tuple[str, str, list]) -> Any:
-        project_name, api_key, allowed_models = auth_data
+    async def create_embeddings(self, request: Request, auth_data: Tuple[str, str, list, list]) -> Any:
+        project_name, api_key, allowed_models, _ = auth_data
         request_id = request.state.request_id
         user_id = project_name # Using project_name as user_id
 
@@ -50,6 +50,15 @@ class EmbeddingService:
         # For embeddings, we assume a single provider will handle all requests
         # The model specified in the request will be used to find the provider configuration
         # and the provider_model_name will be passed to the provider's embeddings method.
+        
+        # Check if the model is allowed for this user
+        if allowed_models and requested_model not in allowed_models:
+            error_detail = {"error": {"message": f"Model '{requested_model}' is not available for your account", "code": "model_not_allowed"}}
+            logger.error(f"Model '{requested_model}' is not available for user {user_id}", extra={"detail": error_detail, "request_id": request_id, "user_id": user_id, "log_type": "error"})
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=error_detail,
+            )
         
         # Find the model configuration
         model_config = current_config.get("models", {}).get(requested_model)

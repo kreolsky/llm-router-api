@@ -78,7 +78,7 @@ class ChatService:
         # Unified processor instead of 4 separate components
         self.stream_processor = StreamProcessor()
     
-    async def chat_completions(self, request: Request, auth_data: Tuple[str, str, list]) -> Any:
+    async def chat_completions(self, request: Request, auth_data: Tuple[str, str, list, list]) -> Any:
         """
         Main method for processing chat completion requests.
         
@@ -113,7 +113,7 @@ class ChatService:
                 - 404: Model not found in configuration
                 - 500: Provider configuration error or internal server error
         """
-        project_name, api_key, allowed_models = auth_data
+        project_name, api_key, allowed_models, _ = auth_data
         request_id = request.state.request_id
         user_id = project_name
 
@@ -154,9 +154,9 @@ class ChatService:
             )
 
         if allowed_models and requested_model not in allowed_models:
-            error_detail = {"error": {"message": f"Model '{requested_model}' not allowed for this API key", "code": "model_not_allowed"}}
+            error_detail = {"error": {"message": f"Model '{requested_model}' is not available for your account", "code": "model_not_allowed"}}
             logger.error(
-                f"Model '{requested_model}' not allowed for this API key",
+                f"Model '{requested_model}' is not available for user {user_id}",
                 extra={
                     "request_id": request_id,
                     "user_id": user_id,

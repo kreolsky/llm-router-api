@@ -16,7 +16,8 @@ LLM Router is a production-ready API gateway that bridges your applications with
 *   **Unified API Endpoint**: Single OpenAI-compatible endpoint for all LLM providers
 *   **Modular Architecture**: Built with SOLID principles for maintainability and testability
 *   **Advanced Streaming**: Optimized UTF-8 processing with buffer management for multi-language support
-*   **Flexible Access Control**: Granular model-level permissions per API key
+*   **Two-Level Access Control**: Granular endpoint and model-level permissions per API key
+*   **Optional Model Selection**: Support for endpoints (like transcription) where model can be omitted
 *   **Provider Agnostic**: Easy integration with OpenAI-compatible APIs and Ollama
 *   **Production Ready**: Comprehensive error handling, logging, and monitoring
 *   **Developer Experience**: OpenAI-compatible API with extensive examples
@@ -114,9 +115,18 @@ user_keys:
   developer:
     api_key: your-api-key-here
     allowed_models: []  # Empty = access to all models
+    allowed_endpoints: []  # Empty = access to all endpoints
   restricted:
     api_key: restricted-key
     allowed_models: ["openai/gpt-4"]
+    allowed_endpoints:
+      - /v1/chat/completions
+      - /v1/audio/transcriptions
+  transcription_user:
+    api_key: trans-key-789
+    allowed_models: []  # Can use any model
+    allowed_endpoints:
+      - /v1/audio/transcriptions  # Transcription only
 ```
 
 ### 5. Run the Service
@@ -265,30 +275,54 @@ models:
     is_hidden: true
 ```
 
-### Access Control (`config/user_keys.yaml`)
-Define API keys and their model permissions:
+### Two-Level Access Control (`config/user_keys.yaml`)
+Define API keys with granular endpoint and model permissions:
 
 ```yaml
 user_keys:
-  # Full access to all models
+  # Full access to all models and endpoints
   admin:
     api_key: admin-key-123
     allowed_models: []
+    allowed_endpoints: []
   
-  # Restricted access to specific models
+  # Restricted access to specific models and endpoints
   developer:
     api_key: dev-key-456
     allowed_models:
       - openai/gpt-4
       - deepseek/chat
-      - ollama/llama3
+      - stt/dummy
+    allowed_endpoints:
+      - /v1/chat/completions
+      - /v1/audio/transcriptions
   
-  # Debug access (limited models)
-  debug:
-    api_key: debug-key-789
+  # Transcription-only user (can use any model)
+  transcription_user:
+    api_key: trans-key-789
+    allowed_models: []  # Can use any model
+    allowed_endpoints:
+      - /v1/audio/transcriptions  # Transcription only
+  
+  # Embeddings-only user
+  embedding_user:
+    api_key: embed-key-abc
     allowed_models:
-      - openai/gpt-3.5
+      - embeddings/dummy
+    allowed_endpoints:
+      - /v1/embeddings
 ```
+
+#### Transcription Without Model
+Users with transcription access can make requests without specifying a model:
+
+```bash
+curl -X POST "http://localhost:8777/v1/audio/transcriptions" \
+  -H "Authorization: Bearer trans-key-789" \
+  -F "file=@audio.ogg"
+```
+
+The system will automatically use the first available transcription model from the configuration (e.g., `stt/dummy`).
 
 ## 🔧 Development
 

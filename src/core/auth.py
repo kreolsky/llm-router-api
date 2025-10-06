@@ -1,13 +1,13 @@
 from fastapi import Security, HTTPException, status, Request
 from fastapi.security import APIKeyHeader
-from typing import Dict, Any
+from typing import Dict, Any, Tuple, List
 
 api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
 
 async def get_api_key(
     request: Request,
     api_key: str = Security(api_key_header)
-) -> str:
+) -> Tuple[str, str, List[str], List[str]]:
     config_manager = request.app.state.config_manager
     config = config_manager.get_config()
     if not api_key:
@@ -38,6 +38,38 @@ async def get_api_key(
             detail={"error": {"message": "Invalid API key", "code": "invalid_api_key"}},
         )
     
-    allowed_models = config["user_keys"][found_project].get("allowed_models")
+    allowed_models = config["user_keys"][found_project].get("allowed_models", [])
+    allowed_endpoints = config["user_keys"][found_project].get("allowed_endpoints", [])
+    
     request.state.project_name = found_project # Store project_name in request.state
-    return found_project, api_key, allowed_models
+    return found_project, api_key, allowed_models, allowed_endpoints
+
+
+def check_endpoint_access(endpoint_path: str):
+    """
+    Декоратор для проверки доступа пользователя к конкретному endpoint.
+    
+    Args:
+        endpoint_path: Путь к endpoint для проверки
+        
+    Returns:
+        Функцию-зависимость для FastAPI
+    """
+    from fastapi import Depends
+    
+    async def endpoint_checker(
+        request: Request,
+        auth_data: Tuple[str, str, List[str], List[str]] = Depends(get_api_key)
+    ):
+        user_id, _, _, allowed_endpoints = auth_data
+        
+        # Если список разрешенных endpoints пуст, доступ разрешен ко всем endpoints
+        if not allowed_endpoints or endpoint_path in allowed_endpoints:
+            return auth_data
+            
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": {"message": f"Access to endpoint '{endpoint_path}' is not allowed", "code": "endpoint_not_allowed"}},
+        )
+    
+    return endpoint_checker

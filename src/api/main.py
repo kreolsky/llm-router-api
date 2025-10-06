@@ -6,7 +6,7 @@ import httpx
 from typing import Dict, Any
 
 from ..core.config_manager import ConfigManager
-from ..core.auth import get_api_key
+from ..core.auth import get_api_key, check_endpoint_access
 from ..services.chat_service.chat_service import ChatService
 from ..services.model_service import ModelService
 from ..services.embedding_service import EmbeddingService
@@ -58,26 +58,26 @@ async def health_check():
 
 @app.get("/v1/models")
 async def list_models(
-    auth_data: tuple = Depends(get_api_key)
+    auth_data: tuple = Depends(check_endpoint_access("/v1/models"))
 ):
     return await app.state.model_service.list_models(auth_data)
 
 
 @app.get("/v1/models/{model_id:path}")
-async def retrieve_model(model_id: str, auth_data: tuple = Depends(get_api_key)):
+async def retrieve_model(model_id: str, auth_data: tuple = Depends(check_endpoint_access("/v1/models/{model_id:path}"))):
     return await app.state.model_service.retrieve_model(model_id, auth_data)
 
 @app.post("/v1/chat/completions")
 async def chat_completions(
     request: Request,
-    auth_data: tuple = Depends(get_api_key)
+    auth_data: tuple = Depends(check_endpoint_access("/v1/chat/completions"))
 ):
     return await app.state.chat_service.chat_completions(request, auth_data)
 
 @app.post("/v1/embeddings")
 async def create_embeddings(
     request: Request,
-    auth_data: tuple = Depends(get_api_key)
+    auth_data: tuple = Depends(check_endpoint_access("/v1/embeddings"))
 ):
     return await app.state.embedding_service.create_embeddings(request, auth_data)
 
@@ -86,12 +86,12 @@ async def create_transcription(
     request: Request, # Add Request to access headers
     audio_file: Optional[UploadFile] = File(None), # Make audio_file optional
     file: Optional[UploadFile] = File(None), # Add 'file' as an optional parameter
-    model: str = Form(...),
+    model: Optional[str] = Form(None), # Делаем модель необязательной
     response_format: str = Form("json"),
     temperature: float = Form(0.0),
     language: Optional[str] = Form(None),
     return_timestamps: Optional[bool] = Form(False), # Add return_timestamps
-    auth_data: tuple = Depends(get_api_key)
+    auth_data: tuple = Depends(check_endpoint_access("/v1/audio/transcriptions"))
 ):
     logger.info(f"Transcription request received from {request.client.host}")
     logger.info(f"Request Headers: {dict(request.headers)}")
