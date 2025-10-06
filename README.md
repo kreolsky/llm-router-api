@@ -319,7 +319,7 @@ Users with transcription access can make requests without specifying a model:
 ```bash
 curl -X POST "http://localhost:8777/v1/audio/transcriptions" \
   -H "Authorization: Bearer trans-key-789" \
-  -F "file=@audio.ogg"
+  -F "file=@transcription.ogg"
 ```
 
 The system will automatically use the first available transcription model from the configuration (e.g., `stt/dummy`).
@@ -434,50 +434,3 @@ docker compose up -d --scale api=3
 # Monitor logs
 docker compose logs -f api
 ```
-
-### Environment Variables for Production
-```ini
-# Performance
-UVICORN_WORKERS=4
-UVICORN_TIMEOUT=300
-
-# Security
-CORS_ORIGINS=https://yourdomain.com
-API_KEY_ENCRYPTION=true
-
-# Monitoring
-LOG_LEVEL=info
-METRICS_ENABLED=true
-```
-
-### Monitoring and Observability
-- Health check endpoints
-- Structured logging with JSON format
-- Performance metrics collection
-- Error tracking and alerting
-
-## 🤝 Contributing
-
-We welcome contributions! Please see our contributing guidelines:
-
-1. Fork the repository
-2. Create a feature branch
-3. Follow the existing code style and patterns
-4. Add comprehensive tests
-5. Submit a pull request with detailed description
-
-## 📄 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## 🆘 Support
-
-For support and questions:
-- Create an issue on GitHub
-- Check the documentation
-- Review the test examples
-- Join our community discussions
-
----
-
-**Built with ❤️ using modern Python practices and SOLID architectural principles**
