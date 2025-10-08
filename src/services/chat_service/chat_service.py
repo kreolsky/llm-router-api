@@ -257,16 +257,16 @@ class ChatService:
             # DEBUG логирование ответа от провайдера
             if logger.isEnabledFor(logging.DEBUG):
                 if isinstance(response_data, StreamingResponse):
-                    # Для стриминга логируем первый chunk для примера
-                    first_chunk = None
-                    async for chunk in response_data.body_iterator:
-                        first_chunk = chunk.decode('utf-8')
-                        break
-                        
+                    # Для стриминга не логируем первый chunk, чтобы не "съедать" его
+                    # Вместо этого логируем метаданные запроса
                     logger.debug(
-                        "DEBUG: Streaming Response First Chunk",
+                        "DEBUG: Streaming Response Started",
                         extra={
-                            "debug_json_data": {"chunk_preview": first_chunk},
+                            "debug_json_data": {
+                                "streaming": True,
+                                "model": requested_model,
+                                "request_id": request_id
+                            },
                             "debug_data_flow": "from_provider",
                             "debug_component": "chat_service",
                             "request_id": request_id
