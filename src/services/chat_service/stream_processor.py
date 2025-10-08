@@ -21,7 +21,7 @@ Key Features:
 import codecs
 import json
 import time
-from typing import Dict, Any, AsyncGenerator, Optional, List
+from typing import Dict, Any, AsyncGenerator, Optional, List, Tuple
 
 from src.logging.config import logger
 from src.core.exceptions import ProviderStreamError, ProviderNetworkError
@@ -112,6 +112,7 @@ class StreamProcessor:
         full_content = ""
         stream_has_error = False
         first_token_received = False
+        stream_ended = False
         
         try:
             event_count = 0
@@ -124,8 +125,15 @@ class StreamProcessor:
                         
                         # Обрабатываем события из буфера
                         events = self._extract_events()
-                        for event_data in events:
+                        for event_data, is_done in events:
                             event_count += 1
+                            
+                            # Если это событие завершения
+                            if is_done:
+                                stream_ended = True
+                                break
+                            
+                            # Обрабатываем обычные данные
                             chunk_bytes = await self._process_event_data(
                                 event_data, model_id, request_id, full_content
                             )
@@ -140,6 +148,10 @@ class StreamProcessor:
                                 yield chunk_bytes
                                 # Обновляем контент для следующего события
                                 full_content = self._extract_content(event_data, full_content)
+                        
+                        # Если поток завершен, выходим из цикла
+                        if stream_ended:
+                            break
                 
                 except Exception as e:
                     logger.error("Stream processing error", extra={
@@ -168,13 +180,16 @@ class StreamProcessor:
             # Обрабатываем оставшиеся данные в буфере
             if self.buffer.strip():
                 events = self._extract_events(final=True)
-                for event_data in events:
+                for event_data, is_done in events:
+                    if is_done:
+                        stream_ended = True
+                        break
+                    
                     chunk_bytes = await self._process_event_data(
                         event_data, model_id, request_id, full_content
                     )
                     if chunk_bytes:
                         yield chunk_bytes
-                        # Обновляем контент для оставшихся событий
                         full_content = self._extract_content(event_data, full_content)
             
             # Отмечаем завершение генерации и рассчитываем токены
@@ -199,15 +214,12 @@ class StreamProcessor:
         # Очищаем буфер
         self._clear_buffer()
     
-    def _extract_events(self, final: bool = False) -> List[Dict[str, Any]]:
+    def _extract_events(self, final: bool = False) -> List[Tuple[Dict[str, Any], bool]]:
         """
-        Извлекает события из буфера
+        Извлекает события из буфера и возвращает список кортежей (данные, флаг_завершения)
         
-        Args:
-            final: Флаг окончания стрима
-            
         Returns:
-            Список распарсенных событий
+            List[Tuple[Dict[str, Any], bool]]: Список событий с флагами завершения
         """
         events = []
         
@@ -248,8 +260,13 @@ class StreamProcessor:
             # По умолчанию SSE (более распространенный формат)
             return 'sse'
     
-    def _extract_sse_events(self, final: bool) -> List[Dict[str, Any]]:
-        """Извлекает SSE события"""
+    def _extract_sse_events(self, final: bool) -> List[Tuple[Dict[str, Any], bool]]:
+        """
+        Извлекает SSE события и возвращает список кортежей (данные, флаг_завершения)
+        
+        Returns:
+            List[Tuple[Dict[str, Any], bool]]: Список событий с флагами завершения
+        """
         events = []
         
         # Поддерживаем оба формата разделителей: \n\n и \r\n\r\n
@@ -271,9 +288,9 @@ class StreamProcessor:
             event_raw = self.buffer[:pos]
             self.buffer = self.buffer[pos + len(separator):]
             
-            event_data = self._parse_sse_event(event_raw)
-            if event_data:
-                events.append(event_data)
+            event_data, is_done = self._parse_sse_event(event_raw)
+            if event_data is not None or is_done:
+                events.append((event_data, is_done))
             
             # Обновляем позиции для оставшегося буфера
             separator_positions = []
@@ -285,17 +302,24 @@ class StreamProcessor:
         
         # Если final=True, обрабатываем оставшиеся данные
         if final and self.buffer.strip():
-            event_data = self._parse_sse_event(self.buffer)
-            if event_data:
-                events.append(event_data)
+            event_data, is_done = self._parse_sse_event(self.buffer)
+            if event_data is not None or is_done:
+                events.append((event_data, is_done))
             self.buffer = ""
         
         return events
     
-    def _parse_sse_event(self, event_raw: str) -> Optional[Dict[str, Any]]:
-        """Парсит SSE событие"""
+    def _parse_sse_event(self, event_raw: str) -> Tuple[Optional[Dict[str, Any]], bool]:
+        """
+        Парсит SSE событие и возвращает кортеж (данные, флаг_завершения)
+        
+        Returns:
+            Tuple[Optional[Dict[str, Any]], bool]:
+                - данные события или None
+                - True если это событие завершения потока
+        """
         if not event_raw.strip():
-            return None
+            return None, False
         
         try:
             for line in event_raw.split('\n'):
@@ -305,26 +329,39 @@ class StreamProcessor:
                 if line.startswith(':'):
                     continue
                 
+                # Проверяем на data: и ищем [DONE] в той же строке
+                if line.startswith('data: ') and '[DONE]' in line:
+                    return None, True
+                
+                # Обычный data: с JSON
                 if line.startswith('data: '):
-                    data_part = line[6:].strip()
-                    
-                    # [DONE] - валидное завершающее событие
-                    if data_part == '[DONE]':
-                        return {'done': True}
-                    
-                    # Парсим JSON
-                    try:
-                        return json.loads(data_part)
-                    except json.JSONDecodeError:
-                        return None
+                    # Безопасное извлечение данных после 'data: '
+                    if ':' in line:
+                        _, data_part = line.split(':', 1)
+                        data_part = data_part.strip()
+                        
+                        # Дополнительная проверка на случай, если [DONE] не в начале
+                        if data_part == '[DONE]':
+                            return None, True
+                        
+                        # Парсим JSON
+                        try:
+                            return json.loads(data_part), False
+                        except json.JSONDecodeError:
+                            return None, False
             
-            return None
+            return None, False
         except Exception as e:
             logger.error(f"Error parsing SSE event: {e}", exc_info=True)
-            return None
+            return None, False
     
-    def _extract_ndjson_events(self, final: bool) -> List[Dict[str, Any]]:
-        """Извлекает NDJSON события"""
+    def _extract_ndjson_events(self, final: bool) -> List[Tuple[Dict[str, Any], bool]]:
+        """
+        Извлекает NDJSON события и возвращает список кортежей (данные, флаг_завершения)
+        
+        Returns:
+            List[Tuple[Dict[str, Any], bool]]: Список событий с флагами завершения
+        """
         events = []
         
         lines = self.buffer.split('\n')
@@ -338,7 +375,7 @@ class StreamProcessor:
             if line.strip():
                 try:
                     event_data = json.loads(line)
-                    events.append(event_data)
+                    events.append((event_data, False))  # NDJSON не имеет специального маркера завершения
                 except json.JSONDecodeError:
                     continue
         
@@ -367,10 +404,6 @@ class StreamProcessor:
         # Обработка ошибок
         if 'error' in event_data:
             return self._format_error(Exception(event_data['error']))
-        
-        # Завершающее событие [DONE]
-        if event_data.get('done'):
-            return None
         
         # Проверяем на завершающее событие с finish_reason
         if 'choices' in event_data:

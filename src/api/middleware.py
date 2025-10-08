@@ -1,5 +1,6 @@
 import time
 import os
+import json
 import logging
 from fastapi import Request, HTTPException, status
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -27,6 +28,27 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
             "Incoming Request",
             extra=extra_data
         )
+        
+        # DEBUG logging of incoming request JSON
+        if logger.isEnabledFor(logging.DEBUG) and request.method in ["POST", "PUT", "PATCH"]:
+            request_body = None
+            try:
+                # Clone the request to read body without consuming it
+                request_body = await request.json()
+            except Exception:
+                # If not JSON or can't read, skip debug logging
+                pass
+                
+            if request_body:
+                logger.debug(
+                    "DEBUG: Incoming Request JSON",
+                    extra={
+                        "debug_json_data": request_body,
+                        "debug_data_flow": "incoming",
+                        "debug_component": "middleware",
+                        "request_id": request_id
+                    }
+                )
 
         try:
             response = await call_next(request)
@@ -82,4 +104,26 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
             "Outgoing Response",
             extra=response_extra_data
         )
+        
+        # DEBUG logging of outgoing response JSON
+        # Note: This is limited as response body might already be consumed
+        # For full response logging, it's better to log at the service level
+        if logger.isEnabledFor(logging.DEBUG) and hasattr(response, 'body') and response.body:
+            try:
+                if isinstance(response.body, bytes):
+                    response_body_str = response.body.decode('utf-8')
+                    response_body = json.loads(response_body_str)
+                    logger.debug(
+                        "DEBUG: Outgoing Response JSON",
+                        extra={
+                            "debug_json_data": response_body,
+                            "debug_data_flow": "outgoing",
+                            "debug_component": "middleware",
+                            "request_id": request_id
+                        }
+                    )
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                # If not JSON, skip debug logging
+                pass
+        
         return response

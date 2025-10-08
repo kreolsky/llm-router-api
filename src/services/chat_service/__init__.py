@@ -28,9 +28,11 @@ Usage:
 from .statistics_collector import StatisticsCollector
 from .stream_processor import StreamProcessor
 from .chat_service import ChatService
+from .sanitizer import MessageSanitizer
 
 __all__ = [
     "StatisticsCollector",
     "StreamProcessor", 
-    "ChatService"
+    "ChatService",
+    "MessageSanitizer"
 ]

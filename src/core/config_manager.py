@@ -12,6 +12,11 @@ class ConfigManager:
         self.config = self._load_config()
         self.last_mtimes = {} # Initialize last_mtimes as instance variable
         self._initialize_mtimes()
+        
+        # Загружаем переменные окружения
+        self.debug = os.getenv("DEBUG", "false").lower() == "true"
+        self.log_level = os.getenv("LOG_LEVEL", "INFO")
+        self.sanitize_messages = os.getenv("SANITIZE_MESSAGES", "false").lower() == "true"
 
     def _load_config(self) -> Dict[str, Any]:
         config = {}
@@ -32,6 +37,16 @@ class ConfigManager:
 
     def get_config(self) -> Dict[str, Any]:
         return self.config
+    
+    @property
+    def is_debug_enabled(self) -> bool:
+        """Возвращает True если включен режим отладки"""
+        return self.debug
+    
+    @property
+    def should_sanitize_messages(self) -> bool:
+        """Возвращает True если нужно санитизировать сообщения"""
+        return self.sanitize_messages
 
     def reload_config(self):
         # print("Reloading configuration...") # Removed print for cleaner logs

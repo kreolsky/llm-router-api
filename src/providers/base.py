@@ -3,6 +3,7 @@ import os
 import json # Import json for parsing error responses
 import asyncio
 import time
+import logging
 from typing import Dict, Any, AsyncGenerator, Callable
 from functools import wraps
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -77,6 +78,21 @@ class BaseProvider:
     @retry_on_rate_limit(max_retries=3, base_delay=1.0, max_delay=30.0)
     async def _stream_request(self, client: httpx.AsyncClient, url_path: str, request_body: Dict[str, Any]) -> StreamingResponse:
         """Stream request with optimized timeouts for streaming"""
+        # DEBUG логирование запроса к провайдеру
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "DEBUG: Request to Provider",
+                extra={
+                    "debug_json_data": {
+                        "url": f"{self.base_url}{url_path}",
+                        "headers": self.headers,
+                        "request_body": request_body
+                    },
+                    "debug_data_flow": "to_provider",
+                    "debug_component": "base_provider"
+                }
+            )
+        
         # Optimized timeout for streaming:
         # - connect: 10s to establish connection
         # - read: 30s between chunks (if no chunk in 30s, timeout)
@@ -94,6 +110,21 @@ class BaseProvider:
                                      headers=self.headers,
                                      json=request_body,
                                      timeout=stream_timeout) as response:
+              
+              # DEBUG логирование заголовков ответа
+              if logger.isEnabledFor(logging.DEBUG):
+                  logger.debug(
+                      "DEBUG: Provider Response Headers",
+                      extra={
+                          "debug_json_data": {
+                              "status_code": response.status_code,
+                              "headers": dict(response.headers)
+                          },
+                          "debug_data_flow": "from_provider",
+                          "debug_component": "base_provider"
+                      }
+                  )
+              
               try:
                   response.raise_for_status()
               except httpx.HTTPStatusError as e:
