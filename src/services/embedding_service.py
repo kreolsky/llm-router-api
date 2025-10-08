@@ -1,4 +1,5 @@
 import httpx
+import logging
 from typing import Dict, Any, Tuple
 
 from fastapi import HTTPException, status, Request
@@ -22,6 +23,18 @@ class EmbeddingService:
         
         request_body = await request.json()
         requested_model = request_body.get("model")
+
+        # DEBUG логирование полного запроса
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "DEBUG: Embedding Request JSON",
+                extra={
+                    "debug_json_data": request_body,
+                    "debug_data_flow": "incoming",
+                    "debug_component": "embedding_service",
+                    "request_id": request_id
+                }
+            )
 
         logger.info(
             "Embedding Creation Request",
@@ -94,6 +107,18 @@ class EmbeddingService:
         
         try:
             response_data = await provider_instance.embeddings(request_body, provider_model_name, model_config)
+            
+            # DEBUG логирование ответа от провайдера
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "DEBUG: Embedding Response JSON",
+                    extra={
+                        "debug_json_data": response_data,
+                        "debug_data_flow": "from_provider",
+                        "debug_component": "embedding_service",
+                        "request_id": request_id
+                    }
+                )
             
             # Log the response
             usage = response_data.get("usage", {})

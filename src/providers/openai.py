@@ -1,10 +1,12 @@
 import httpx
+import logging
 from typing import Dict, Any
 from fastapi import HTTPException, status
 import io
 
 from .base import BaseProvider
 from ..utils.deep_merge import deep_merge
+from ..logging.config import logger
 
 class OpenAICompatibleProvider(BaseProvider):
     def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient):
@@ -22,6 +24,24 @@ class OpenAICompatibleProvider(BaseProvider):
 
         # Ensure stream is handled correctly
         stream = request_body.get("stream", False)
+
+        # DEBUG логирование запроса к провайдеру
+        if logger.isEnabledFor(logging.DEBUG):
+            debug_request = {
+                "url": f"{self.base_url}/chat/completions",
+                "headers": self.headers,
+                "request_body": request_body,
+                "provider_model_name": provider_model_name,
+                "model_config": model_config
+            }
+            logger.debug(
+                "DEBUG: OpenAI Chat Request",
+                extra={
+                    "debug_json_data": debug_request,
+                    "debug_data_flow": "to_provider",
+                    "debug_component": "openai_provider"
+                }
+            )
 
         try:
             if stream:
@@ -43,7 +63,20 @@ class OpenAICompatibleProvider(BaseProvider):
                                              json=request_body,
                                              timeout=non_stream_timeout)
                 response.raise_for_status()
-                return response.json()
+                response_json = response.json()
+                
+                # DEBUG логирование ответа от провайдера
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "DEBUG: OpenAI Chat Response",
+                        extra={
+                            "debug_json_data": response_json,
+                            "debug_data_flow": "from_provider",
+                            "debug_component": "openai_provider"
+                        }
+                    )
+                
+                return response_json
         except httpx.HTTPStatusError as e:
             raise HTTPException(
                 status_code=e.response.status_code,
@@ -108,7 +141,20 @@ class OpenAICompatibleProvider(BaseProvider):
                 timeout=3600.0 # Increased timeout for potentially large audio files
             )
             response.raise_for_status()
-            return response.json()
+            response_json = response.json()
+            
+            # DEBUG логирование ответа от провайдера
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "DEBUG: OpenAI Transcriptions Response",
+                    extra={
+                        "debug_json_data": response_json,
+                        "debug_data_flow": "from_provider",
+                        "debug_component": "openai_provider"
+                    }
+                )
+            
+            return response_json
         except httpx.HTTPStatusError as e:
             raise HTTPException(
                 status_code=e.response.status_code,
@@ -142,7 +188,20 @@ class OpenAICompatibleProvider(BaseProvider):
                                              json=request_body,
                                              timeout=embeddings_timeout)
             response.raise_for_status()
-            return response.json()
+            response_json = response.json()
+            
+            # DEBUG логирование ответа от провайдера
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "DEBUG: OpenAI Embeddings Response",
+                    extra={
+                        "debug_json_data": response_json,
+                        "debug_data_flow": "from_provider",
+                        "debug_component": "openai_provider"
+                    }
+                )
+            
+            return response_json
         except httpx.HTTPStatusError as e:
             raise HTTPException(
                 status_code=e.response.status_code,

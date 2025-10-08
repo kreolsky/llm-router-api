@@ -18,6 +18,7 @@ unified handling of both streaming and non-streaming chat completion requests.
 """
 
 import httpx
+import logging
 from typing import Dict, Any, Tuple
 from fastapi import HTTPException, status, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -119,6 +120,18 @@ class ChatService:
 
         request_body = await request.json()
         requested_model = request_body.get("model")
+
+        # DEBUG логирование полного запроса
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "DEBUG: Chat Completion Request JSON",
+                extra={
+                    "debug_json_data": request_body,
+                    "debug_data_flow": "incoming",
+                    "debug_component": "chat_service",
+                    "request_id": request_id
+                }
+            )
 
         # Логирование запроса
         logger.info(
@@ -240,6 +253,36 @@ class ChatService:
             statistics.start_timing()
             
             response_data = await provider_instance.chat_completions(request_body, provider_model_name, model_config)
+            
+            # DEBUG логирование ответа от провайдера
+            if logger.isEnabledFor(logging.DEBUG):
+                if isinstance(response_data, StreamingResponse):
+                    # Для стриминга логируем первый chunk для примера
+                    first_chunk = None
+                    async for chunk in response_data.body_iterator:
+                        first_chunk = chunk.decode('utf-8')
+                        break
+                        
+                    logger.debug(
+                        "DEBUG: Streaming Response First Chunk",
+                        extra={
+                            "debug_json_data": {"chunk_preview": first_chunk},
+                            "debug_data_flow": "from_provider",
+                            "debug_component": "chat_service",
+                            "request_id": request_id
+                        }
+                    )
+                else:
+                    # Для нестриминговых ответов логируем полный JSON
+                    logger.debug(
+                        "DEBUG: Chat Completion Response JSON",
+                        extra={
+                            "debug_json_data": response_data,
+                            "debug_data_flow": "from_provider",
+                            "debug_component": "chat_service",
+                            "request_id": request_id
+                        }
+                    )
             
             if isinstance(response_data, StreamingResponse):
                 # Отмечаем завершение обработки промпта для стриминга

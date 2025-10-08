@@ -68,6 +68,18 @@ class TranscriptionService:
                 language=language
             )
 
+            # DEBUG логирование ответа
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "DEBUG: Transcription Response JSON",
+                    extra={
+                        "debug_json_data": response,
+                        "debug_data_flow": "from_provider",
+                        "debug_component": "transcription_service",
+                        "request_id": "unknown"
+                    }
+                )
+
             return response
 
         except HTTPException as e:
@@ -82,6 +94,28 @@ class TranscriptionService:
 
     async def create_transcription(self, audio_file: UploadFile, model_id: Optional[str] = None, auth_data: Tuple[str, str, Any, Any] = None, response_format: str = "json", temperature: float = 0.0, language: str = None, return_timestamps: bool = False) -> Any:
         audio_data = await audio_file.read()
+        
+        # DEBUG логирование параметров запроса
+        if logger.isEnabledFor(logging.DEBUG):
+            debug_data = {
+                "model_id": model_id,
+                "response_format": response_format,
+                "temperature": temperature,
+                "language": language,
+                "return_timestamps": return_timestamps,
+                "filename": audio_file.filename,
+                "content_type": audio_file.content_type,
+                "file_size": len(audio_data) if audio_data else 0
+            }
+            logger.debug(
+                "DEBUG: Transcription Request Parameters",
+                extra={
+                    "debug_json_data": debug_data,
+                    "debug_data_flow": "incoming",
+                    "debug_component": "transcription_service",
+                    "request_id": "unknown"  # request_id may not be available here
+                }
+            )
         
         # Если модель не указана, проксируем запрос как есть
         if not model_id:
@@ -171,6 +205,18 @@ class TranscriptionService:
                 return_timestamps=return_timestamps,
                 language=language
             )
+
+            # DEBUG логирование ответа
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "DEBUG: Transcription Proxy Response JSON",
+                    extra={
+                        "debug_json_data": response,
+                        "debug_data_flow": "from_provider",
+                        "debug_component": "transcription_service",
+                        "request_id": "unknown"
+                    }
+                )
 
             return response
 
