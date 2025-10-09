@@ -8,7 +8,7 @@ from .base import BaseProvider
 from src.utils.deep_merge import deep_merge
 from src.logging.config import logger
 from src.core.config_manager import ConfigManager
-from src.services.chat_service.sanitizer import MessageSanitizer
+from src.core.sanitizer import MessageSanitizer
 
 class OpenAICompatibleProvider(BaseProvider):
     def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient):
