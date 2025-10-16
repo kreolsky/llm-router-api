@@ -7,8 +7,6 @@ import io
 from .base import BaseProvider
 from src.utils.deep_merge import deep_merge
 from src.logging.config import logger
-from src.core.config_manager import ConfigManager
-from src.core.sanitizer import MessageSanitizer
 
 class OpenAICompatibleProvider(BaseProvider):
     def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient):
@@ -26,17 +24,6 @@ class OpenAICompatibleProvider(BaseProvider):
 
         # Ensure stream is handled correctly
         stream = request_body.get("stream", False)
-        
-        # САНИТИЗАЦИЯ СООБЩЕНИЙ (если включена)
-        if "messages" in request_body:
-            # Получаем флаг санитизации из глобальной конфигурации
-            config_manager = ConfigManager()
-            sanitize_enabled = config_manager.should_sanitize_messages
-            
-            request_body["messages"] = MessageSanitizer.sanitize_messages(
-                request_body["messages"],
-                enabled=sanitize_enabled
-            )
 
         # DEBUG логирование запроса к провайдеру
         if logger.isEnabledFor(logging.DEBUG):

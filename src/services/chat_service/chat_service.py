@@ -13,8 +13,9 @@ NNP LLM Router system. It handles the complete lifecycle of chat requests includ
 - Error handling and comprehensive logging
 - Performance statistics collection
 
-This service integrates with the StatisticsCollector and StreamProcessor to provide
-unified handling of both streaming and non-streaming chat completion requests.
+This service integrates with the StreamProcessor to provide
+unified handling of both streaming and non-streaming chat completion requests
+with complete transparent proxying.
 """
 
 import httpx
@@ -26,9 +27,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from src.core.config_manager import ConfigManager
 from src.providers import get_provider_instance
 from src.services.model_service import ModelService
-from src.core.exceptions import ProviderStreamError, ProviderNetworkError
 from src.logging.config import logger
-from .statistics_collector import StatisticsCollector
 from .stream_processor import StreamProcessor
 
 
@@ -248,10 +247,6 @@ class ChatService:
             )
         
         try:
-            # Начинаем отсчет времени для всего запроса
-            statistics = StatisticsCollector()
-            statistics.start_timing()
-            
             response_data = await provider_instance.chat_completions(request_body, provider_model_name, model_config)
             
             # DEBUG логирование ответа от провайдера
@@ -285,12 +280,7 @@ class ChatService:
                     )
             
             if isinstance(response_data, StreamingResponse):
-                # Отмечаем завершение обработки промпта для стриминга
-                # Оцениваем токены промпта на основе входных сообщений
-                estimated_prompt_tokens = self._estimate_prompt_tokens(request_body)
-                statistics.mark_prompt_complete(estimated_prompt_tokens)
-                
-                # Используем новый упрощенный процессор
+                # For streaming, use transparent stream processor
                 return StreamingResponse(
                     self.stream_processor.process_stream(
                         response_data.body_iterator, requested_model, request_id, user_id
@@ -298,42 +288,8 @@ class ChatService:
                     media_type=response_data.media_type
                 )
             else:
-                # Отмечаем завершение обработки промпта для нестримингового ответа
-                usage = response_data.get("usage", {})
-                prompt_tokens = usage.get("prompt_tokens", 0)
-                completion_tokens = usage.get("completion_tokens", 0)
-                statistics.mark_prompt_complete(prompt_tokens)
-                statistics.mark_completion_complete(completion_tokens)
-                
-                # Получаем полную статистику
-                full_statistics = statistics.get_statistics()
-                
-                # Обновляем ответ с расширенной статистикой
-                enhanced_response = response_data.copy()
-                if "usage" not in enhanced_response:
-                    enhanced_response["usage"] = {}
-                
-                # Добавляем timing метрики к существующему usage
-                enhanced_response["usage"].update(full_statistics)
-                
-                logger.info(
-                    "Chat Completion Response",
-                    extra={
-                        "log_type": "response",
-                        "request_id": request_id,
-                        "user_id": user_id,
-                        "model_id": requested_model,
-                        "http_status_code": status.HTTP_200_OK,
-                        "prompt_tokens": prompt_tokens,
-                        "completion_tokens": completion_tokens,
-                        "statistics": full_statistics,
-                        "response_body_summary": {
-                            "finish_reason": response_data.get("choices", [{}])[0].get("finish_reason"),
-                            "content_preview": response_data.get("choices", [{}])[0].get("message", {}).get("content", "")
-                        }
-                    }
-                )
-                return JSONResponse(content=enhanced_response)
+                # For non-streaming, return response exactly as received from provider
+                return JSONResponse(content=response_data)
             
         except HTTPException as e:
             logger.error(
@@ -363,35 +319,3 @@ class ChatService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": {"message": f"Internal server error: {e}", "code": "internal_server_error"}},
             )
-    
-    def _estimate_prompt_tokens(self, request_body: Dict[str, Any]) -> int:
-        """
-        Приблизительная оценка количества токенов в промпте
-        На основе содержимого сообщений
-        
-        Args:
-            request_body: Тело запроса с сообщениями
-            
-        Returns:
-            int: Приблизительное количество токенов в промпте
-        """
-        messages = request_body.get("messages", [])
-        if not messages:
-            return 0
-        
-        total_text = ""
-        for message in messages:
-            content = message.get("content", "")
-            if isinstance(content, str):
-                total_text += content + " "
-            elif isinstance(content, list):
-                # Обработка мультимодального контента
-                for item in content:
-                    if isinstance(item, dict) and item.get("type") == "text":
-                        total_text += item.get("text", "") + " "
-        
-        # Используем ту же логику оценки, что и в StreamProcessor
-        words = len(total_text.split())
-        chars = len(total_text)
-        estimated_tokens = max(words, chars // 4)
-        return estimated_tokens
