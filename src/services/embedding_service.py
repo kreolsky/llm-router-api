@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from ..core.config_manager import ConfigManager
 from ..providers import get_provider_instance
 from ..logging.config import logger
+from ..core.error_handling import ErrorHandler, ErrorContext
 
 class EmbeddingService:
     def __init__(self, config_manager: ConfigManager, httpx_client: httpx.AsyncClient):
@@ -23,6 +24,13 @@ class EmbeddingService:
         
         request_body = await request.json()
         requested_model = request_body.get("model")
+        
+        # Create error context for validation
+        context = ErrorContext(
+            request_id=request_id,
+            user_id=user_id,
+            model_id=requested_model
+        )
 
         # DEBUG логирование полного запроса
         if logger.isEnabledFor(logging.DEBUG):
@@ -53,12 +61,7 @@ class EmbeddingService:
         )
 
         if not requested_model:
-            error_detail = {"error": {"message": "Model not specified in request", "code": "model_not_specified"}}
-            logger.error("Model not specified in request", extra={"detail": error_detail, "request_id": request_id, "user_id": user_id, "log_type": "error"})
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error_detail,
-            )
+            raise ErrorHandler.handle_model_not_specified(context)
 
         # For embeddings, we assume a single provider will handle all requests
         # The model specified in the request will be used to find the provider configuration
@@ -66,44 +69,24 @@ class EmbeddingService:
         
         # Check if the model is allowed for this user
         if allowed_models and requested_model not in allowed_models:
-            error_detail = {"error": {"message": f"Model '{requested_model}' is not available for your account", "code": "model_not_allowed"}}
-            logger.error(f"Model '{requested_model}' is not available for user {user_id}", extra={"detail": error_detail, "request_id": request_id, "user_id": user_id, "log_type": "error"})
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=error_detail,
-            )
+            raise ErrorHandler.handle_model_not_allowed(requested_model, context)
         
         # Find the model configuration
         model_config = current_config.get("models", {}).get(requested_model)
         if not model_config:
-            error_detail = {"error": {"message": f"Model '{requested_model}' not found in configuration", "code": "model_not_found"}}
-            logger.error(f"Model '{requested_model}' not found in configuration", extra={"detail": error_detail, "request_id": request_id, "user_id": user_id, "log_type": "error"})
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=error_detail,
-            )
+            raise ErrorHandler.handle_model_not_found(requested_model, context)
 
         provider_name = model_config.get("provider")
         provider_model_name = model_config.get("provider_model_name", requested_model)
 
         provider_config = current_config.get("providers", {}).get(provider_name)
         if not provider_config:
-            error_detail = {"error": {"message": f"Provider '{provider_name}' for model '{requested_model}' not found in configuration", "code": "provider_not_found"}}
-            logger.error(f"Provider '{provider_name}' for model '{requested_model}' not found", extra={"detail": error_detail, "request_id": request_id, "user_id": user_id, "log_type": "error"})
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=error_detail,
-            )
+            raise ErrorHandler.handle_provider_not_found(provider_name, requested_model, context)
 
         try:
             provider_instance = get_provider_instance(provider_config.get("type"), provider_config, self.httpx_client)
         except ValueError as e:
-            error_detail = {"error": {"message": f"Provider configuration error: {e}", "code": "provider_config_error"}}
-            logger.error(f"Provider configuration error: {e}", extra={"detail": error_detail, "request_id": request_id, "user_id": user_id, "log_type": "error"})
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=error_detail,
-            )
+            raise ErrorHandler.handle_provider_config_error(str(e), context, e)
         
         try:
             response_data = await provider_instance.embeddings(request_body, provider_model_name, model_config)
@@ -143,12 +126,7 @@ class EmbeddingService:
             return JSONResponse(content=response_data)
             
         except HTTPException as e:
-            logger.error(f"HTTPException from provider: {e.detail.get('error', {}).get('message', str(e))}", extra={"status_code": e.status_code, "detail": e.detail, "request_id": request_id, "user_id": user_id, "model_id": requested_model, "log_type": "error"})
+            # Re-raise HTTPExceptions from our error handler (already logged)
             raise e
         except Exception as e:
-            error_detail = {"error": {"message": f"An unexpected error occurred: {e}", "code": "unexpected_error"}}
-            logger.error(f"An unexpected error occurred: {e}", extra={"detail": error_detail, "request_id": request_id, "user_id": user_id, "model_id": requested_model, "log_type": "error"}, exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=error_detail,
-            )
+            raise ErrorHandler.handle_internal_server_error(str(e), context, e)

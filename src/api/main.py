@@ -7,6 +7,7 @@ from typing import Dict, Any
 
 from ..core.config_manager import ConfigManager
 from ..core.auth import get_api_key, check_endpoint_access
+from ..core.error_handling import ErrorHandler, ErrorContext
 from ..services.chat_service.chat_service import ChatService
 from ..services.model_service import ModelService
 from ..services.embedding_service import EmbeddingService
@@ -102,9 +103,12 @@ async def create_transcription(
     elif file:
         uploaded_file = file
     else:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": {"message": "No audio file provided. Please upload 'audio_file' or 'file'.", "code": "no_audio_file"}}
+        context = ErrorContext()
+        from ..core.error_handling import ErrorType
+        raise ErrorHandler.create_http_exception(
+            error_type=ErrorType.MISSING_REQUIRED_FIELD,
+            context=context,
+            field_name="audio_file or file"
         )
 
     logger.info(f"Audio File: filename={uploaded_file.filename}, content_type={uploaded_file.content_type}, size={uploaded_file.size if hasattr(uploaded_file, 'size') else 'unknown'}")

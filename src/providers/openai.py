@@ -7,6 +7,7 @@ import io
 from .base import BaseProvider
 from src.utils.deep_merge import deep_merge
 from src.logging.config import logger
+from src.core.error_handling import ErrorHandler, ErrorContext
 
 class OpenAICompatibleProvider(BaseProvider):
     def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient):
@@ -78,15 +79,12 @@ class OpenAICompatibleProvider(BaseProvider):
                 
                 return response_json
         except httpx.HTTPStatusError as e:
-            raise HTTPException(
-                status_code=e.response.status_code,
-                detail={"error": {"message": f"Provider error: {e.response.text}", "code": f"provider_http_error_{e.response.status_code}"}},
-            )
+            # Create error context - we don't have request info here, so use minimal context
+            context = ErrorContext(provider_name="openai")
+            raise ErrorHandler.handle_provider_http_error(e, context, "openai")
         except httpx.RequestError as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": {"message": f"Network error communicating with provider: {e}", "code": "provider_network_error"}},
-            )
+            context = ErrorContext(provider_name="openai")
+            raise ErrorHandler.handle_provider_network_error(e, context, "openai")
 
     def _prepare_transcription_headers(self, api_key: str) -> Dict[str, str]:
         return {"Authorization": f"Bearer {api_key}"}
@@ -156,15 +154,11 @@ class OpenAICompatibleProvider(BaseProvider):
             
             return response_json
         except httpx.HTTPStatusError as e:
-            raise HTTPException(
-                status_code=e.response.status_code,
-                detail={"error": {"message": f"Transcription service error: {e.response.text}", "code": "transcription_service_error"}}
-            ) from e
+            context = ErrorContext(provider_name="openai")
+            raise ErrorHandler.handle_provider_http_error(e, context, "openai")
         except httpx.RequestError as e:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={"error": {"message": f"Could not connect to transcription service: {e}", "code": "service_unavailable"}}
-            ) from e
+            context = ErrorContext(provider_name="openai")
+            raise ErrorHandler.handle_service_unavailable(str(e), context, e)
 
     async def embeddings(self, request_body: Dict[str, Any], provider_model_name: str, model_config: Dict[str, Any]) -> Any:
         # Transform request: Replace the model name with the provider's specific model name
@@ -203,12 +197,8 @@ class OpenAICompatibleProvider(BaseProvider):
             
             return response_json
         except httpx.HTTPStatusError as e:
-            raise HTTPException(
-                status_code=e.response.status_code,
-                detail={"error": {"message": f"Provider error: {e.response.text}", "code": f"provider_http_error_{e.response.status_code}"}},
-            )
+            context = ErrorContext(provider_name="openai")
+            raise ErrorHandler.handle_provider_http_error(e, context, "openai")
         except httpx.RequestError as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": {"message": f"Network error communicating with provider: {e}", "code": "provider_network_error"}},
-            )
+            context = ErrorContext(provider_name="openai")
+            raise ErrorHandler.handle_provider_network_error(e, context, "openai")

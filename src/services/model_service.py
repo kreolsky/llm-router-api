@@ -7,6 +7,7 @@ from fastapi import HTTPException, status
 
 from ..core.config_manager import ConfigManager
 from ..logging.config import logger
+from ..core.error_handling import ErrorHandler, ErrorContext
 
 class ModelService:
     def __init__(self, config_manager: ConfigManager, httpx_client: httpx.AsyncClient):
@@ -125,30 +126,24 @@ class ModelService:
 
         # Check if the model is allowed for this user
         if allowed_models and model_id not in allowed_models:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={"error": {"message": f"Model '{model_id}' is not available for your account", "code": "model_not_allowed"}},
-            )
+            context = ErrorContext(model_id=model_id)
+            raise ErrorHandler.handle_model_not_allowed(model_id, context)
 
         current_config = self.config_manager.get_config()
         models_config = current_config.get("models", {})
 
         model_data = models_config.get(model_id)
         if not model_data:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": {"message": f"Model '{model_id}' not found", "code": "model_not_found"}},
-            )
+            context = ErrorContext(model_id=model_id)
+            raise ErrorHandler.handle_model_not_found(model_id, context)
 
         provider_name = model_data.get("provider")
         provider_model_name = model_data.get("provider_model_name")
 
         provider_config = current_config.get("providers", {}).get(provider_name)
         if not provider_config:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": {"message": f"Provider '{provider_name}' not found for model '{model_id}'", "code": "provider_not_found"}},
-            )
+            context = ErrorContext(model_id=model_id, provider_name=provider_name)
+            raise ErrorHandler.handle_provider_not_found(provider_name, model_id, context)
 
         # Dynamically fetch additional model details from the provider
         additional_model_details = await self._get_model_details_from_provider(model_id, current_config, self.httpx_client)

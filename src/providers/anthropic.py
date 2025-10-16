@@ -5,7 +5,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi import HTTPException, status
 
 from .base import BaseProvider
-from ..utils.deep_merge import deep_merge
+from src.utils.deep_merge import deep_merge
+from src.core.error_handling import ErrorHandler, ErrorContext
 
 class AnthropicProvider(BaseProvider):
     def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient):
@@ -49,12 +50,8 @@ class AnthropicProvider(BaseProvider):
                 response.raise_for_status()
                 return JSONResponse(content=response.json())
         except httpx.HTTPStatusError as e:
-            raise HTTPException(
-                status_code=e.response.status_code,
-                detail={"error": {"message": f"Provider error: {e.response.text}", "code": f"provider_http_error_{e.response.status_code}"}},
-            )
+            context = ErrorContext(provider_name="anthropic")
+            raise ErrorHandler.handle_provider_http_error(e, context, "anthropic")
         except httpx.RequestError as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": {"message": f"Network error communicating with provider: {e}", "code": "provider_network_error"}},
-            )
+            context = ErrorContext(provider_name="anthropic")
+            raise ErrorHandler.handle_provider_network_error(e, context, "anthropic")

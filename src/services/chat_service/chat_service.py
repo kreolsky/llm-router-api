@@ -29,6 +29,7 @@ from src.providers import get_provider_instance
 from src.services.model_service import ModelService
 from src.logging.config import logger
 from src.core.sanitizer import MessageSanitizer
+from src.core.error_handling import ErrorHandler, ErrorContext
 from .stream_processor import StreamProcessor
 
 
@@ -149,39 +150,19 @@ class ChatService:
             }
         )
 
+        # Create error context for validation
+        context = ErrorContext(
+            request_id=request_id,
+            user_id=user_id,
+            model_id=requested_model
+        )
+        
         # Валидация
         if not requested_model:
-            error_detail = {"error": {"message": "Model not specified in request", "code": "model_not_specified"}}
-            logger.error(
-                "Model not specified in request",
-                extra={
-                    "request_id": request_id,
-                    "user_id": user_id,
-                    "log_type": "error",
-                    "detail": error_detail
-                }
-            )
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error_detail,
-            )
+            raise ErrorHandler.handle_model_not_specified(context)
 
         if allowed_models and requested_model not in allowed_models:
-            error_detail = {"error": {"message": f"Model '{requested_model}' is not available for your account", "code": "model_not_allowed"}}
-            logger.error(
-                f"Model '{requested_model}' is not available for user {user_id}",
-                extra={
-                    "request_id": request_id,
-                    "user_id": user_id,
-                    "model_id": requested_model,
-                    "log_type": "error",
-                    "detail": error_detail
-                }
-            )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=error_detail,
-            )
+            raise ErrorHandler.handle_model_not_allowed(requested_model, context)
 
         # Прямое извлечение конфигурации
         current_config = self.config_manager.get_config()
@@ -189,21 +170,7 @@ class ChatService:
         model_config = models.get(requested_model)
         
         if not model_config:
-            error_detail = {"error": {"message": f"Model '{requested_model}' not found in configuration", "code": "model_not_found"}}
-            logger.error(
-                f"Model '{requested_model}' not found in configuration",
-                extra={
-                    "request_id": request_id,
-                    "user_id": user_id,
-                    "model_id": requested_model,
-                    "log_type": "error",
-                    "detail": error_detail
-                }
-            )
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=error_detail,
-            )
+            raise ErrorHandler.handle_model_not_found(requested_model, context)
 
         # Получение конфигурации провайдера
         provider_name = model_config.get("provider")
@@ -211,41 +178,13 @@ class ChatService:
         provider_config = current_config.get("providers", {}).get(provider_name)
         
         if not provider_config:
-            error_detail = {"error": {"message": f"Provider '{provider_name}' for model '{requested_model}' not found in configuration", "code": "provider_not_found"}}
-            logger.error(
-                f"Provider '{provider_name}' for model '{requested_model}' not found in configuration",
-                extra={
-                    "request_id": request_id,
-                    "user_id": user_id,
-                    "model_id": requested_model,
-                    "log_type": "error",
-                    "detail": error_detail
-                }
-            )
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=error_detail,
-            )
+            raise ErrorHandler.handle_provider_not_found(provider_name, requested_model, context)
 
         # Получение провайдера
         try:
             provider_instance = get_provider_instance(provider_config.get("type"), provider_config, self.httpx_client)
         except ValueError as e:
-            error_detail = {"error": {"message": f"Provider configuration error: {e}", "code": "provider_config_error"}}
-            logger.error(
-                f"Provider configuration error: {e}",
-                extra={
-                    "request_id": request_id,
-                    "user_id": user_id,
-                    "model_id": requested_model,
-                    "log_type": "error",
-                    "detail": error_detail
-                }
-            )
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=error_detail,
-            )
+            raise ErrorHandler.handle_provider_config_error(str(e), context, e)
         
         try:
             # Sanitize request messages if enabled to prevent provider errors
@@ -331,30 +270,7 @@ class ChatService:
                 return JSONResponse(content=response_data)
             
         except HTTPException as e:
-            logger.error(
-                f"HTTPException in chat_completions: {e.detail.get('error', {}).get('message', str(e))}",
-                extra={
-                    "status_code": e.status_code,
-                    "detail": e.detail,
-                    "request_id": request_id,
-                    "user_id": user_id,
-                    "model_id": requested_model,
-                    "log_type": "error"
-                }
-            )
+            # Re-raise HTTPExceptions from our error handler (already logged)
             raise e
         except Exception as e:
-            logger.error(
-                f"Unexpected error in chat_completions: {e}",
-                extra={
-                    "request_id": request_id,
-                    "user_id": user_id,
-                    "model_id": requested_model,
-                    "log_type": "error"
-                },
-                exc_info=True
-            )
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": {"message": f"Internal server error: {e}", "code": "internal_server_error"}},
-            )
+            raise ErrorHandler.handle_internal_server_error(str(e), context, e)

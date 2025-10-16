@@ -1,6 +1,7 @@
 from fastapi import Security, HTTPException, status, Request
 from fastapi.security import APIKeyHeader
 from typing import Dict, Any, Tuple, List
+from .error_handling import ErrorHandler, ErrorContext
 
 api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
 
@@ -11,19 +12,18 @@ async def get_api_key(
     config_manager = request.app.state.config_manager
     config = config_manager.get_config()
     if not api_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"error": {"message": "API key missing", "code": "missing_api_key"}},
-        )
+        context = ErrorContext()
+        raise ErrorHandler.handle_auth_errors("missing_api_key", context)
     
     # Remove "Bearer " prefix if present
     if api_key.startswith("Bearer "):
         api_key = api_key[len("Bearer "):]
 
     if config is None or "user_keys" not in config:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": {"message": "Server configuration error: user keys not loaded", "code": "server_config_error"}},
+        context = ErrorContext()
+        raise ErrorHandler.handle_internal_server_error(
+            "Server configuration error: user keys not loaded",
+            context
         )
 
     found_project = None
@@ -33,10 +33,8 @@ async def get_api_key(
             break
 
     if not found_project:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"error": {"message": "Invalid API key", "code": "invalid_api_key"}},
-        )
+        context = ErrorContext()
+        raise ErrorHandler.handle_auth_errors("invalid_api_key", context)
     
     allowed_models = config["user_keys"][found_project].get("allowed_models", [])
     allowed_endpoints = config["user_keys"][found_project].get("allowed_endpoints", [])
@@ -67,9 +65,7 @@ def check_endpoint_access(endpoint_path: str):
         if not allowed_endpoints or endpoint_path in allowed_endpoints:
             return auth_data
             
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={"error": {"message": f"Access to endpoint '{endpoint_path}' is not allowed", "code": "endpoint_not_allowed"}},
-        )
+        context = ErrorContext(endpoint_path=endpoint_path, user_id=user_id)
+        raise ErrorHandler.handle_endpoint_not_allowed(endpoint_path, context)
     
     return endpoint_checker
