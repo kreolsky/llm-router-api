@@ -28,6 +28,7 @@ from src.core.config_manager import ConfigManager
 from src.providers import get_provider_instance
 from src.services.model_service import ModelService
 from src.logging.config import logger
+from src.core.sanitizer import MessageSanitizer
 from .stream_processor import StreamProcessor
 
 
@@ -75,8 +76,8 @@ class ChatService:
         self.httpx_client = httpx_client
         self.model_service = model_service
         
-        # Unified processor instead of 4 separate components
-        self.stream_processor = StreamProcessor()
+        # Создаем StreamProcessor с конфигурацией для поддержки санитизации
+        self.stream_processor = StreamProcessor(config_manager)
     
     async def chat_completions(self, request: Request, auth_data: Tuple[str, str, list, list]) -> Any:
         """
@@ -247,6 +248,28 @@ class ChatService:
             )
         
         try:
+            # Sanitize request messages if enabled to prevent provider errors
+            if self.config_manager.should_sanitize_messages:
+                messages = request_body.get("messages", [])
+                if messages:  # Only sanitize if there are messages
+                    original_count = len(messages)
+                    sanitized_messages = MessageSanitizer.sanitize_messages(messages, enabled=True)
+                    request_body["messages"] = sanitized_messages
+                    
+                    if len(sanitized_messages) != original_count or any(
+                        len(sanitized_msg) != len(original_msg)
+                        for sanitized_msg, original_msg in zip(sanitized_messages, messages)
+                    ):
+                        logger.info(f"Sanitized {original_count} request messages", extra={
+                            "request_id": request_id,
+                            "user_id": user_id,
+                            "sanitization": {
+                                "original_messages_count": original_count,
+                                "sanitized_messages_count": len(sanitized_messages),
+                                "enabled": True
+                            }
+                        })
+            
             response_data = await provider_instance.chat_completions(request_body, provider_model_name, model_config)
             
             # DEBUG логирование ответа от провайдера
@@ -280,7 +303,15 @@ class ChatService:
                     )
             
             if isinstance(response_data, StreamingResponse):
-                # For streaming, use transparent stream processor
+                # For streaming, use stream processor with optional sanitization
+                logger.info(f"Initiating streaming response", extra={
+                    "request_id": request_id,
+                    "user_id": user_id,
+                    "model_id": requested_model,
+                    "response_type": "streaming",
+                    "sanitization_enabled": self.stream_processor.should_sanitize
+                })
+                
                 return StreamingResponse(
                     self.stream_processor.process_stream(
                         response_data.body_iterator, requested_model, request_id, user_id
@@ -289,6 +320,14 @@ class ChatService:
                 )
             else:
                 # For non-streaming, return response exactly as received from provider
+                logger.info(f"Initiating non-streaming response", extra={
+                    "request_id": request_id,
+                    "user_id": user_id,
+                    "model_id": requested_model,
+                    "response_type": "non_streaming",
+                    "sanitization_not_applicable": True
+                })
+                
                 return JSONResponse(content=response_data)
             
         except HTTPException as e:
