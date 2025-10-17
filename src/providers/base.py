@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 
 from ..utils.deep_merge import deep_merge
 from ..core.exceptions import ProviderAPIError, ProviderNetworkError, ProviderStreamError # Import custom exceptions
-from ..logging.config import logger
+from ..core.logging import std_logger
 
 
 def retry_on_rate_limit(max_retries: int = 3, base_delay: float = 1.0, max_delay: float = 30.0):
@@ -46,7 +46,7 @@ def retry_on_rate_limit(max_retries: int = 3, base_delay: float = 1.0, max_delay
                                     # Если не число, пробуем разобрать как HTTP-дату
                                     pass
                         
-                        logger.warning(f"Rate limit exceeded, retrying in {delay}s (attempt {attempt + 1}/{max_retries})")
+                        std_logger.warning(f"Rate limit exceeded, retrying in {delay}s (attempt {attempt + 1}/{max_retries})")
                         await asyncio.sleep(delay)
                         continue
                     else:
@@ -79,8 +79,8 @@ class BaseProvider:
     async def _stream_request(self, client: httpx.AsyncClient, url_path: str, request_body: Dict[str, Any]) -> StreamingResponse:
         """Stream request with optimized timeouts for streaming"""
         # DEBUG логирование запроса к провайдеру
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(
+        if std_logger.isEnabledFor(logging.DEBUG):
+            std_logger.debug(
                 "DEBUG: Request to Provider",
                 extra={
                     "debug_json_data": {
@@ -112,8 +112,8 @@ class BaseProvider:
                                      timeout=stream_timeout) as response:
               
               # DEBUG логирование заголовков ответа
-              if logger.isEnabledFor(logging.DEBUG):
-                  logger.debug(
+              if std_logger.isEnabledFor(logging.DEBUG):
+                  std_logger.debug(
                       "DEBUG: Provider Response Headers",
                       extra={
                           "debug_json_data": {

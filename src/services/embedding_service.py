@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 
 from ..core.config_manager import ConfigManager
 from ..providers import get_provider_instance
-from ..logging.config import logger
+from ..core.logging import logger, std_logger, RequestLogger, DebugLogger
 from ..core.error_handling import ErrorHandler, ErrorContext
 
 class EmbeddingService:
@@ -33,31 +33,22 @@ class EmbeddingService:
         )
 
         # DEBUG логирование полного запроса
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(
-                "DEBUG: Embedding Request JSON",
-                extra={
-                    "debug_json_data": request_body,
-                    "debug_data_flow": "incoming",
-                    "debug_component": "embedding_service",
-                    "request_id": request_id
-                }
-            )
+        DebugLogger.log_data_flow(
+            logger=std_logger,
+            title="DEBUG: Embedding Request JSON",
+            data=request_body,
+            data_flow="incoming",
+            component="embedding_service",
+            request_id=request_id
+        )
 
-        logger.info(
-            "Embedding Creation Request",
-            extra={
-                "log_type": "request",
-                "request_id": request_id,
-                "user_id": user_id,
-                "model_id": requested_model,
-                "request_body_summary": {
-                    "model": requested_model,
-                    "input_type": type(request_body.get("input")).__name__,
-                    "input_length": len(request_body.get("input")) if isinstance(request_body.get("input"), (list, str)) else None,
-                    "input_content": request_body.get("input") # Add full input content for debugging
-                }
-            }
+        RequestLogger.log_request(
+            logger=std_logger,
+            operation="Embedding Creation Request",
+            request_id=request_id,
+            user_id=user_id,
+            model_id=requested_model,
+            request_data=request_body
         )
 
         if not requested_model:
@@ -92,35 +83,26 @@ class EmbeddingService:
             response_data = await provider_instance.embeddings(request_body, provider_model_name, model_config)
             
             # DEBUG логирование ответа от провайдера
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "DEBUG: Embedding Response JSON",
-                    extra={
-                        "debug_json_data": response_data,
-                        "debug_data_flow": "from_provider",
-                        "debug_component": "embedding_service",
-                        "request_id": request_id
-                    }
-                )
+            DebugLogger.log_data_flow(
+                logger=std_logger,
+                title="DEBUG: Embedding Response JSON",
+                data=response_data,
+                data_flow="from_provider",
+                component="embedding_service",
+                request_id=request_id
+            )
             
             # Log the response
-            usage = response_data.get("usage", {})
-            prompt_tokens = usage.get("prompt_tokens", 0)
-            total_tokens = usage.get("total_tokens", 0)
-
-            logger.info(
-                "Embedding Creation Response",
-                extra={
-                    "log_type": "response",
-                    "request_id": request_id,
-                    "user_id": user_id,
-                    "model_id": requested_model,
-                    "http_status_code": status.HTTP_200_OK,
-                    "prompt_tokens": prompt_tokens,
-                    "total_tokens": total_tokens,
-                    "response_body_summary": {
-                        "data_length": len(response_data.get("data", []))
-                    }
+            RequestLogger.log_response(
+                logger=std_logger,
+                operation="Embedding Creation Response",
+                request_id=request_id,
+                user_id=user_id,
+                model_id=requested_model,
+                response_data=response_data,
+                token_usage={
+                    "prompt_tokens": response_data.get("usage", {}).get("prompt_tokens", 0),
+                    "total_tokens": response_data.get("usage", {}).get("total_tokens", 0)
                 }
             )
             return JSONResponse(content=response_data)

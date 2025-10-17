@@ -9,7 +9,7 @@
 import logging
 from typing import Dict, Any, List, Tuple
 
-from src.logging.config import logger
+from .logging import logger
 
 
 class MessageSanitizer:

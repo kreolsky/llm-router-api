@@ -7,8 +7,7 @@ from ..core.config_manager import ConfigManager
 from ..services.model_service import ModelService
 from ..providers.openai import OpenAICompatibleProvider
 from ..core.error_handling import ErrorHandler, ErrorContext
-
-logger = logging.getLogger("nnp-llm-router")
+from ..core.logging import DebugLogger, std_logger, logger
 
 class TranscriptionService:
     def __init__(self, config_manager: ConfigManager, client: httpx.AsyncClient, model_service: ModelService):
@@ -83,16 +82,14 @@ class TranscriptionService:
             )
 
             # DEBUG логирование ответа
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "DEBUG: Transcription Response JSON",
-                    extra={
-                        "debug_json_data": response,
-                        "debug_data_flow": "from_provider",
-                        "debug_component": "transcription_service",
-                        "request_id": "unknown"
-                    }
-                )
+            DebugLogger.log_data_flow(
+                logger=std_logger,
+                title="DEBUG: Transcription Response JSON",
+                data=response,
+                data_flow="from_provider",
+                component="transcription_service",
+                request_id="unknown"
+            )
 
             return response
 
@@ -113,8 +110,10 @@ class TranscriptionService:
         )
         
         # DEBUG логирование параметров запроса
-        if logger.isEnabledFor(logging.DEBUG):
-            debug_data = {
+        DebugLogger.log_data_flow(
+            logger=std_logger,
+            title="DEBUG: Transcription Request Parameters",
+            data={
                 "model_id": model_id,
                 "response_format": response_format,
                 "temperature": temperature,
@@ -123,16 +122,11 @@ class TranscriptionService:
                 "filename": audio_file.filename,
                 "content_type": audio_file.content_type,
                 "file_size": len(audio_data) if audio_data else 0
-            }
-            logger.debug(
-                "DEBUG: Transcription Request Parameters",
-                extra={
-                    "debug_json_data": debug_data,
-                    "debug_data_flow": "incoming",
-                    "debug_component": "transcription_service",
-                    "request_id": "unknown"  # request_id may not be available here
-                }
-            )
+            },
+            data_flow="incoming",
+            component="transcription_service",
+            request_id="unknown"  # request_id may not be available here
+        )
         
         # Если модель не указана, проксируем запрос как есть
         if not model_id:
@@ -222,16 +216,14 @@ class TranscriptionService:
             )
 
             # DEBUG логирование ответа
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "DEBUG: Transcription Proxy Response JSON",
-                    extra={
-                        "debug_json_data": response,
-                        "debug_data_flow": "from_provider",
-                        "debug_component": "transcription_service",
-                        "request_id": "unknown"
-                    }
-                )
+            DebugLogger.log_data_flow(
+                logger=std_logger,
+                title="DEBUG: Transcription Proxy Response JSON",
+                data=response,
+                data_flow="from_provider",
+                component="transcription_service",
+                request_id="unknown"
+            )
 
             return response
 

@@ -5,8 +5,9 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi import HTTPException, status
 
 from .base import BaseProvider
-from src.utils.deep_merge import deep_merge
-from src.core.error_handling import ErrorHandler, ErrorContext
+from ..utils.deep_merge import deep_merge
+from ..core.error_handling import ErrorHandler, ErrorContext
+from ..core.logging import DebugLogger, logger, std_logger
 
 class AnthropicProvider(BaseProvider):
     def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient):
@@ -39,6 +40,21 @@ class AnthropicProvider(BaseProvider):
         if options:
             anthropic_request = deep_merge(anthropic_request, options)
 
+        # DEBUG логирование запроса к провайдеру
+        DebugLogger.log_provider_request(
+            logger=std_logger,
+            provider_name="anthropic",
+            url=f"{self.base_url}/messages",
+            headers=self.headers,
+            request_body=anthropic_request,
+            request_id=request_body.get("request_id", "unknown"),
+            additional_data={
+                "original_request_body": request_body,
+                "provider_model_name": provider_model_name,
+                "model_config": model_config
+            }
+        )
+
         try:
             if anthropic_request["stream"]:
                 return await self._stream_request(self.client, "/messages", anthropic_request)
@@ -48,7 +64,17 @@ class AnthropicProvider(BaseProvider):
                                              json=anthropic_request,
                                              timeout=600)
                 response.raise_for_status()
-                return JSONResponse(content=response.json())
+                response_json = response.json()
+                
+                # DEBUG логирование ответа от провайдера
+                DebugLogger.log_provider_response(
+                    logger=std_logger,
+                    provider_name="anthropic",
+                    response_data=response_json,
+                    request_id=request_body.get("request_id", "unknown")
+                )
+                
+                return JSONResponse(content=response_json)
         except httpx.HTTPStatusError as e:
             context = ErrorContext(provider_name="anthropic")
             raise ErrorHandler.handle_provider_http_error(e, context, "anthropic")

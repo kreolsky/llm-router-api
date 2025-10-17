@@ -5,8 +5,9 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi import HTTPException, status
 
 from .base import BaseProvider
-from src.utils.deep_merge import deep_merge
-from src.core.error_handling import ErrorHandler, ErrorContext
+from ..utils.deep_merge import deep_merge
+from ..core.error_handling import ErrorHandler, ErrorContext
+from ..core.logging import DebugLogger, logger, std_logger
 
 class OllamaProvider(BaseProvider):
     def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient):
@@ -38,6 +39,21 @@ class OllamaProvider(BaseProvider):
         if ollama_options:
             ollama_request_body["options"] = ollama_options
 
+        # DEBUG логирование запроса к провайдеру
+        DebugLogger.log_provider_request(
+            logger=std_logger,
+            provider_name="ollama",
+            url=f"{self.base_url}/chat",
+            headers=self.headers,
+            request_body=ollama_request_body,
+            request_id=request_body.get("request_id", "unknown"),
+            additional_data={
+                "original_request_body": request_body,
+                "provider_model_name": provider_model_name,
+                "model_config": model_config
+            }
+        )
+
         try:
             if ollama_request_body["stream"]:
                 return await self._stream_request(self.client, "/chat", ollama_request_body)
@@ -55,7 +71,17 @@ class OllamaProvider(BaseProvider):
                                              json=ollama_request_body,
                                              timeout=ollama_timeout)
                 response.raise_for_status()
-                return response.json()
+                response_json = response.json()
+                
+                # DEBUG логирование ответа от провайдера
+                DebugLogger.log_provider_response(
+                    logger=std_logger,
+                    provider_name="ollama",
+                    response_data=response_json,
+                    request_id=request_body.get("request_id", "unknown")
+                )
+                
+                return response_json
         except httpx.HTTPStatusError as e:
             context = ErrorContext(provider_name="ollama")
             raise ErrorHandler.handle_provider_http_error(e, context, "ollama")
@@ -71,6 +97,21 @@ class OllamaProvider(BaseProvider):
             "prompt": request_body.get("input") # Map OpenAI 'input' to Ollama 'prompt'
         }
 
+        # DEBUG логирование запроса к провайдеру
+        DebugLogger.log_provider_request(
+            logger=std_logger,
+            provider_name="ollama",
+            url=f"{self.base_url}/embeddings",
+            headers=self.headers,
+            request_body=ollama_request_body,
+            request_id=request_body.get("request_id", "unknown"),
+            additional_data={
+                "original_request_body": request_body,
+                "provider_model_name": provider_model_name,
+                "model_config": model_config
+            }
+        )
+
         try:
             # Ollama embeddings timeout
             embeddings_timeout = httpx.Timeout(
@@ -84,7 +125,17 @@ class OllamaProvider(BaseProvider):
                                              json=ollama_request_body,
                                              timeout=embeddings_timeout)
             response.raise_for_status()
-            return response.json()
+            response_json = response.json()
+            
+            # DEBUG логирование ответа от провайдера
+            DebugLogger.log_provider_response(
+                logger=std_logger,
+                provider_name="ollama",
+                response_data=response_json,
+                request_id=request_body.get("request_id", "unknown")
+            )
+            
+            return response_json
         except httpx.HTTPStatusError as e:
             context = ErrorContext(provider_name="ollama")
             raise ErrorHandler.handle_provider_http_error(e, context, "ollama")

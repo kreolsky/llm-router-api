@@ -5,9 +5,10 @@ from fastapi import HTTPException, status
 import io
 
 from .base import BaseProvider
-from src.utils.deep_merge import deep_merge
-from src.logging.config import logger
-from src.core.error_handling import ErrorHandler, ErrorContext
+from ..utils.deep_merge import deep_merge
+from ..core.logging import logger, std_logger
+from ..core.error_handling import ErrorHandler, ErrorContext
+from ..core.logging import DebugLogger
 
 class OpenAICompatibleProvider(BaseProvider):
     def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient):
@@ -27,22 +28,18 @@ class OpenAICompatibleProvider(BaseProvider):
         stream = request_body.get("stream", False)
 
         # DEBUG логирование запроса к провайдеру
-        if logger.isEnabledFor(logging.DEBUG):
-            debug_request = {
-                "url": f"{self.base_url}/chat/completions",
-                "headers": self.headers,
-                "request_body": request_body,
+        DebugLogger.log_provider_request(
+            logger=std_logger,
+            provider_name="openai",
+            url=f"{self.base_url}/chat/completions",
+            headers=self.headers,
+            request_body=request_body,
+            request_id=request_body.get("request_id", "unknown"),
+            additional_data={
                 "provider_model_name": provider_model_name,
                 "model_config": model_config
             }
-            logger.debug(
-                "DEBUG: OpenAI Chat Request",
-                extra={
-                    "debug_json_data": debug_request,
-                    "debug_data_flow": "to_provider",
-                    "debug_component": "openai_provider"
-                }
-            )
+        )
 
         try:
             if stream:
@@ -67,15 +64,12 @@ class OpenAICompatibleProvider(BaseProvider):
                 response_json = response.json()
                 
                 # DEBUG логирование ответа от провайдера
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(
-                        "DEBUG: OpenAI Chat Response",
-                        extra={
-                            "debug_json_data": response_json,
-                            "debug_data_flow": "from_provider",
-                            "debug_component": "openai_provider"
-                        }
-                    )
+                DebugLogger.log_provider_response(
+                    logger=std_logger,
+                    provider_name="openai",
+                    response_data=response_json,
+                    request_id=request_body.get("request_id", "unknown")
+                )
                 
                 return response_json
         except httpx.HTTPStatusError as e:
@@ -142,15 +136,12 @@ class OpenAICompatibleProvider(BaseProvider):
             response_json = response.json()
             
             # DEBUG логирование ответа от провайдера
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "DEBUG: OpenAI Transcriptions Response",
-                    extra={
-                        "debug_json_data": response_json,
-                        "debug_data_flow": "from_provider",
-                        "debug_component": "openai_provider"
-                    }
-                )
+            DebugLogger.log_provider_response(
+                logger=std_logger,
+                provider_name="openai",
+                response_data=response_json,
+                request_id="transcription_unknown"
+            )
             
             return response_json
         except httpx.HTTPStatusError as e:
@@ -185,15 +176,12 @@ class OpenAICompatibleProvider(BaseProvider):
             response_json = response.json()
             
             # DEBUG логирование ответа от провайдера
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "DEBUG: OpenAI Embeddings Response",
-                    extra={
-                        "debug_json_data": response_json,
-                        "debug_data_flow": "from_provider",
-                        "debug_component": "openai_provider"
-                    }
-                )
+            DebugLogger.log_provider_response(
+                logger=std_logger,
+                provider_name="openai",
+                response_data=response_json,
+                request_id=request_body.get("request_id", "unknown")
+            )
             
             return response_json
         except httpx.HTTPStatusError as e:

@@ -1,10 +1,19 @@
+"""
+Logging configuration and setup for the LLM Router.
+
+This module provides centralized logging configuration, including JSON formatting
+and handler setup. It maintains identical log output formats to the original
+implementation while providing a centralized location for all logging configuration.
+"""
+
 import logging
 import json
 import os
 
-logger = logging.getLogger("nnp-llm-router")
 
 class JsonFormatter(logging.Formatter):
+    """JSON formatter for structured logging."""
+    
     def format(self, record):
         log_record = {
             "timestamp": self.formatTime(record, self.datefmt),
@@ -73,7 +82,14 @@ class JsonFormatter(logging.Formatter):
         
         return json.dumps(log_record, ensure_ascii=False)
 
+
 def setup_logging():
+    """
+    Setup logging configuration with handlers and formatters.
+    
+    Returns:
+        logging.Logger: Configured logger instance
+    """
     # Get log level from environment variable
     log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
     
@@ -116,3 +132,9 @@ def setup_logging():
 
     # Ensure logger propagates to handlers
     logger.propagate = True
+    
+    return logger
+
+
+# Initialize the global logger instance
+logger = setup_logging()

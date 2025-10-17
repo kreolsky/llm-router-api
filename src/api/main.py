@@ -12,7 +12,7 @@ from ..services.chat_service.chat_service import ChatService
 from ..services.model_service import ModelService
 from ..services.embedding_service import EmbeddingService
 from ..services.transcription_service import TranscriptionService
-from ..logging.config import setup_logging
+from ..core.logging.config import setup_logging
 from .middleware import RequestLoggerMiddleware
 
 # Configure logging

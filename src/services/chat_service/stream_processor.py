@@ -13,8 +13,8 @@ import json
 import time
 from typing import Dict, Any, AsyncGenerator, Optional
 
-from src.logging.config import logger
-from src.core.exceptions import ProviderStreamError, ProviderNetworkError
+from ...core.logging import logger
+from ...core.exceptions import ProviderStreamError, ProviderNetworkError
 
 
 class StreamProcessor:
@@ -48,7 +48,7 @@ class StreamProcessor:
         # Импортируем санитайзер только если нужен
         self._message_sanitizer = None
         if self.should_sanitize:
-            from src.core.sanitizer import MessageSanitizer
+            from ...core.sanitizer import MessageSanitizer
             self._message_sanitizer = MessageSanitizer
             logger.info(f"StreamProcessor initialized with sanitization enabled", extra={
                 "stream_processor": {
