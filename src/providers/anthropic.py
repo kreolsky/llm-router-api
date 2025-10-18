@@ -7,7 +7,7 @@ from fastapi import HTTPException, status
 from .base import BaseProvider
 from ..utils.deep_merge import deep_merge
 from ..core.error_handling import ErrorHandler, ErrorContext
-from ..core.logging import DebugLogger, logger
+from ..core.logging import logger
 
 class AnthropicProvider(BaseProvider):
     def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient):
@@ -41,18 +41,19 @@ class AnthropicProvider(BaseProvider):
             anthropic_request = deep_merge(anthropic_request, options)
 
         # DEBUG логирование запроса к провайдеру
-        DebugLogger.log_provider_request(
-            logger=logger,
-            provider_name="anthropic",
-            url=f"{self.base_url}/messages",
-            headers=self.headers,
-            request_body=anthropic_request,
-            request_id=request_body.get("request_id", "unknown"),
-            additional_data={
+        logger.debug_data(
+            title="Anthropic Request",
+            data={
+                "url": f"{self.base_url}/messages",
+                "headers": self.headers,
+                "request_body": anthropic_request,
                 "original_request_body": request_body,
                 "provider_model_name": provider_model_name,
                 "model_config": model_config
-            }
+            },
+            request_id=request_body.get("request_id", "unknown"),
+            component="anthropic_provider",
+            data_flow="to_provider"
         )
 
         try:
@@ -67,11 +68,12 @@ class AnthropicProvider(BaseProvider):
                 response_json = response.json()
                 
                 # DEBUG логирование ответа от провайдера
-                DebugLogger.log_provider_response(
-                    logger=logger,
-                    provider_name="anthropic",
-                    response_data=response_json,
-                    request_id=request_body.get("request_id", "unknown")
+                logger.debug_data(
+                    title="Anthropic Response",
+                    data=response_json,
+                    request_id=request_body.get("request_id", "unknown"),
+                    component="anthropic_provider",
+                    data_flow="from_provider"
                 )
                 
                 return JSONResponse(content=response_json)

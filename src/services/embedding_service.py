@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 
 from ..core.config_manager import ConfigManager
 from ..providers import get_provider_instance
-from ..core.logging import logger, RequestLogger, DebugLogger
+from ..core.logging import logger
 from ..core.error_handling import ErrorHandler, ErrorContext
 
 class EmbeddingService:
@@ -32,22 +32,19 @@ class EmbeddingService:
         )
 
         # DEBUG логирование полного запроса
-        DebugLogger.log_data_flow(
-            logger=logger,
-            title="DEBUG: Embedding Request JSON",
+        logger.debug_data(
+            title="Embedding Request JSON",
             data=request_body,
-            data_flow="incoming",
+            request_id=request_id,
             component="embedding_service",
-            request_id=request_id
+            data_flow="incoming"
         )
 
-        RequestLogger.log_request(
-            logger=logger,
+        logger.request(
             operation="Embedding Creation Request",
             request_id=request_id,
             user_id=user_id,
-            model_id=requested_model,
-            request_data=request_body
+            model_id=requested_model
         )
 
         if not requested_model:
@@ -82,23 +79,20 @@ class EmbeddingService:
             response_data = await provider_instance.embeddings(request_body, provider_model_name, model_config)
             
             # DEBUG логирование ответа от провайдера
-            DebugLogger.log_data_flow(
-                logger=logger,
-                title="DEBUG: Embedding Response JSON",
+            logger.debug_data(
+                title="Embedding Response JSON",
                 data=response_data,
-                data_flow="from_provider",
+                request_id=request_id,
                 component="embedding_service",
-                request_id=request_id
+                data_flow="from_provider"
             )
             
             # Log the response
-            RequestLogger.log_response(
-                logger=logger,
+            logger.response(
                 operation="Embedding Creation Response",
                 request_id=request_id,
                 user_id=user_id,
                 model_id=requested_model,
-                response_data=response_data,
                 token_usage={
                     "prompt_tokens": response_data.get("usage", {}).get("prompt_tokens", 0),
                     "total_tokens": response_data.get("usage", {}).get("total_tokens", 0)

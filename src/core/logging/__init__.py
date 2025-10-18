@@ -1,22 +1,17 @@
 """
-Core logging infrastructure for the LLM Router.
+Ultra-simple logging infrastructure for the LLM Router.
 
-This module provides centralized logging utilities to replace repetitive logging patterns
-across the codebase while maintaining identical log output formats.
+Provides a minimal Logger class focused on effective debugging and diagnostics.
 """
 
+from .logger import logger, Logger
 from .config import setup_logging
-from .logger import default_app_logger as logger
-from .utils import RequestLogger, DebugLogger, PerformanceLogger, StreamingLogger
-from .logger import Logger
+from .utils import timing_context
 
-# Export main components for easy import
+# Export only the essential components
 __all__ = [
     'logger',
+    'Logger',
     'setup_logging',
-    'RequestLogger',
-    'DebugLogger',
-    'PerformanceLogger',
-    'StreamingLogger',
-    'Logger'
+    'timing_context'
 ]

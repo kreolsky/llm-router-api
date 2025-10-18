@@ -11,7 +11,7 @@ from ..services.chat_service.chat_service import ChatService
 from ..services.model_service import ModelService
 from ..services.embedding_service import EmbeddingService
 from ..services.transcription_service import TranscriptionService
-from ..core.logging import logger, RequestLogger, DebugLogger, PerformanceLogger
+from ..core.logging import logger
 from .middleware import RequestLoggerMiddleware
 
 app = FastAPI()
@@ -93,33 +93,27 @@ async def create_transcription(
     user_id = getattr(request.state, 'project_name', 'unknown')
     
     # Log incoming transcription request with structured data
-    RequestLogger.log_request(
-        logger=logger,
+    logger.request(
         operation="Transcription Request",
         request_id=request_id,
         user_id=user_id,
-        additional_data={
-            "method": request.method,
-            "url": str(request.url),
-            "client_host": request.client.host,
-            "form_fields": {
-                "model": model,
-                "response_format": response_format,
-                "temperature": temperature,
-                "language": language,
-                "return_timestamps": return_timestamps
-            }
-        }
+        method=request.method,
+        url=str(request.url),
+        client_host=request.client.host,
+        model=model,
+        response_format=response_format,
+        temperature=temperature,
+        language=language,
+        return_timestamps=return_timestamps
     )
     
     # Debug log request headers
-    DebugLogger.log_data_flow(
-        logger=logger,
-        title="DEBUG: Transcription Request Headers",
+    logger.debug_data(
+        title="Transcription Request Headers",
         data=dict(request.headers),
-        data_flow="incoming",
+        request_id=request_id,
         component="api",
-        request_id=request_id
+        data_flow="incoming"
     )
     
     # Determine which file was provided

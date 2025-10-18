@@ -5,7 +5,7 @@ import io
 
 from .base import BaseProvider
 from ..utils.deep_merge import deep_merge
-from ..core.logging import logger, DebugLogger
+from ..core.logging import logger
 from ..core.error_handling import ErrorHandler, ErrorContext
 
 class OpenAICompatibleProvider(BaseProvider):
@@ -26,17 +26,18 @@ class OpenAICompatibleProvider(BaseProvider):
         stream = request_body.get("stream", False)
 
         # DEBUG логирование запроса к провайдеру
-        DebugLogger.log_provider_request(
-            logger=logger,
-            provider_name="openai",
-            url=f"{self.base_url}/chat/completions",
-            headers=self.headers,
-            request_body=request_body,
-            request_id=request_body.get("request_id", "unknown"),
-            additional_data={
+        logger.debug_data(
+            title="OpenAI Request",
+            data={
+                "url": f"{self.base_url}/chat/completions",
+                "headers": self.headers,
+                "request_body": request_body,
                 "provider_model_name": provider_model_name,
                 "model_config": model_config
-            }
+            },
+            request_id=request_body.get("request_id", "unknown"),
+            component="openai_provider",
+            data_flow="to_provider"
         )
 
         try:
@@ -62,11 +63,12 @@ class OpenAICompatibleProvider(BaseProvider):
                 response_json = response.json()
                 
                 # DEBUG логирование ответа от провайдера
-                DebugLogger.log_provider_response(
-                    logger=logger,
-                    provider_name="openai",
-                    response_data=response_json,
-                    request_id=request_body.get("request_id", "unknown")
+                logger.debug_data(
+                    title="OpenAI Response",
+                    data=response_json,
+                    request_id=request_body.get("request_id", "unknown"),
+                    component="openai_provider",
+                    data_flow="from_provider"
                 )
                 
                 return response_json
@@ -134,11 +136,12 @@ class OpenAICompatibleProvider(BaseProvider):
             response_json = response.json()
             
             # DEBUG логирование ответа от провайдера
-            DebugLogger.log_provider_response(
-                logger=logger,
-                provider_name="openai",
-                response_data=response_json,
-                request_id="transcription_unknown"
+            logger.debug_data(
+                title="OpenAI Transcription Response",
+                data=response_json,
+                request_id="transcription_unknown",
+                component="openai_provider",
+                data_flow="from_provider"
             )
             
             return response_json
@@ -174,11 +177,12 @@ class OpenAICompatibleProvider(BaseProvider):
             response_json = response.json()
             
             # DEBUG логирование ответа от провайдера
-            DebugLogger.log_provider_response(
-                logger=logger,
-                provider_name="openai",
-                response_data=response_json,
-                request_id=request_body.get("request_id", "unknown")
+            logger.debug_data(
+                title="OpenAI Embeddings Response",
+                data=response_json,
+                request_id=request_body.get("request_id", "unknown"),
+                component="openai_provider",
+                data_flow="from_provider"
             )
             
             return response_json

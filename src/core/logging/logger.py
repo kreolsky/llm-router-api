@@ -1,361 +1,140 @@
 """
-Main Logger class that provides centralized logging functionality.
+Ultra-simple universal Logger for debugging and diagnostics.
 
-This module contains the main Logger class that serves as a centralized interface
-for all logging operations, providing a single point of control for logging
-configuration and usage throughout the application.
+This module provides a minimal Logger class focused on simplicity and
+effective debugging capabilities when LOG_LEVEL=DEBUG.
 """
 
 import logging
-from typing import Optional, Dict, Any
+import time
+import json
+from typing import Dict, Any, Optional
+from contextlib import contextmanager
 from .config import setup_logging
-from .utils import RequestLogger, DebugLogger, PerformanceLogger, StreamingLogger
 
 
 class Logger:
     """
-    Main Logger class that provides centralized logging functionality.
+    Ultra-simple Logger for effective debugging and diagnostics.
     
-    This class serves as a facade for all logging operations, providing a unified
-    interface while maintaining backward compatibility with existing log formats.
+    Focus on simplicity while maintaining comprehensive debug capabilities
+    when LOG_LEVEL=DEBUG is enabled.
     """
     
-    def __init__(self, logger_instance: Optional[logging.Logger] = None):
-        """
-        Initialize the Logger with an optional custom logger instance.
-        
-        Args:
-            logger_instance: Optional custom logger instance. If None, uses the default logger.
-        """
-        self._logger = logger_instance or setup_logging()
-        self.request_logger = RequestLogger()
-        self.debug_logger = DebugLogger()
-        self.performance_logger = PerformanceLogger()
-        self.streaming_logger = StreamingLogger()
-    
-    @property
-    def logger(self) -> logging.Logger:
-        """Get the underlying logger instance."""
-        return self._logger
+    def __init__(self):
+        """Initialize the Logger with default configuration."""
+        self._logger = setup_logging()
     
     def is_debug_enabled(self) -> bool:
         """Check if debug logging is enabled."""
         return self._logger.isEnabledFor(logging.DEBUG)
     
-    def info(self, message: str, extra: Optional[Dict[str, Any]] = None):
+    def info(self, message: str, **kwargs):
         """Log an info message."""
-        if extra:
-            self._logger.info(message, extra=extra)
+        if kwargs:
+            self._logger.info(message, extra=kwargs)
         else:
             self._logger.info(message)
     
-    def debug(self, message: str, extra: Optional[Dict[str, Any]] = None):
+    def debug(self, message: str, **kwargs):
         """Log a debug message."""
-        if extra:
-            self._logger.debug(message, extra=extra)
+        if kwargs:
+            self._logger.debug(message, extra=kwargs)
         else:
             self._logger.debug(message)
     
-    def warning(self, message: str, extra: Optional[Dict[str, Any]] = None):
+    def warning(self, message: str, **kwargs):
         """Log a warning message."""
-        if extra:
-            self._logger.warning(message, extra=extra)
+        if kwargs:
+            self._logger.warning(message, extra=kwargs)
         else:
             self._logger.warning(message)
     
-    def error(self, message: str, extra: Optional[Dict[str, Any]] = None, exc_info: bool = False):
+    def error(self, message: str, **kwargs):
         """Log an error message."""
-        if extra:
-            self._logger.error(message, extra=extra, exc_info=exc_info)
+        if kwargs:
+            self._logger.error(message, extra=kwargs, exc_info=True)
         else:
-            self._logger.error(message, exc_info=exc_info)
+            self._logger.error(message, exc_info=True)
     
-    def critical(self, message: str, extra: Optional[Dict[str, Any]] = None):
-        """Log a critical message."""
-        if extra:
-            self._logger.critical(message, extra=extra)
+    def request(self, operation: str, request_id: str, **kwargs):
+        """Log a request with context."""
+        message_parts = [f"Request: {operation}"]
+        if 'model_id' in kwargs:
+            message_parts.append(f"model={kwargs['model_id']}")
+        if 'provider_name' in kwargs:
+            message_parts.append(f"provider={kwargs['provider_name']}")
+        
+        message = " | ".join(message_parts)
+        self.info(message, request_id=request_id, **kwargs)
+    
+    def response(self, operation: str, request_id: str, status_code: int = 200, **kwargs):
+        """Log a response with context."""
+        message_parts = [f"Response: {operation}", f"status={status_code}"]
+        if 'processing_time_ms' in kwargs:
+            message_parts.append(f"time={kwargs['processing_time_ms']}ms")
+        
+        message = " | ".join(message_parts)
+        self.info(message, request_id=request_id, **kwargs)
+    
+    def debug_data(self, title: str, data: Any, request_id: str, **kwargs):
+        """Log debug data with full details when LOG_LEVEL=DEBUG."""
+        if not self.is_debug_enabled():
+            return
+        
+        # Format data for logging
+        if isinstance(data, dict):
+            data_str = json.dumps(data, indent=2, ensure_ascii=False)
         else:
-            self._logger.critical(message)
-    
-    def log_request(
-        self,
-        operation: str,
-        request_id: str,
-        user_id: str,
-        model_id: Optional[str] = None,
-        provider_name: Optional[str] = None,
-        request_data: Optional[Dict[str, Any]] = None,
-        additional_data: Optional[Dict[str, Any]] = None
-    ):
-        """
-        Log incoming request with standardized format.
+            data_str = str(data)
         
-        This is a convenience method that delegates to RequestLogger.log_request.
-        """
-        self.request_logger.log_request(
-            logger=self._logger,
-            operation=operation,
-            request_id=request_id,
-            user_id=user_id,
-            model_id=model_id,
-            provider_name=provider_name,
-            request_data=request_data,
-            additional_data=additional_data
-        )
-    
-    def log_response(
-        self,
-        operation: str,
-        request_id: str,
-        user_id: str,
-        model_id: Optional[str] = None,
-        provider_name: Optional[str] = None,
-        status_code: int = 200,
-        response_data: Optional[Dict[str, Any]] = None,
-        processing_time_ms: Optional[int] = None,
-        token_usage: Optional[Dict[str, int]] = None,
-        additional_data: Optional[Dict[str, Any]] = None
-    ):
-        """
-        Log response with standardized format.
+        message = f"DEBUG: {title}"
+        if 'component' in kwargs:
+            message += f" | component={kwargs['component']}"
+        if 'data_flow' in kwargs:
+            message += f" | flow={kwargs['data_flow']}"
         
-        This is a convenience method that delegates to RequestLogger.log_response.
-        """
-        self.request_logger.log_response(
-            logger=self._logger,
-            operation=operation,
-            request_id=request_id,
-            user_id=user_id,
-            model_id=model_id,
-            provider_name=provider_name,
-            status_code=status_code,
-            response_data=response_data,
-            processing_time_ms=processing_time_ms,
-            token_usage=token_usage,
-            additional_data=additional_data
-        )
+        self.debug(f"{message}\n{data_str}", request_id=request_id, **kwargs)
     
-    def log_debug_data(
-        self,
-        title: str,
-        data: Any,
-        data_flow: str,
-        component: str,
-        request_id: str,
-        additional_data: Optional[Dict[str, Any]] = None
-    ):
-        """
-        Log data flow for debugging.
+    def performance(self, operation: str, start_time: float, request_id: str, **kwargs):
+        """Log performance metrics."""
+        duration_ms = int((time.time() - start_time) * 1000)
+        message_parts = [f"Performance: {operation}", f"duration={duration_ms}ms"]
         
-        This is a convenience method that delegates to DebugLogger.log_data_flow.
-        """
-        self.debug_logger.log_data_flow(
-            logger=self._logger,
-            title=title,
-            data=data,
-            data_flow=data_flow,
-            component=component,
-            request_id=request_id,
-            additional_data=additional_data
-        )
+        message = " | ".join(message_parts)
+        self.info(message, request_id=request_id, duration_ms=duration_ms, **kwargs)
     
-    def log_provider_request(
-        self,
-        provider_name: str,
-        url: str,
-        headers: Dict[str, str],
-        request_body: Dict[str, Any],
-        request_id: str,
-        additional_data: Optional[Dict[str, Any]] = None
-    ):
+    @contextmanager
+    def request_context(self, operation: str, request_id: str, **kwargs):
         """
-        Log provider request for debugging.
+        Simple context manager for request-scoped logging.
         
-        This is a convenience method that delegates to DebugLogger.log_provider_request.
+        Automatically logs request start, completion, and handles errors.
         """
-        self.debug_logger.log_provider_request(
-            logger=self._logger,
-            provider_name=provider_name,
-            url=url,
-            headers=headers,
-            request_body=request_body,
-            request_id=request_id,
-            additional_data=additional_data
-        )
-    
-    def log_provider_response(
-        self,
-        provider_name: str,
-        response_data: Any,
-        request_id: str,
-        additional_data: Optional[Dict[str, Any]] = None
-    ):
-        """
-        Log provider response for debugging.
+        start_time = time.time()
         
-        This is a convenience method that delegates to DebugLogger.log_provider_response.
-        """
-        self.debug_logger.log_provider_response(
-            logger=self._logger,
-            provider_name=provider_name,
-            response_data=response_data,
-            request_id=request_id,
-            additional_data=additional_data
-        )
-    
-    def log_performance(
-        self,
-        operation: str,
-        start_time: float,
-        request_id: str,
-        user_id: str,
-        model_id: Optional[str] = None,
-        additional_metrics: Optional[Dict[str, Any]] = None
-    ):
-        """
-        Log operation timing and performance metrics.
+        # Log request start
+        self.request(operation=operation, request_id=request_id, **kwargs)
         
-        This is a convenience method that delegates to PerformanceLogger.log_operation_timing.
-        """
-        self.performance_logger.log_operation_timing(
-            logger=self._logger,
-            operation=operation,
-            start_time=start_time,
-            request_id=request_id,
-            user_id=user_id,
-            model_id=model_id,
-            additional_metrics=additional_metrics
-        )
-    
-    def create_timing_context(
-        self,
-        operation: str,
-        request_id: str,
-        user_id: str,
-        model_id: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """
-        Create a timing context for performance measurement.
-        
-        This is a convenience method that delegates to PerformanceLogger.create_timing_context.
-        """
-        return self.performance_logger.create_timing_context(
-            operation=operation,
-            request_id=request_id,
-            user_id=user_id,
-            model_id=model_id
-        )
-    
-    def complete_timing_context(
-        self,
-        context: Dict[str, Any],
-        additional_metrics: Optional[Dict[str, Any]] = None
-    ):
-        """
-        Complete a timing context and log the performance metrics.
-        
-        This is a convenience method that delegates to PerformanceLogger.complete_timing_context.
-        """
-        self.performance_logger.complete_timing_context(
-            logger=self._logger,
-            context=context,
-            additional_metrics=additional_metrics
-        )
-    
-    def timing_context(
-        self,
-        operation: str,
-        request_id: str,
-        user_id: str,
-        model_id: Optional[str] = None,
-        additional_metrics: Optional[Dict[str, Any]] = None
-    ):
-        """
-        Context manager for automatic timing measurement.
-        
-        This is a convenience method that delegates to PerformanceLogger.timing_context.
-        """
-        return self.performance_logger.timing_context(
-            logger=self._logger,
-            operation=operation,
-            request_id=request_id,
-            user_id=user_id,
-            model_id=model_id,
-            additional_metrics=additional_metrics
-        )
-    
-    def log_streaming_start(
-        self,
-        operation: str,
-        request_id: str,
-        user_id: str,
-        model_id: str,
-        additional_data: Optional[Dict[str, Any]] = None
-    ):
-        """
-        Log the start of a streaming response.
-        
-        This is a convenience method that delegates to StreamingLogger.log_streaming_start.
-        """
-        self.streaming_logger.log_streaming_start(
-            logger=self._logger,
-            operation=operation,
-            request_id=request_id,
-            user_id=user_id,
-            model_id=model_id,
-            additional_data=additional_data
-        )
-    
-    def log_streaming_end(
-        self,
-        operation: str,
-        request_id: str,
-        user_id: str,
-        model_id: str,
-        chunk_count: int,
-        processing_time_ms: int,
-        token_usage: Optional[Dict[str, int]] = None,
-        additional_data: Optional[Dict[str, Any]] = None
-    ):
-        """
-        Log the end of a streaming response.
-        
-        This is a convenience method that delegates to StreamingLogger.log_streaming_end.
-        """
-        self.streaming_logger.log_streaming_end(
-            logger=self._logger,
-            operation=operation,
-            request_id=request_id,
-            user_id=user_id,
-            model_id=model_id,
-            chunk_count=chunk_count,
-            processing_time_ms=processing_time_ms,
-            token_usage=token_usage,
-            additional_data=additional_data
-        )
-    
-    def log_streaming_chunk(
-        self,
-        chunk_data: Dict[str, Any],
-        request_id: str,
-        user_id: str,
-        model_id: str,
-        chunk_number: int
-    ):
-        """
-        Log a streaming chunk (debug level only).
-        
-        This is a convenience method that delegates to StreamingLogger.log_streaming_chunk.
-        """
-        self.streaming_logger.log_streaming_chunk(
-            logger=self._logger,
-            chunk_data=chunk_data,
-            request_id=request_id,
-            user_id=user_id,
-            model_id=model_id,
-            chunk_number=chunk_number
-        )
+        try:
+            yield
+        except Exception as e:
+            # Log error
+            self.error(
+                f"{operation} failed: {str(e)}",
+                request_id=request_id,
+                **kwargs
+            )
+            raise
+        finally:
+            # Log completion
+            duration_ms = int((time.time() - start_time) * 1000)
+            self.info(
+                f"Completed: {operation} | duration={duration_ms}ms",
+                request_id=request_id,
+                **kwargs
+            )
 
 
-# Create a default logger instance for easy import
-default_app_logger = Logger()
+# Create default logger instance
+logger = Logger()

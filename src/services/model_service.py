@@ -6,7 +6,7 @@ from typing import Dict, Any, Tuple
 from fastapi import HTTPException, status
 
 from ..core.config_manager import ConfigManager
-from ..core.logging import logger, RequestLogger, DebugLogger, PerformanceLogger
+from ..core.logging import logger
 from ..core.error_handling import ErrorHandler, ErrorContext
 
 class ModelService:

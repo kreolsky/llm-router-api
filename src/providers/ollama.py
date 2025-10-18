@@ -7,7 +7,7 @@ from fastapi import HTTPException, status
 from .base import BaseProvider
 from ..utils.deep_merge import deep_merge
 from ..core.error_handling import ErrorHandler, ErrorContext
-from ..core.logging import DebugLogger, logger
+from ..core.logging import logger
 
 class OllamaProvider(BaseProvider):
     def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient):
@@ -40,18 +40,19 @@ class OllamaProvider(BaseProvider):
             ollama_request_body["options"] = ollama_options
 
         # DEBUG логирование запроса к провайдеру
-        DebugLogger.log_provider_request(
-            logger=logger,
-            provider_name="ollama",
-            url=f"{self.base_url}/chat",
-            headers=self.headers,
-            request_body=ollama_request_body,
-            request_id=request_body.get("request_id", "unknown"),
-            additional_data={
+        logger.debug_data(
+            title="Ollama Request",
+            data={
+                "url": f"{self.base_url}/chat",
+                "headers": self.headers,
+                "request_body": ollama_request_body,
                 "original_request_body": request_body,
                 "provider_model_name": provider_model_name,
                 "model_config": model_config
-            }
+            },
+            request_id=request_body.get("request_id", "unknown"),
+            component="ollama_provider",
+            data_flow="to_provider"
         )
 
         try:
@@ -74,11 +75,12 @@ class OllamaProvider(BaseProvider):
                 response_json = response.json()
                 
                 # DEBUG логирование ответа от провайдера
-                DebugLogger.log_provider_response(
-                    logger=logger,
-                    provider_name="ollama",
-                    response_data=response_json,
-                    request_id=request_body.get("request_id", "unknown")
+                logger.debug_data(
+                    title="Ollama Response",
+                    data=response_json,
+                    request_id=request_body.get("request_id", "unknown"),
+                    component="ollama_provider",
+                    data_flow="from_provider"
                 )
                 
                 return response_json
@@ -98,18 +100,19 @@ class OllamaProvider(BaseProvider):
         }
 
         # DEBUG логирование запроса к провайдеру
-        DebugLogger.log_provider_request(
-            logger=logger,
-            provider_name="ollama",
-            url=f"{self.base_url}/embeddings",
-            headers=self.headers,
-            request_body=ollama_request_body,
-            request_id=request_body.get("request_id", "unknown"),
-            additional_data={
+        logger.debug_data(
+            title="Ollama Embedding Request",
+            data={
+                "url": f"{self.base_url}/embeddings",
+                "headers": self.headers,
+                "request_body": ollama_request_body,
                 "original_request_body": request_body,
                 "provider_model_name": provider_model_name,
                 "model_config": model_config
-            }
+            },
+            request_id=request_body.get("request_id", "unknown"),
+            component="ollama_provider",
+            data_flow="to_provider"
         )
 
         try:
@@ -128,11 +131,12 @@ class OllamaProvider(BaseProvider):
             response_json = response.json()
             
             # DEBUG логирование ответа от провайдера
-            DebugLogger.log_provider_response(
-                logger=logger,
-                provider_name="ollama",
-                response_data=response_json,
-                request_id=request_body.get("request_id", "unknown")
+            logger.debug_data(
+                title="Ollama Embedding Response",
+                data=response_json,
+                request_id=request_body.get("request_id", "unknown"),
+                component="ollama_provider",
+                data_flow="from_provider"
             )
             
             return response_json

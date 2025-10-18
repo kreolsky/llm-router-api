@@ -26,7 +26,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from ...core.config_manager import ConfigManager
 from ...providers import get_provider_instance
 from ...services.model_service import ModelService
-from ...core.logging import logger, RequestLogger, DebugLogger, StreamingLogger, PerformanceLogger
+from ...core.logging import logger
 from ...core.sanitizer import MessageSanitizer
 from ...core.error_handling import ErrorHandler, ErrorContext
 from .stream_processor import StreamProcessor
@@ -122,23 +122,20 @@ class ChatService:
         requested_model = request_body.get("model")
 
         # DEBUG логирование полного запроса
-        DebugLogger.log_data_flow(
-            logger=logger,
-            title="DEBUG: Chat Completion Request JSON",
+        logger.debug_data(
+            title="Chat Completion Request JSON",
             data=request_body,
-            data_flow="incoming",
+            request_id=request_id,
             component="chat_service",
-            request_id=request_id
+            data_flow="incoming"
         )
 
         # Логирование запроса
-        RequestLogger.log_request(
-            logger=logger,
+        logger.request(
             operation="Chat Completion Request",
             request_id=request_id,
             user_id=user_id,
-            model_id=requested_model,
-            request_data=request_body
+            model_id=requested_model
         )
 
         # Create error context for validation
@@ -178,91 +175,62 @@ class ChatService:
             raise ErrorHandler.handle_provider_config_error(str(e), context, e)
         
         try:
-            # Sanitize request messages if enabled to prevent provider errors
-            if self.config_manager.should_sanitize_messages:
-                messages = request_body.get("messages", [])
-                if messages:  # Only sanitize if there are messages
-                    original_count = len(messages)
-                    sanitized_messages = MessageSanitizer.sanitize_messages(messages, enabled=True)
-                    request_body["messages"] = sanitized_messages
+            # Use the simple request context manager
+            with logger.request_context(
+                operation="Chat Completion",
+                request_id=request_id,
+                user_id=user_id,
+                model_id=requested_model,
+                provider_name=provider_name
+            ):
+                # Sanitize request messages if enabled
+                if self.config_manager.should_sanitize_messages:
+                    messages = request_body.get("messages", [])
+                    if messages:
+                        original_count = len(messages)
+                        sanitized_messages = MessageSanitizer.sanitize_messages(messages, enabled=True)
+                        request_body["messages"] = sanitized_messages
+                        
+                        if len(sanitized_messages) != original_count:
+                            logger.info(
+                                f"Sanitized {original_count} messages to {len(sanitized_messages)}",
+                                request_id=request_id,
+                                user_id=user_id
+                            )
+                
+                response_data = await provider_instance.chat_completions(request_body, provider_model_name, model_config)
+                
+                # DEBUG логирование ответа от провайдера
+                if isinstance(response_data, StreamingResponse):
+                    logger.debug_data(
+                        title="Streaming Response Started",
+                        data={
+                            "streaming": True,
+                            "model": requested_model,
+                            "request_id": request_id
+                        },
+                        request_id=request_id,
+                        component="chat_service",
+                        data_flow="from_provider"
+                    )
                     
-                    if len(sanitized_messages) != original_count or any(
-                        len(sanitized_msg) != len(original_msg)
-                        for sanitized_msg, original_msg in zip(sanitized_messages, messages)
-                    ):
-                        logger.info(f"Sanitized {original_count} request messages", extra={
-                            "request_id": request_id,
-                            "user_id": user_id,
-                            "sanitization": {
-                                "original_messages_count": original_count,
-                                "sanitized_messages_count": len(sanitized_messages),
-                                "enabled": True
-                            }
-                        })
-            
-            response_data = await provider_instance.chat_completions(request_body, provider_model_name, model_config)
-            
-            # DEBUG логирование ответа от провайдера
-            if isinstance(response_data, StreamingResponse):
-                # Для стриминга не логируем первый chunk, чтобы не "съедать" его
-                # Вместо этого логируем метаданные запроса
-                DebugLogger.log_data_flow(
-                    logger=logger,
-                    title="DEBUG: Streaming Response Started",
-                    data={
-                        "streaming": True,
-                        "model": requested_model,
-                        "request_id": request_id
-                    },
-                    data_flow="from_provider",
-                    component="chat_service",
-                    request_id=request_id
-                )
-            else:
-                # Для нестриминговых ответов логируем полный JSON
-                DebugLogger.log_data_flow(
-                    logger=logger,
-                    title="DEBUG: Chat Completion Response JSON",
-                    data=response_data,
-                    data_flow="from_provider",
-                    component="chat_service",
-                    request_id=request_id
-                )
-            
-            if isinstance(response_data, StreamingResponse):
-                # For streaming, use stream processor with optional sanitization
-                StreamingLogger.log_streaming_start(
-                    logger=logger,
-                    operation="streaming response",
-                    request_id=request_id,
-                    user_id=user_id,
-                    model_id=requested_model,
-                    additional_data={
-                        "sanitization_enabled": self.stream_processor.should_sanitize
-                    }
-                )
-                
-                return StreamingResponse(
-                    self.stream_processor.process_stream(
-                        response_data.body_iterator, requested_model, request_id, user_id
-                    ),
-                    media_type=response_data.media_type
-                )
-            else:
-                # For non-streaming, return response exactly as received from provider
-                RequestLogger.log_response(
-                    logger=logger,
-                    operation="non-streaming response",
-                    request_id=request_id,
-                    user_id=user_id,
-                    model_id=requested_model,
-                    response_data=response_data,
-                    additional_data={
-                        "sanitization_not_applicable": True
-                    }
-                )
-                
-                return JSONResponse(content=response_data)
+                    return StreamingResponse(
+                        self.stream_processor.process_stream(
+                            response_data.body_iterator, requested_model, request_id, user_id
+                        ),
+                        media_type=response_data.media_type
+                    )
+                else:
+                    # Для нестриминговых ответов логируем полный JSON
+                    logger.debug_data(
+                        title="Chat Completion Response JSON",
+                        data=response_data,
+                        request_id=request_id,
+                        component="chat_service",
+                        data_flow="from_provider"
+                    )
+                    
+                    return JSONResponse(content=response_data)
             
         except HTTPException as e:
             # Re-raise HTTPExceptions from our error handler (already logged)

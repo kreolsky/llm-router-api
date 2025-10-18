@@ -6,7 +6,7 @@ from ..core.config_manager import ConfigManager
 from ..services.model_service import ModelService
 from ..providers.openai import OpenAICompatibleProvider
 from ..core.error_handling import ErrorHandler, ErrorContext
-from ..core.logging import logger, RequestLogger, DebugLogger, PerformanceLogger
+from ..core.logging import logger  # Using the simplified universal Logger
 
 class TranscriptionService:
     def __init__(self, config_manager: ConfigManager, client: httpx.AsyncClient, model_service: ModelService):
@@ -85,13 +85,12 @@ class TranscriptionService:
             )
 
             # DEBUG логирование ответа
-            DebugLogger.log_data_flow(
-                logger=logger,
-                title="DEBUG: Transcription Response JSON",
+            logger.debug_data(
+                title="Transcription Response JSON",
                 data=response,
-                data_flow="from_provider",
+                request_id="unknown",
                 component="transcription_service",
-                request_id="unknown"
+                data_flow="from_provider"
             )
 
             return response
@@ -113,9 +112,8 @@ class TranscriptionService:
         )
         
         # DEBUG логирование параметров запроса
-        DebugLogger.log_data_flow(
-            logger=logger,
-            title="DEBUG: Transcription Request Parameters",
+        logger.debug_data(
+            title="Transcription Request Parameters",
             data={
                 "model_id": model_id,
                 "response_format": response_format,
@@ -126,9 +124,9 @@ class TranscriptionService:
                 "content_type": audio_file.content_type,
                 "file_size": len(audio_data) if audio_data else 0
             },
-            data_flow="incoming",
+            request_id="unknown",  # request_id may not be available here
             component="transcription_service",
-            request_id="unknown"  # request_id may not be available here
+            data_flow="incoming"
         )
         
         # Если модель не указана, проксируем запрос как есть
@@ -225,13 +223,12 @@ class TranscriptionService:
             )
 
             # DEBUG логирование ответа
-            DebugLogger.log_data_flow(
-                logger=logger,
-                title="DEBUG: Transcription Proxy Response JSON",
+            logger.debug_data(
+                title="Transcription Proxy Response JSON",
                 data=response,
-                data_flow="from_provider",
+                request_id="unknown",
                 component="transcription_service",
-                request_id="unknown"
+                data_flow="from_provider"
             )
 
             return response

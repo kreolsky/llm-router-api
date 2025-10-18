@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 
 from ..utils.deep_merge import deep_merge
 from ..core.exceptions import ProviderAPIError, ProviderNetworkError, ProviderStreamError # Import custom exceptions
-from ..core.logging import logger, DebugLogger
+from ..core.logging import logger
 
 
 def retry_on_rate_limit(max_retries: int = 3, base_delay: float = 1.0, max_delay: float = 30.0):
@@ -83,16 +83,17 @@ class BaseProvider:
     async def _stream_request(self, client: httpx.AsyncClient, url_path: str, request_body: Dict[str, Any]) -> StreamingResponse:
         """Stream request with optimized timeouts for streaming"""
         # DEBUG логирование запроса к провайдеру
-        DebugLogger.log_provider_request(
-            logger=logger,
-            provider_name="base",
-            url=f"{self.base_url}{url_path}",
-            headers=self.headers,
-            request_body=request_body,
-            request_id=request_body.get("request_id", "unknown"),
-            additional_data={
+        logger.debug_data(
+            title="Base Provider Request",
+            data={
+                "url": f"{self.base_url}{url_path}",
+                "headers": self.headers,
+                "request_body": request_body,
                 "component": "base_provider"
-            }
+            },
+            request_id=request_body.get("request_id", "unknown"),
+            component="base_provider",
+            data_flow="to_provider"
         )
         
         # Optimized timeout for streaming:
@@ -114,16 +115,15 @@ class BaseProvider:
                                      timeout=stream_timeout) as response:
               
               # DEBUG логирование заголовков ответа
-              DebugLogger.log_data_flow(
-                  logger=logger,
-                  title="DEBUG: Provider Response Headers",
+              logger.debug_data(
+                  title="Provider Response Headers",
                   data={
                       "status_code": response.status_code,
                       "headers": dict(response.headers)
                   },
-                  data_flow="from_provider",
+                  request_id=request_body.get("request_id", "unknown"),
                   component="base_provider",
-                  request_id=request_body.get("request_id", "unknown")
+                  data_flow="from_provider"
               )
               
               try:
