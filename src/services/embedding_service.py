@@ -1,5 +1,4 @@
 import httpx
-import logging
 from typing import Dict, Any, Tuple
 
 from fastapi import HTTPException, status, Request
@@ -7,7 +6,7 @@ from fastapi.responses import JSONResponse
 
 from ..core.config_manager import ConfigManager
 from ..providers import get_provider_instance
-from ..core.logging import logger, std_logger, RequestLogger, DebugLogger
+from ..core.logging import logger, RequestLogger, DebugLogger
 from ..core.error_handling import ErrorHandler, ErrorContext
 
 class EmbeddingService:
@@ -34,7 +33,7 @@ class EmbeddingService:
 
         # DEBUG логирование полного запроса
         DebugLogger.log_data_flow(
-            logger=std_logger,
+            logger=logger,
             title="DEBUG: Embedding Request JSON",
             data=request_body,
             data_flow="incoming",
@@ -43,7 +42,7 @@ class EmbeddingService:
         )
 
         RequestLogger.log_request(
-            logger=std_logger,
+            logger=logger,
             operation="Embedding Creation Request",
             request_id=request_id,
             user_id=user_id,
@@ -84,7 +83,7 @@ class EmbeddingService:
             
             # DEBUG логирование ответа от провайдера
             DebugLogger.log_data_flow(
-                logger=std_logger,
+                logger=logger,
                 title="DEBUG: Embedding Response JSON",
                 data=response_data,
                 data_flow="from_provider",
@@ -94,7 +93,7 @@ class EmbeddingService:
             
             # Log the response
             RequestLogger.log_response(
-                logger=std_logger,
+                logger=logger,
                 operation="Embedding Creation Response",
                 request_id=request_id,
                 user_id=user_id,

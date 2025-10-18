@@ -10,6 +10,7 @@ import httpx
 import time
 import json
 import statistics
+import logging
 from typing import List, Dict, Any
 
 # Тестовая конфигурация
@@ -24,23 +25,27 @@ YELLOW = "\033[93m"
 BLUE = "\033[94m"
 RESET = "\033[0m"
 
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 
 def print_test(name: str):
-    print(f"\n{BLUE}{'='*60}{RESET}")
-    print(f"{BLUE}ТЕСТ: {name}{RESET}")
-    print(f"{BLUE}{'='*60}{RESET}")
+    logger.info(f"\n{BLUE}{'='*60}{RESET}")
+    logger.info(f"{BLUE}ТЕСТ: {name}{RESET}")
+    logger.info(f"{BLUE}{'='*60}{RESET}")
 
 
 def print_success(msg: str):
-    print(f"{GREEN}✓ {msg}{RESET}")
+    logger.info(f"{GREEN}✓ {msg}{RESET}")
 
 
 def print_error(msg: str):
-    print(f"{RED}✗ {msg}{RESET}")
+    logger.error(f"{RED}✗ {msg}{RESET}")
 
 
 def print_warning(msg: str):
-    print(f"{YELLOW}⚠ {msg}{RESET}")
+    logger.warning(f"{YELLOW}⚠ {msg}{RESET}")
 
 
 class TTFTTester:
@@ -166,7 +171,7 @@ class TTFTTester:
         results = []
         
         for test_case in test_cases:
-            print(f"\n📊 Тест: {test_case['name']}")
+            logger.info(f"\n📊 Тест: {test_case['name']}")
             result = await self.measure_single_ttft(test_case['payload'], test_case['name'])
             
             if "error" in result:
@@ -186,10 +191,10 @@ class TTFTTester:
             min_ttft = min(ttft_values)
             max_ttft = max(ttft_values)
             
-            print(f"\n📈 Статистика TTFT:")
-            print(f"   Среднее: {avg_ttft:.2f}ms")
-            print(f"   Минимум: {min_ttft:.2f}ms")
-            print(f"   Максимум: {max_ttft:.2f}ms")
+            logger.info(f"\n📈 Статистика TTFT:")
+            logger.info(f"   Среднее: {avg_ttft:.2f}ms")
+            logger.info(f"   Минимум: {min_ttft:.2f}ms")
+            logger.info(f"   Максимум: {max_ttft:.2f}ms")
             
             return {
                 "success": True,
@@ -240,9 +245,9 @@ class TTFTTester:
             ttft_values = [r['ttft_ms'] for r in successful_results]
             avg_ttft = statistics.mean(ttft_values)
             
-            print(f"\n📊 Конкурентная статистика:")
-            print(f"   Успешных запросов: {len(successful_results)}/{concurrent_requests}")
-            print(f"   Среднее TTFT: {avg_ttft:.2f}ms")
+            logger.info(f"\n📊 Конкурентная статистика:")
+            logger.info(f"   Успешных запросов: {len(successful_results)}/{concurrent_requests}")
+            logger.info(f"   Среднее TTFT: {avg_ttft:.2f}ms")
             
             return {
                 "success": True,
@@ -270,14 +275,14 @@ class TTFTTester:
         results = []
         
         for i in range(iterations):
-            print(f"  Итерация {i+1}/{iterations}...")
+            logger.info(f"  Итерация {i+1}/{iterations}...")
             result = await self.measure_single_ttft(payload, f"Стабильность {i+1}")
             
             if "error" in result:
                 print_error(f"Ошибка в итерации {i+1}: {result['error']}")
             else:
                 results.append(result['ttft_ms'])
-                print(f"    TTFT: {result['ttft_ms']:.2f}ms")
+                logger.info(f"    TTFT: {result['ttft_ms']:.2f}ms")
         
         if results:
             avg_ttft = statistics.mean(results)
@@ -285,12 +290,12 @@ class TTFTTester:
             min_ttft = min(results)
             max_ttft = max(results)
             
-            print(f"\n📈 Статистика стабильности:")
-            print(f"   Среднее: {avg_ttft:.2f}ms")
-            print(f"   Стандартное отклонение: {stdev_ttft:.2f}ms")
-            print(f"   Минимум: {min_ttft:.2f}ms")
-            print(f"   Максимум: {max_ttft:.2f}ms")
-            print(f"   Коэффициент вариации: {(stdev_ttft/avg_ttft)*100:.1f}%")
+            logger.info(f"\n📈 Статистика стабильности:")
+            logger.info(f"   Среднее: {avg_ttft:.2f}ms")
+            logger.info(f"   Стандартное отклонение: {stdev_ttft:.2f}ms")
+            logger.info(f"   Минимум: {min_ttft:.2f}ms")
+            logger.info(f"   Максимум: {max_ttft:.2f}ms")
+            logger.info(f"   Коэффициент вариации: {(stdev_ttft/avg_ttft)*100:.1f}%")
             
             return {
                 "success": True,
@@ -337,67 +342,67 @@ class TTFTTester:
 
 def analyze_ttft_results(results: Dict[str, Any]) -> None:
     """Анализ результатов TTFT"""
-    print(f"\n{BLUE}{'='*60}{RESET}")
-    print(f"{BLUE}АНАЛИЗ РЕЗУЛЬТАТОВ TTFT{RESET}")
-    print(f"{BLUE}{'='*60}{RESET}")
+    logger.info(f"\n{BLUE}{'='*60}{RESET}")
+    logger.info(f"{BLUE}АНАЛИЗ РЕЗУЛЬТАТОВ TTFT{RESET}")
+    logger.info(f"{BLUE}{'='*60}{RESET}")
     
     # Базовый тест
     if "basic" in results and results["basic"]["success"]:
         basic = results["basic"]["result"]
-        print(f"🎯 Базовый TTFT: {basic['ttft_ms']:.2f}ms")
+        logger.info(f"🎯 Базовый TTFT: {basic['ttft_ms']:.2f}ms")
         
         # Оценка качества
         if basic['ttft_ms'] < 1000:
-            print(f"{GREEN}✓ Отличный TTFT (< 1s){RESET}")
+            logger.info(f"{GREEN}✓ Отличный TTFT (< 1s){RESET}")
         elif basic['ttft_ms'] < 2000:
-            print(f"{YELLOW}⚠️  Хороший TTFT (1-2s){RESET}")
+            logger.info(f"{YELLOW}⚠️  Хороший TTFT (1-2s){RESET}")
         else:
-            print(f"{RED}✗ Медленный TTFT (> 2s){RESET}")
+            logger.info(f"{RED}✗ Медленный TTFT (> 2s){RESET}")
     
     # Сравнение запросов
     if "comparison" in results and results["comparison"]["success"]:
         comparison = results["comparison"]
         stats = comparison["statistics"]
         
-        print(f"\n📊 Сравнение типов запросов:")
-        print(f"   Среднее TTFT: {stats['avg_ttft']:.2f}ms")
-        print(f"   Лучший результат: {stats['min_ttft']:.2f}ms")
-        print(f"   Худший результат: {stats['max_ttft']:.2f}ms")
+        logger.info(f"\n📊 Сравнение типов запросов:")
+        logger.info(f"   Среднее TTFT: {stats['avg_ttft']:.2f}ms")
+        logger.info(f"   Лучший результат: {stats['min_ttft']:.2f}ms")
+        logger.info(f"   Худший результат: {stats['max_ttft']:.2f}ms")
         
         # Вывод результатов по каждому типу
         for result in comparison["results"]:
             if "error" not in result:
-                print(f"   {result['test_name']}: {result['ttft_ms']:.2f}ms")
+                logger.info(f"   {result['test_name']}: {result['ttft_ms']:.2f}ms")
     
     # Конкурентные запросы
     if "concurrent" in results and results["concurrent"]["success"]:
         concurrent = results["concurrent"]
         stats = concurrent["concurrent_stats"]
         
-        print(f"\n🔄 Конкурентные запросы:")
-        print(f"   Успешность: {stats['success_rate']*100:.1f}%")
-        print(f"   Среднее TTFT: {stats['avg_ttft']:.2f}ms")
+        logger.info(f"\n🔄 Конкурентные запросы:")
+        logger.info(f"   Успешность: {stats['success_rate']*100:.1f}%")
+        logger.info(f"   Среднее TTFT: {stats['avg_ttft']:.2f}ms")
     
     # Стабильность
     if "stability" in results and results["stability"]["success"]:
         stability = results["stability"]
         stats = stability["stability_stats"]
         
-        print(f"\n📈 Стабильность:")
-        print(f"   Среднее TTFT: {stats['avg_ttft']:.2f}ms")
-        print(f"   Стандартное отклонение: {stats['stdev_ttft']:.2f}ms")
-        print(f"   Коэффициент вариации: {stats['coefficient_of_variation']:.1f}%")
+        logger.info(f"\n📈 Стабильность:")
+        logger.info(f"   Среднее TTFT: {stats['avg_ttft']:.2f}ms")
+        logger.info(f"   Стандартное отклонение: {stats['stdev_ttft']:.2f}ms")
+        logger.info(f"   Коэффициент вариации: {stats['coefficient_of_variation']:.1f}%")
         
         # Оценка стабильности
         if stats['coefficient_of_variation'] < 20:
-            print(f"{GREEN}✓ Высокая стабильность (< 20% вариации){RESET}")
+            logger.info(f"{GREEN}✓ Высокая стабильность (< 20% вариации){RESET}")
         elif stats['coefficient_of_variation'] < 50:
-            print(f"{YELLOW}⚠️  Удовлетворительная стабильность (20-50%){RESET}")
+            logger.info(f"{YELLOW}⚠️  Удовлетворительная стабильность (20-50%){RESET}")
         else:
-            print(f"{RED}✗ Низкая стабильность (> 50%){RESET}")
+            logger.info(f"{RED}✗ Низкая стабильность (> 50%){RESET}")
     
     # Общие рекомендации
-    print(f"\n💡 Рекомендации:")
+    logger.info(f"\n💡 Рекомендации:")
     
     # Проверяем, есть ли данные для анализа
     has_data = any(
@@ -413,39 +418,39 @@ def analyze_ttft_results(results: Dict[str, Any]) -> None:
         
         if basic_ttft:
             if basic_ttft > 3000:
-                print(f"   🔧 TTFT слишком высокий ({basic_ttft:.0f}ms). Рекомендуется:")
-                print(f"      - Проверить сетевую задержку")
-                print(f"      - Оптимизировать буферизацию")
-                print(f"      - Рассмотреть использование CDN")
+                logger.info(f"   🔧 TTFT слишком высокий ({basic_ttft:.0f}ms). Рекомендуется:")
+                logger.info(f"      - Проверить сетевую задержку")
+                logger.info(f"      - Оптимизировать буферизацию")
+                logger.info(f"      - Рассмотреть использование CDN")
             elif basic_ttft > 1500:
-                print(f"   ⚠️  TTFT в пределах нормы ({basic_ttft:.0f}ms), но может быть улучшен")
+                logger.info(f"   ⚠️  TTFT в пределах нормы ({basic_ttft:.0f}ms), но может быть улучшен")
             else:
-                print(f"   ✓ TTFT в хорошем диапазоне ({basic_ttft:.0f}ms)")
+                logger.info(f"   ✓ TTFT в хорошем диапазоне ({basic_ttft:.0f}ms)")
         
         # Проверяем стабильность
         if "stability" in results and results["stability"]["success"]:
             cv = results["stability"]["stability_stats"]["coefficient_of_variation"]
             if cv > 50:
-                print(f"   🔧 Низкая стабильность TTFT. Рекомендуется:")
-                print(f"      - Проверить нагрузку на сервер")
-                print(f"      - Оптимизировать обработку запросов")
-                print(f"      - Рассмотреть кеширование")
+                logger.info(f"   🔧 Низкая стабильность TTFT. Рекомендуется:")
+                logger.info(f"      - Проверить нагрузку на сервер")
+                logger.info(f"      - Оптимизировать обработку запросов")
+                logger.info(f"      - Рассмотреть кеширование")
         
-        print(f"   📊 Для мониторинга TTFT рекомендуется:")
-        print(f"      - Внедрить логирование TTFT")
-        print(f"      - Установить пороги оповещения")
-        print(f"      - Регулярно анализировать тренды")
+        logger.info(f"   📊 Для мониторинга TTFT рекомендуется:")
+        logger.info(f"      - Внедрить логирование TTFT")
+        logger.info(f"      - Установить пороги оповещения")
+        logger.info(f"      - Регулярно анализировать тренды")
     else:
-        print(f"   ❌ Недостаточно данных для анализа")
+        logger.info(f"   ❌ Недостаточно данных для анализа")
 
 
 async def main():
     """Основная функция"""
-    print(f"{BLUE}{'='*60}{RESET}")
-    print(f"{BLUE}ИЗМЕРЕНИЕ TTFT (TIME TO FIRST TOKEN){RESET}")
-    print(f"{BLUE}{'='*60}{RESET}")
-    print(f"\nТестирование против: {BASE_URL}")
-    print(f"API Key: {API_KEY}")
+    logger.info(f"{BLUE}{'='*60}{RESET}")
+    logger.info(f"{BLUE}ИЗМЕРЕНИЕ TTFT (TIME TO FIRST TOKEN){RESET}")
+    logger.info(f"{BLUE}{'='*60}{RESET}")
+    logger.info(f"\nТестирование против: {BASE_URL}")
+    logger.info(f"API Key: {API_KEY}")
     
     tester = TTFTTester()
     
@@ -460,20 +465,20 @@ async def main():
         successful_tests = sum(1 for v in results.values() if v.get("success", False))
         total_tests = len(results)
         
-        print(f"\n{BLUE}{'='*60}{RESET}")
-        print(f"{BLUE}ИТОГОВЫЕ РЕЗУЛЬТАТЫ{RESET}")
-        print(f"{BLUE}{'='*60}{RESET}")
-        print(f"Успешных тестов: {successful_tests}/{total_tests}")
+        logger.info(f"\n{BLUE}{'='*60}{RESET}")
+        logger.info(f"{BLUE}ИТОГОВЫЕ РЕЗУЛЬТАТЫ{RESET}")
+        logger.info(f"{BLUE}{'='*60}{RESET}")
+        logger.info(f"Успешных тестов: {successful_tests}/{total_tests}")
         
         if successful_tests == total_tests:
-            print(f"{GREEN}✓ Все тесты TTFT завершены успешно!{RESET}\n")
+            logger.info(f"{GREEN}✓ Все тесты TTFT завершены успешно!{RESET}\n")
             return 0
         else:
-            print(f"{YELLOW}⚠️  Некоторые тесты завершились с ошибками.{RESET}\n")
+            logger.info(f"{YELLOW}⚠️  Некоторые тесты завершились с ошибками.{RESET}\n")
             return 1
             
     except Exception as e:
-        print(f"\n{RED}Фатальная ошибка: {e}{RESET}\n")
+        logger.error(f"\n{RED}Фатальная ошибка: {e}{RESET}\n")
         return 1
     
     finally:

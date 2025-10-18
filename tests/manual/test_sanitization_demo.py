@@ -7,16 +7,21 @@ import sys
 import os
 import json
 import asyncio
+import logging
 sys.path.append('.')
 
 from src.core.sanitizer import MessageSanitizer
 from src.services.chat_service.stream_processor import StreamProcessor
 from src.core.config_manager import ConfigManager
 
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 
 def demo_sanitization():
     """Демонстрация работы санитизации"""
-    print("🧪 Демонстрация санитизации стриминговых чанков\n")
+    logger.info("🧪 Демонстрация санитизации стриминговых чанков")
     
     # Пример загрязненного чанка от клиента
     contaminated_chunk = {
@@ -34,14 +39,14 @@ def demo_sanitization():
         }]
     }
     
-    print("📥 Оригинальный чанк:")
-    print(json.dumps(contaminated_chunk, indent=2))
+    logger.info("📥 Оригинальный чанк:")
+    logger.info(json.dumps(contaminated_chunk, indent=2))
     
     # Применяем санитизацию
     sanitized_chunk = MessageSanitizer.sanitize_stream_chunk(contaminated_chunk, enabled=True)
     
-    print("\n📤 Санитизированный чанк:")
-    print(json.dumps(sanitized_chunk, indent=2))
+    logger.info("📤 Санитизированный чанк:")
+    logger.info(json.dumps(sanitized_chunk, indent=2))
     
     # Показываем, что было удалено
     original_delta = contaminated_chunk["choices"][0]["delta"]
@@ -52,13 +57,13 @@ def demo_sanitization():
         if field not in sanitized_delta:
             removed_fields.append(field)
     
-    print(f"\n🗑️ Удаленные поля: {removed_fields}")
-    print(f"✅ Сохраненные поля: {list(sanitized_delta.keys())}")
+    logger.info(f"🗑️ Удаленные поля: {removed_fields}")
+    logger.info(f"✅ Сохраненные поля: {list(sanitized_delta.keys())}")
 
 
 def demo_stream_processing():
     """Демонстрация обработки стрима"""
-    print("\n🌊 Демонстрация обработки стрима\n")
+    logger.info("🌊 Демонстрация обработки стрима")
     
     # Создаем конфигурацию с включенной санитизацией
     os.environ["SANITIZE_MESSAGES"] = "true"
@@ -77,32 +82,32 @@ def demo_stream_processing():
         ]
         
         for chunk in chunks:
-            print(f"📥 Получен чанк: {chunk.decode('utf-8').strip()}")
+            logger.info(f"📥 Получен чанк: {chunk.decode('utf-8').strip()}")
             yield chunk
     
     # Обрабатываем стрим
-    print("🔄 Обработка стрима с санитизацией...")
+    logger.info("🔄 Обработка стрима с санитизацией...")
     
     async def process():
         chunk_count = 0
         async for chunk in processor.process_stream(mock_stream(), "test_model", "req_123", "user_123"):
             chunk_count += 1
-            print(f"📤 Отправлен чанк {chunk_count}: {chunk.decode('utf-8').strip()}")
+            logger.info(f"📤 Отправлен чанк {chunk_count}: {chunk.decode('utf-8').strip()}")
     
     asyncio.run(process())
     
     # Показываем статистику
     stats = processor.get_processing_stats()
-    print(f"\n📊 Статистика обработки:")
-    print(f"  Всего чанков: {stats['total_chunks_processed']}")
-    print(f"  Санитизировано: {stats['total_chunks_sanitized']}")
-    print(f"  Рatio санитизации: {stats['sanitization_ratio']:.2%}")
-    print(f"  Санитизация включена: {stats['sanitization_enabled']}")
+    logger.info("📊 Статистика обработки:")
+    logger.info(f"  Всего чанков: {stats['total_chunks_processed']}")
+    logger.info(f"  Санитизировано: {stats['total_chunks_sanitized']}")
+    logger.info(f"  Рatio санитизации: {stats['sanitization_ratio']:.2%}")
+    logger.info(f"  Санитизация включена: {stats['sanitization_enabled']}")
 
 
 def demo_provider_compatibility():
     """Демонстрация совместимости с провайдерами"""
-    print("\n🔌 Демонстрация совместимости с провайдерами\n")
+    logger.info("🔌 Демонстрация совместимости с провайдерами")
     
     # OpenRouter - строгий валидатор
     openrouter_chunk = {
@@ -116,11 +121,11 @@ def demo_provider_compatibility():
         }]
     }
     
-    print("🔴 OpenRouter (строгий валидатор):")
-    print("  До санитизации: содержит поля 'done' и '__internal__' → 400 Bad Request")
+    logger.info("🔴 OpenRouter (строгий валидатор):")
+    logger.info("  До санитизации: содержит поля 'done' и '__internal__' → 400 Bad Request")
     
     sanitized = MessageSanitizer.sanitize_stream_chunk(openrouter_chunk, enabled=True)
-    print("  После санитизации: только 'content' → Успешный запрос")
+    logger.info("  После санитизации: только 'content' → Успешный запрос")
     
     # Anthropic - более гибкий
     anthropic_chunk = {
@@ -135,11 +140,11 @@ def demo_provider_compatibility():
         }]
     }
     
-    print("\n🟡 Anthropic (гибкий, но лучше чистить):")
-    print("  До санитизации: содержит reasoning_content и служебные поля")
+    logger.info("🟡 Anthropic (гибкий, но лучше чистить):")
+    logger.info("  До санитизации: содержит reasoning_content и служебные поля")
     
     sanitized = MessageSanitizer.sanitize_stream_chunk(anthropic_chunk, enabled=True)
-    print("  После санитизации: reasoning_content сохранен, служебные поля удалены")
+    logger.info("  После санитизации: reasoning_content сохранен, служебные поля удалены")
     
     # Ollama - толерантный
     ollama_chunk = {
@@ -153,30 +158,30 @@ def demo_provider_compatibility():
         }]
     }
     
-    print("\n🟢 Ollama (толерантный):")
-    print("  До санитизации: содержит done и custom_field")
+    logger.info("🟢 Ollama (толерантный):")
+    logger.info("  До санитизации: содержит done и custom_field")
     
     sanitized = MessageSanitizer.sanitize_stream_chunk(ollama_chunk, enabled=True)
-    print("  После санитизации: done удален, custom_field сохранен")
+    logger.info("  После санитизации: done удален, custom_field сохранен")
 
 
 def main():
     """Запуск всех демонстраций"""
-    print("🎯 Демонстрация санитизации сообщений для потоковой выдачи")
-    print("=" * 60)
+    logger.info("🎯 Демонстрация санитизации сообщений для потоковой выдачи")
+    logger.info("=" * 60)
     
     demo_sanitization()
     demo_stream_processing()
     demo_provider_compatibility()
     
-    print("\n" + "=" * 60)
-    print("✅ Демонстрация завершена!")
-    print("\n💡 Ключевые преимущества:")
-    print("  • Совместимость со строгими провайдерами (OpenRouter)")
-    print("  • Сохранение полезного контента (content, reasoning_content)")
-    print("  • Управление через флаг SANITIZE_MESSAGES")
-    print("  • Прозрачность для tolerant провайдеров")
-    print("  • Минимальное влияние на производительность")
+    logger.info("=" * 60)
+    logger.info("✅ Демонстрация завершена!")
+    logger.info("💡 Ключевые преимущества:")
+    logger.info("  • Совместимость со строгими провайдерами (OpenRouter)")
+    logger.info("  • Сохранение полезного контента (content, reasoning_content)")
+    logger.info("  • Управление через флаг SANITIZE_MESSAGES")
+    logger.info("  • Прозрачность для tolerant провайдеров")
+    logger.info("  • Минимальное влияние на производительность")
 
 
 if __name__ == "__main__":

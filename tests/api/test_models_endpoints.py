@@ -4,7 +4,10 @@ Model enumeration and access control tests for NNP LLM Router API.
 
 import pytest
 import httpx
+import logging
 from tests.test_utils import TestTimer, ResponseValidator
+
+logger = logging.getLogger(__name__)
 
 
 class TestModelsEndpoints:
@@ -89,7 +92,7 @@ class TestModelsEndpoints:
         for model_id in restricted_models:
             if model_id in model_ids:
                 # This might be expected based on configuration, just log it
-                print(f"Note: Restricted user has access to {model_id}")
+                logger.info(f"Note: Restricted user has access to {model_id}")
     
     @pytest.mark.asyncio
     async def test_list_models_cir_online_access(
@@ -121,9 +124,9 @@ class TestModelsEndpoints:
         
         for model_id in expected_models:
             if model_id in model_ids:
-                print(f"✓ Found expected model: {model_id}")
+                logger.info(f"✓ Found expected model: {model_id}")
             else:
-                print(f"⚠ Expected model not found: {model_id}")
+                logger.warning(f"⚠ Expected model not found: {model_id}")
     
     @pytest.mark.asyncio
     async def test_retrieve_visible_model(
@@ -481,7 +484,7 @@ class TestModelPermissions:
                 f"Unexpected status code {response.status_code} for {model_id}"
             
             if response.status_code != 200:
-                print(f"✓ Restricted user correctly denied access to {model_id}")
+                logger.info(f"✓ Restricted user correctly denied access to {model_id}")
     
     @pytest.mark.asyncio
     async def test_hidden_model_visibility(

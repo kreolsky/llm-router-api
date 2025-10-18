@@ -9,6 +9,7 @@ import sys
 import httpx
 import time
 import json
+import logging
 from datetime import datetime
 
 # Test configuration
@@ -24,22 +25,26 @@ BLUE = "\033[94m"
 CYAN = "\033[96m"
 RESET = "\033[0m"
 
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 def print_test(name: str):
-    print(f"\n{BLUE}{'='*80}{RESET}")
-    print(f"{BLUE}ТЕСТ: {name}{RESET}")
-    print(f"{BLUE}{'='*80}{RESET}")
+    logger.info(f"\n{BLUE}{'='*80}{RESET}")
+    logger.info(f"{BLUE}ТЕСТ: {name}{RESET}")
+    logger.info(f"{BLUE}{'='*80}{RESET}")
 
 def print_success(msg: str):
-    print(f"{GREEN}✓ {msg}{RESET}")
+    logger.info(f"{GREEN}✓ {msg}{RESET}")
 
 def print_error(msg: str):
-    print(f"{RED}✗ {msg}{RESET}")
+    logger.error(f"{RED}✗ {msg}{RESET}")
 
 def print_warning(msg: str):
-    print(f"{YELLOW}⚠ {msg}{RESET}")
+    logger.warning(f"{YELLOW}⚠ {msg}{RESET}")
 
 def print_info(msg: str):
-    print(f"{CYAN}ℹ {msg}{RESET}")
+    logger.info(f"{CYAN}ℹ {msg}{RESET}")
 
 async def test_large_response_detailed(client: httpx.AsyncClient):
     """Тест большого ответа с подробным логированием"""
@@ -229,11 +234,11 @@ async def test_multiple_requests(client: httpx.AsyncClient):
     return success_count == len(requests)
 
 async def main():
-    print(f"\n{BLUE}{'='*80}{RESET}")
-    print(f"{BLUE}ДЕТАЛЬНЫЙ ТЕСТ БОЛЬШИХ ОТВЕТОВ{RESET}")
-    print(f"{BLUE}{'='*80}{RESET}")
-    print(f"\nТестирование против: {BASE_URL}")
-    print(f"API Key: {API_KEY}")
+    logger.info(f"\n{BLUE}{'='*80}{RESET}")
+    logger.info(f"{BLUE}ДЕТАЛЬНЫЙ ТЕСТ БОЛЬШИХ ОТВЕТОВ{RESET}")
+    logger.info(f"{BLUE}{'='*80}{RESET}")
+    logger.info(f"\nТестирование против: {BASE_URL}")
+    logger.info(f"API Key: {API_KEY}")
     
     async with httpx.AsyncClient() as client:
         results = {}
@@ -243,24 +248,24 @@ async def main():
         results["Множественные запросы"] = await test_multiple_requests(client)
         
         # Сводка
-        print(f"\n{BLUE}{'='*80}{RESET}")
-        print(f"{BLUE}РЕЗУЛЬТАТЫ ТЕСТИРОВАНИЯ{RESET}")
-        print(f"{BLUE}{'='*80}{RESET}")
+        logger.info(f"\n{BLUE}{'='*80}{RESET}")
+        logger.info(f"{BLUE}РЕЗУЛЬТАТЫ ТЕСТИРОВАНИЯ{RESET}")
+        logger.info(f"{BLUE}{'='*80}{RESET}")
         
         passed = sum(1 for v in results.values() if v)
         total = len(results)
         
         for test_name, result in results.items():
             status = f"{GREEN}PASS{RESET}" if result else f"{RED}FAIL{RESET}"
-            print(f"  {test_name:.<40} {status}")
+            logger.info(f"  {test_name:.<40} {status}")
         
-        print(f"\n{BLUE}Итог: {passed}/{total} тестов passed{RESET}")
+        logger.info(f"\n{BLUE}Итог: {passed}/{total} тестов passed{RESET}")
         
         if passed == total:
-            print(f"{GREEN}✓ Все тесты пройдены!{RESET}\n")
+            logger.info(f"{GREEN}✓ Все тесты пройдены!{RESET}\n")
             return 0
         else:
-            print(f"{RED}✗ Некоторые тесты не пройдены. Проверьте логи выше.{RESET}\n")
+            logger.info(f"{RED}✗ Некоторые тесты не пройдены. Проверьте логи выше.{RESET}\n")
             return 1
 
 if __name__ == "__main__":
@@ -268,8 +273,8 @@ if __name__ == "__main__":
         exit_code = asyncio.run(main())
         sys.exit(exit_code)
     except KeyboardInterrupt:
-        print(f"\n{YELLOW}Тесты прерваны пользователем{RESET}\n")
+        logger.info(f"\n{YELLOW}Тесты прерваны пользователем{RESET}\n")
         sys.exit(1)
     except Exception as e:
-        print(f"\n{RED}Фатальная ошибка: {e}{RESET}\n")
+        logger.error(f"\n{RED}Фатальная ошибка: {e}{RESET}\n")
         sys.exit(1)

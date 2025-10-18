@@ -9,6 +9,7 @@ import sys
 import httpx
 import json
 import time
+import logging
 from typing import List, Dict, Any
 
 # Тестовая конфигурация
@@ -23,23 +24,26 @@ YELLOW = "\033[93m"
 BLUE = "\033[94m"
 RESET = "\033[0m"
 
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 def print_test(name: str):
-    print(f"\n{BLUE}{'='*60}{RESET}")
-    print(f"{BLUE}ТЕСТ: {name}{RESET}")
-    print(f"{BLUE}{'='*60}{RESET}")
+    logger.info(f"\n{BLUE}{'='*60}{RESET}")
+    logger.info(f"{BLUE}ТЕСТ: {name}{RESET}")
+    logger.info(f"{BLUE}{'='*60}{RESET}")
 
 
 def print_success(msg: str):
-    print(f"{GREEN}✓ {msg}{RESET}")
+    logger.info(f"{GREEN}✓ {msg}{RESET}")
 
 
 def print_error(msg: str):
-    print(f"{RED}✗ {msg}{RESET}")
+    logger.error(f"{RED}✗ {msg}{RESET}")
 
 
 def print_warning(msg: str):
-    print(f"{YELLOW}⚠ {msg}{RESET}")
+    logger.warning(f"{YELLOW}⚠ {msg}{RESET}")
 
 
 class SmartBufferingTester:
@@ -631,11 +635,11 @@ class SmartBufferingTester:
 
 async def main():
     """Основная функция"""
-    print(f"{BLUE}{'='*60}{RESET}")
-    print(f"{BLUE}ТЕСТЫ УМНОЙ БУФЕРИЗАЦИИ{RESET}")
-    print(f"{BLUE}{'='*60}{RESET}")
-    print(f"\nТестирование против: {BASE_URL}")
-    print(f"API Key: {API_KEY}")
+    logger.info(f"{BLUE}{'='*60}{RESET}")
+    logger.info(f"{BLUE}ТЕСТЫ УМНОЙ БУФЕРИЗАЦИИ{RESET}")
+    logger.info(f"{BLUE}{'='*60}{RESET}")
+    logger.info(f"\nТестирование против: {BASE_URL}")
+    logger.info(f"API Key: {API_KEY}")
     
     tester = SmartBufferingTester()
     
@@ -644,28 +648,28 @@ async def main():
         results = await tester.test_risky_scenarios()
         
         # Вывод результатов
-        print(f"\n{BLUE}{'='*60}{RESET}")
-        print(f"{BLUE}РЕЗУЛЬТАТЫ ТЕСТИРОВАНИЯ{RESET}")
-        print(f"{BLUE}{'='*60}{RESET}")
+        logger.info(f"\n{BLUE}{'='*60}{RESET}")
+        logger.info(f"{BLUE}РЕЗУЛЬТАТЫ ТЕСТИРОВАНИЯ{RESET}")
+        logger.info(f"{BLUE}{'='*60}{RESET}")
         
         passed = sum(1 for v in results.values() if v)
         total = len(results)
         
         for test_name, result in results.items():
             status = f"{GREEN}PASS{RESET}" if result else f"{RED}FAIL{RESET}"
-            print(f"  {test_name:.<40} {status}")
+            logger.info(f"  {test_name:.<40} {status}")
         
-        print(f"\n{BLUE}Итог: {passed}/{total} тестов passed{RESET}")
+        logger.info(f"\n{BLUE}Итог: {passed}/{total} тестов passed{RESET}")
         
         if passed == total:
-            print(f"{GREEN}✓ Все тесты умной буферизации пройдены!{RESET}\n")
+            logger.info(f"{GREEN}✓ Все тесты умной буферизации пройдены!{RESET}\n")
             return 0
         else:
-            print(f"{RED}✗ Некоторые тесты не пройдены. Проверьте логи выше.{RESET}\n")
+            logger.info(f"{RED}✗ Некоторые тесты не пройдены. Проверьте логи выше.{RESET}\n")
             return 1
             
     except Exception as e:
-        print(f"\n{RED}Фатальная ошибка: {e}{RESET}\n")
+        logger.error(f"\n{RED}Фатальная ошибка: {e}{RESET}\n")
         return 1
     
     finally:

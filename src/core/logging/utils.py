@@ -10,7 +10,6 @@ import logging
 import time
 from typing import Dict, Any, Optional, Union, Callable
 from contextlib import contextmanager
-from .config import logger as std_logger
 
 
 class RequestLogger:
@@ -184,8 +183,18 @@ class DebugLogger:
             request_id: Request identifier
             additional_data: Additional data to include in log
         """
-        if not logger.isEnabledFor(logging.DEBUG):
-            return  # Skip entirely if debug is disabled
+        # Handle both raw logging.Logger and our Logger wrapper
+        if hasattr(logger, 'isEnabledFor'):
+            # Raw logging.Logger or mock with isEnabledFor
+            if not logger.isEnabledFor(logging.DEBUG):
+                return  # Skip entirely if debug is disabled
+        elif hasattr(logger, 'logger'):
+            # Our Logger wrapper - check the underlying logger
+            if not logger.logger.isEnabledFor(logging.DEBUG):
+                return  # Skip entirely if debug is disabled
+        else:
+            # Unknown logger type - assume debug is disabled for safety
+            return
         
         # Lazy evaluation of data if callable
         debug_data = data() if callable(data) else data
@@ -213,7 +222,17 @@ class DebugLogger:
         additional_data: Optional[Dict[str, Any]] = None
     ):
         """Log provider request for debugging."""
-        if not logger.isEnabledFor(logging.DEBUG):
+        # Handle both raw logging.Logger and our Logger wrapper
+        if hasattr(logger, 'isEnabledFor'):
+            # Raw logging.Logger or mock with isEnabledFor
+            if not logger.isEnabledFor(logging.DEBUG):
+                return
+        elif hasattr(logger, 'logger'):
+            # Our Logger wrapper - check the underlying logger
+            if not logger.logger.isEnabledFor(logging.DEBUG):
+                return
+        else:
+            # Unknown logger type - assume debug is disabled for safety
             return
         
         DebugLogger.log_data_flow(
@@ -239,7 +258,17 @@ class DebugLogger:
         additional_data: Optional[Dict[str, Any]] = None
     ):
         """Log provider response for debugging."""
-        if not logger.isEnabledFor(logging.DEBUG):
+        # Handle both raw logging.Logger and our Logger wrapper
+        if hasattr(logger, 'isEnabledFor'):
+            # Raw logging.Logger or mock with isEnabledFor
+            if not logger.isEnabledFor(logging.DEBUG):
+                return
+        elif hasattr(logger, 'logger'):
+            # Our Logger wrapper - check the underlying logger
+            if not logger.logger.isEnabledFor(logging.DEBUG):
+                return
+        else:
+            # Unknown logger type - assume debug is disabled for safety
             return
         
         DebugLogger.log_data_flow(
@@ -434,7 +463,17 @@ class StreamingLogger:
         chunk_number: int
     ):
         """Log a streaming chunk (debug level only)."""
-        if not logger.isEnabledFor(logging.DEBUG):
+        # Handle both raw logging.Logger and our Logger wrapper
+        if hasattr(logger, 'isEnabledFor'):
+            # Raw logging.Logger or mock with isEnabledFor
+            if not logger.isEnabledFor(logging.DEBUG):
+                return
+        elif hasattr(logger, 'logger'):
+            # Our Logger wrapper - check the underlying logger
+            if not logger.logger.isEnabledFor(logging.DEBUG):
+                return
+        else:
+            # Unknown logger type - assume debug is disabled for safety
             return
         
         log_extra = {

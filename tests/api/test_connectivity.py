@@ -6,7 +6,10 @@ import pytest
 import httpx
 import time
 import asyncio
+import logging
 from tests.test_utils import TestTimer, check_service_health
+
+logger = logging.getLogger(__name__)
 
 
 class TestConnectivity:
@@ -167,9 +170,9 @@ class TestConnectivity:
         first_request_duration = first_request_time - startup_time
         second_request_duration = second_request_time - first_request_time
         
-        # Log timing for monitoring (in real scenario, you'd log this)
-        print(f"First request time: {first_request_duration:.3f}s")
-        print(f"Second request time: {second_request_duration:.3f}s")
+        # Log timing for monitoring
+        logger.info(f"First request time: {first_request_duration:.3f}s")
+        logger.info(f"Second request time: {second_request_duration:.3f}s")
         
         # Second request should be faster (warm cache)
         if first_request_duration > 0.1:  # Only check if first request was slow

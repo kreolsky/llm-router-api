@@ -3,14 +3,13 @@ import os
 import json # Import json for parsing error responses
 import asyncio
 import time
-import logging
 from typing import Dict, Any, AsyncGenerator, Callable
 from functools import wraps
 from fastapi.responses import StreamingResponse, JSONResponse
 
 from ..utils.deep_merge import deep_merge
 from ..core.exceptions import ProviderAPIError, ProviderNetworkError, ProviderStreamError # Import custom exceptions
-from ..core.logging import std_logger
+from ..core.logging import logger, DebugLogger
 
 
 def retry_on_rate_limit(max_retries: int = 3, base_delay: float = 1.0, max_delay: float = 30.0):
@@ -46,7 +45,12 @@ def retry_on_rate_limit(max_retries: int = 3, base_delay: float = 1.0, max_delay
                                     # Если не число, пробуем разобрать как HTTP-дату
                                     pass
                         
-                        std_logger.warning(f"Rate limit exceeded, retrying in {delay}s (attempt {attempt + 1}/{max_retries})")
+                        logger.warning(f"Rate limit exceeded, retrying in {delay}s (attempt {attempt + 1}/{max_retries})", extra={
+                            "delay_seconds": delay,
+                            "attempt": attempt + 1,
+                            "max_retries": max_retries,
+                            "component": "base_provider"
+                        })
                         await asyncio.sleep(delay)
                         continue
                     else:
@@ -79,19 +83,17 @@ class BaseProvider:
     async def _stream_request(self, client: httpx.AsyncClient, url_path: str, request_body: Dict[str, Any]) -> StreamingResponse:
         """Stream request with optimized timeouts for streaming"""
         # DEBUG логирование запроса к провайдеру
-        if std_logger.isEnabledFor(logging.DEBUG):
-            std_logger.debug(
-                "DEBUG: Request to Provider",
-                extra={
-                    "debug_json_data": {
-                        "url": f"{self.base_url}{url_path}",
-                        "headers": self.headers,
-                        "request_body": request_body
-                    },
-                    "debug_data_flow": "to_provider",
-                    "debug_component": "base_provider"
-                }
-            )
+        DebugLogger.log_provider_request(
+            logger=logger,
+            provider_name="base",
+            url=f"{self.base_url}{url_path}",
+            headers=self.headers,
+            request_body=request_body,
+            request_id=request_body.get("request_id", "unknown"),
+            additional_data={
+                "component": "base_provider"
+            }
+        )
         
         # Optimized timeout for streaming:
         # - connect: 10s to establish connection
@@ -112,18 +114,17 @@ class BaseProvider:
                                      timeout=stream_timeout) as response:
               
               # DEBUG логирование заголовков ответа
-              if std_logger.isEnabledFor(logging.DEBUG):
-                  std_logger.debug(
-                      "DEBUG: Provider Response Headers",
-                      extra={
-                          "debug_json_data": {
-                              "status_code": response.status_code,
-                              "headers": dict(response.headers)
-                          },
-                          "debug_data_flow": "from_provider",
-                          "debug_component": "base_provider"
-                      }
-                  )
+              DebugLogger.log_data_flow(
+                  logger=logger,
+                  title="DEBUG: Provider Response Headers",
+                  data={
+                      "status_code": response.status_code,
+                      "headers": dict(response.headers)
+                  },
+                  data_flow="from_provider",
+                  component="base_provider",
+                  request_id=request_body.get("request_id", "unknown")
+              )
               
               try:
                   response.raise_for_status()

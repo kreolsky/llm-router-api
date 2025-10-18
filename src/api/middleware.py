@@ -1,11 +1,10 @@
 import time
 import os
 import json
-import logging
 from typing import Dict, Any
 from fastapi import Request, HTTPException, status
 from starlette.middleware.base import BaseHTTPMiddleware
-from ..core.logging import RequestLogger, DebugLogger, logger, std_logger
+from ..core.logging import RequestLogger, DebugLogger, logger
 
 class RequestLoggerMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
@@ -26,7 +25,7 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
         # Log incoming request using centralized utility
         user_id = request.state.project_name if hasattr(request.state, 'project_name') else "unknown"
         RequestLogger.log_request(
-            logger=std_logger,
+            logger=logger,
             operation="Incoming Request",
             request_id=request_id,
             user_id=user_id,
@@ -40,7 +39,7 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
         if request.method in ["POST", "PUT", "PATCH"]:
             # Use lazy evaluation with a callable to avoid unnecessary JSON parsing
             DebugLogger.log_data_flow(
-                logger=std_logger,
+                logger=logger,
                 title="DEBUG: Incoming Request JSON",
                 data=lambda: self._get_request_body(request),
                 data_flow="incoming",
@@ -61,7 +60,7 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
                 "http_status_code": e.status_code,
                 "user_id": user_id
             }
-            std_logger.error(
+            logger.error(
                 "Request processing failed with HTTPException",
                 extra=error_extra_data,
                 exc_info=True # Include stack trace for debugging
@@ -78,7 +77,7 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
                 "http_status_code": status.HTTP_500_INTERNAL_SERVER_ERROR,
                 "user_id": user_id
             }
-            std_logger.error(
+            logger.error(
                 "Request processing failed with unexpected error",
                 extra=error_extra_data,
                 exc_info=True
@@ -91,7 +90,7 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
         # Log outgoing response using centralized utility
         user_id = request.state.project_name if hasattr(request.state, 'project_name') else "unknown"
         RequestLogger.log_response(
-            logger=std_logger,
+            logger=logger,
             operation="Outgoing Response",
             request_id=request_id,
             user_id=user_id,
@@ -105,7 +104,7 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
         if hasattr(response, 'body') and response.body:
             # Use lazy evaluation with a callable to avoid unnecessary processing
             DebugLogger.log_data_flow(
-                logger=std_logger,
+                logger=logger,
                 title="DEBUG: Outgoing Response JSON",
                 data=lambda: self._get_response_body(response),
                 data_flow="outgoing",

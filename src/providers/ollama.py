@@ -7,7 +7,7 @@ from fastapi import HTTPException, status
 from .base import BaseProvider
 from ..utils.deep_merge import deep_merge
 from ..core.error_handling import ErrorHandler, ErrorContext
-from ..core.logging import DebugLogger, logger, std_logger
+from ..core.logging import DebugLogger, logger
 
 class OllamaProvider(BaseProvider):
     def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient):
@@ -41,7 +41,7 @@ class OllamaProvider(BaseProvider):
 
         # DEBUG логирование запроса к провайдеру
         DebugLogger.log_provider_request(
-            logger=std_logger,
+            logger=logger,
             provider_name="ollama",
             url=f"{self.base_url}/chat",
             headers=self.headers,
@@ -75,7 +75,7 @@ class OllamaProvider(BaseProvider):
                 
                 # DEBUG логирование ответа от провайдера
                 DebugLogger.log_provider_response(
-                    logger=std_logger,
+                    logger=logger,
                     provider_name="ollama",
                     response_data=response_json,
                     request_id=request_body.get("request_id", "unknown")
@@ -99,7 +99,7 @@ class OllamaProvider(BaseProvider):
 
         # DEBUG логирование запроса к провайдеру
         DebugLogger.log_provider_request(
-            logger=std_logger,
+            logger=logger,
             provider_name="ollama",
             url=f"{self.base_url}/embeddings",
             headers=self.headers,
@@ -129,7 +129,7 @@ class OllamaProvider(BaseProvider):
             
             # DEBUG логирование ответа от провайдера
             DebugLogger.log_provider_response(
-                logger=std_logger,
+                logger=logger,
                 provider_name="ollama",
                 response_data=response_json,
                 request_id=request_body.get("request_id", "unknown")

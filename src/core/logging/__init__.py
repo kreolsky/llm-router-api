@@ -5,7 +5,7 @@ This module provides centralized logging utilities to replace repetitive logging
 across the codebase while maintaining identical log output formats.
 """
 
-from .config import setup_logging, logger as std_logger
+from .config import setup_logging
 from .logger import default_app_logger as logger
 from .utils import RequestLogger, DebugLogger, PerformanceLogger, StreamingLogger
 from .logger import Logger
@@ -13,7 +13,6 @@ from .logger import Logger
 # Export main components for easy import
 __all__ = [
     'logger',
-    'std_logger',
     'setup_logging',
     'RequestLogger',
     'DebugLogger',

@@ -13,7 +13,7 @@ import json
 import time
 from typing import Dict, Any, AsyncGenerator, Optional
 
-from ...core.logging import logger
+from ...core.logging import logger, DebugLogger, PerformanceLogger, StreamingLogger
 from ...core.exceptions import ProviderStreamError, ProviderNetworkError
 
 
@@ -76,10 +76,15 @@ class StreamProcessor:
         
         try:
             should_sanitize = self.config_manager.should_sanitize_messages
-            logger.debug(f"Sanitization status: {should_sanitize}")
+            logger.debug(f"Sanitization status: {should_sanitize}", extra={
+                "sanitization_status": should_sanitize
+            })
             return should_sanitize
         except Exception as e:
-            logger.warning(f"Error determining sanitization status: {e}, defaulting to disabled")
+            logger.warning(f"Error determining sanitization status: {e}, defaulting to disabled", extra={
+                "error_message": str(e),
+                "error_type": "sanitization_status_error"
+            })
             return False
     
     async def process_stream(self,

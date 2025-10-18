@@ -1,14 +1,12 @@
 import httpx
-import logging
 from typing import Dict, Any
 from fastapi import HTTPException, status
 import io
 
 from .base import BaseProvider
 from ..utils.deep_merge import deep_merge
-from ..core.logging import logger, std_logger
+from ..core.logging import logger, DebugLogger
 from ..core.error_handling import ErrorHandler, ErrorContext
-from ..core.logging import DebugLogger
 
 class OpenAICompatibleProvider(BaseProvider):
     def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient):
@@ -29,7 +27,7 @@ class OpenAICompatibleProvider(BaseProvider):
 
         # DEBUG логирование запроса к провайдеру
         DebugLogger.log_provider_request(
-            logger=std_logger,
+            logger=logger,
             provider_name="openai",
             url=f"{self.base_url}/chat/completions",
             headers=self.headers,
@@ -65,7 +63,7 @@ class OpenAICompatibleProvider(BaseProvider):
                 
                 # DEBUG логирование ответа от провайдера
                 DebugLogger.log_provider_response(
-                    logger=std_logger,
+                    logger=logger,
                     provider_name="openai",
                     response_data=response_json,
                     request_id=request_body.get("request_id", "unknown")
@@ -137,7 +135,7 @@ class OpenAICompatibleProvider(BaseProvider):
             
             # DEBUG логирование ответа от провайдера
             DebugLogger.log_provider_response(
-                logger=std_logger,
+                logger=logger,
                 provider_name="openai",
                 response_data=response_json,
                 request_id="transcription_unknown"
@@ -177,7 +175,7 @@ class OpenAICompatibleProvider(BaseProvider):
             
             # DEBUG логирование ответа от провайдера
             DebugLogger.log_provider_response(
-                logger=std_logger,
+                logger=logger,
                 provider_name="openai",
                 response_data=response_json,
                 request_id=request_body.get("request_id", "unknown")

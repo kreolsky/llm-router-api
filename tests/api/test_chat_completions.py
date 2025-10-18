@@ -8,10 +8,13 @@ import httpx
 import json
 import time
 import asyncio
+import logging
 from tests.test_utils import (
     TestTimer, StreamingResponseParser, ResponseValidator,
     TestDataGenerator, calculate_ttft_metrics, assert_performance_thresholds
 )
+
+logger = logging.getLogger(__name__)
 
 
 class TestChatCompletions:
@@ -547,7 +550,7 @@ class TestChatCompletions:
         # Check if any were rate limited
         rate_limited = sum(1 for r in responses if r.status_code == 429)
         if rate_limited > 0:
-            print(f"Note: {rate_limited} requests were rate limited")
+            logger.info(f"Note: {rate_limited} requests were rate limited")
     
     @pytest.mark.asyncio
     async def test_streaming_format_detection(

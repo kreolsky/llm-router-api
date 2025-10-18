@@ -19,7 +19,6 @@ with complete transparent proxying.
 """
 
 import httpx
-import logging
 from typing import Dict, Any, Tuple
 from fastapi import HTTPException, status, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -27,10 +26,9 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from ...core.config_manager import ConfigManager
 from ...providers import get_provider_instance
 from ...services.model_service import ModelService
-from ...core.logging import logger, std_logger
+from ...core.logging import logger, RequestLogger, DebugLogger, StreamingLogger, PerformanceLogger
 from ...core.sanitizer import MessageSanitizer
 from ...core.error_handling import ErrorHandler, ErrorContext
-from ...core.logging import RequestLogger, DebugLogger, StreamingLogger
 from .stream_processor import StreamProcessor
 
 
@@ -125,7 +123,7 @@ class ChatService:
 
         # DEBUG логирование полного запроса
         DebugLogger.log_data_flow(
-            logger=std_logger,
+            logger=logger,
             title="DEBUG: Chat Completion Request JSON",
             data=request_body,
             data_flow="incoming",
@@ -135,7 +133,7 @@ class ChatService:
 
         # Логирование запроса
         RequestLogger.log_request(
-            logger=std_logger,
+            logger=logger,
             operation="Chat Completion Request",
             request_id=request_id,
             user_id=user_id,
@@ -209,7 +207,7 @@ class ChatService:
                 # Для стриминга не логируем первый chunk, чтобы не "съедать" его
                 # Вместо этого логируем метаданные запроса
                 DebugLogger.log_data_flow(
-                    logger=std_logger,
+                    logger=logger,
                     title="DEBUG: Streaming Response Started",
                     data={
                         "streaming": True,
@@ -223,7 +221,7 @@ class ChatService:
             else:
                 # Для нестриминговых ответов логируем полный JSON
                 DebugLogger.log_data_flow(
-                    logger=std_logger,
+                    logger=logger,
                     title="DEBUG: Chat Completion Response JSON",
                     data=response_data,
                     data_flow="from_provider",
@@ -234,7 +232,7 @@ class ChatService:
             if isinstance(response_data, StreamingResponse):
                 # For streaming, use stream processor with optional sanitization
                 StreamingLogger.log_streaming_start(
-                    logger=std_logger,
+                    logger=logger,
                     operation="streaming response",
                     request_id=request_id,
                     user_id=user_id,
@@ -253,7 +251,7 @@ class ChatService:
             else:
                 # For non-streaming, return response exactly as received from provider
                 RequestLogger.log_response(
-                    logger=std_logger,
+                    logger=logger,
                     operation="non-streaming response",
                     request_id=request_id,
                     user_id=user_id,

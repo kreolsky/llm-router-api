@@ -1,5 +1,13 @@
 import os
 import secrets
+import logging
+
+# Set up basic logging for this utility script
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 def generate_openrouter_key():
     # OpenRouter keys are typically sk-or-v1-<hex_string>
@@ -9,7 +17,7 @@ def generate_openrouter_key():
 
 if __name__ == "__main__":
     num_keys = 2
-    print(f"Generating {num_keys} OpenRouter-like keys:")
+    logger.info(f"Generating {num_keys} NNP AI Router keys:")
     for i in range(num_keys):
         key = generate_openrouter_key()
-        print(f"Key {i+1}: {key}")
+        logger.info(f"Key {i+1}: {key}")

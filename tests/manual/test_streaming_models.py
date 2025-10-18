@@ -8,6 +8,7 @@ import asyncio
 import sys
 import httpx
 import json
+import logging
 
 # Test configuration
 BASE_URL = "http://localhost:8777"
@@ -20,19 +21,23 @@ YELLOW = "\033[93m"
 BLUE = "\033[94m"
 RESET = "\033[0m"
 
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 def print_test(name: str):
-    print(f"\n{BLUE}{'='*60}{RESET}")
-    print(f"{BLUE}TEST: {name}{RESET}")
-    print(f"{BLUE}{'='*60}{RESET}")
+    logger.info(f"\n{BLUE}{'='*60}{RESET}")
+    logger.info(f"{BLUE}TEST: {name}{RESET}")
+    logger.info(f"{BLUE}{'='*60}{RESET}")
 
 def print_success(msg: str):
-    print(f"{GREEN}✓ {msg}{RESET}")
+    logger.info(f"{GREEN}✓ {msg}{RESET}")
 
 def print_error(msg: str):
-    print(f"{RED}✗ {msg}{RESET}")
+    logger.error(f"{RED}✗ {msg}{RESET}")
 
 def print_warning(msg: str):
-    print(f"{YELLOW}⚠ {msg}{RESET}")
+    logger.warning(f"{YELLOW}⚠ {msg}{RESET}")
 
 async def test_model_streaming(model_name: str, test_name: str):
     """Test streaming functionality for a specific model"""
@@ -61,8 +66,8 @@ async def test_model_streaming(model_name: str, test_name: str):
                 timeout=30.0
             ) as response:
                 if response.status_code != 200:
-                    print_error(f"HTTP {response.status_code}")
-                    print(f"Response: {response.text}")
+                    logger.error(f"HTTP {response.status_code}")
+                    logger.error(f"Response: {response.text}")
                     return False
                 
                 print_success(f"HTTP {response.status_code} - Connection established")
@@ -93,12 +98,12 @@ async def test_model_streaming(model_name: str, test_name: str):
                 if not has_error and chunks_received > 0:
                     print_success(f"Received {chunks_received} chunks")
                     print_success(f"Response length: {len(full_response)} chars")
-                    print(f"  Content: {full_response}")
+                    logger.info(f"  Content: {full_response}")
                     
                     # Check for content
                     if len(full_response) > 0:
                         print_success("Content received successfully ✓")
-                        print(f"  Average chunk size: {len(full_response) / chunks_received:.1f} chars per chunk")
+                        logger.info(f"  Average chunk size: {len(full_response) / chunks_received:.1f} chars per chunk")
                         return True
                     else:
                         print_error("No content received")
@@ -167,7 +172,7 @@ async def test_model_with_emoji(model_name: str, test_name: str):
                 if not has_error and chunks_received > 0:
                     print_success(f"Received {chunks_received} chunks")
                     print_success(f"Response length: {len(full_response)} chars")
-                    print(f"  Content: {full_response}")
+                    logger.info(f"  Content: {full_response}")
                     
                     # Check for emoji presence
                     if any(ord(c) > 127 for c in full_response):
@@ -175,7 +180,7 @@ async def test_model_with_emoji(model_name: str, test_name: str):
                     else:
                         print_warning("No Unicode characters detected")
                     
-                    print(f"  Average chunk size: {len(full_response) / chunks_received:.1f} chars per chunk")
+                    logger.info(f"  Average chunk size: {len(full_response) / chunks_received:.1f} chars per chunk")
                     return len(full_response) > 0
                 else:
                     print_error(f"Stream failed or no chunks received")
@@ -223,11 +228,11 @@ async def test_available_models():
         return False
 
 async def main():
-    print(f"\n{BLUE}{'='*60}{RESET}")
-    print(f"{BLUE}LLM Router - Streaming Test Suite{RESET}")
-    print(f"{BLUE}{'='*60}{RESET}")
-    print(f"\nTesting against: {BASE_URL}")
-    print(f"API Key: {API_KEY}")
+    logger.info(f"\n{BLUE}{'='*60}{RESET}")
+    logger.info(f"{BLUE}LLM Router - Streaming Test Suite{RESET}")
+    logger.info(f"{BLUE}{'='*60}{RESET}")
+    logger.info(f"\nTesting against: {BASE_URL}")
+    logger.info(f"API Key: {API_KEY}")
     
     async with httpx.AsyncClient() as client:
         results = {}
@@ -244,24 +249,24 @@ async def main():
         results["deepseek/chat - Emoji Test"] = await test_model_with_emoji("deepseek/chat", "Deepseek Chat Emoji")
         
         # Summary
-        print(f"\n{BLUE}{'='*60}{RESET}")
-        print(f"{BLUE}TEST SUMMARY{RESET}")
-        print(f"{BLUE}{'='*60}{RESET}")
+        logger.info(f"\n{BLUE}{'='*60}{RESET}")
+        logger.info(f"{BLUE}TEST SUMMARY{RESET}")
+        logger.info(f"{BLUE}{'='*60}{RESET}")
         
         passed = sum(1 for v in results.values() if v)
         total = len(results)
         
         for test_name, result in results.items():
             status = f"{GREEN}PASS{RESET}" if result else f"{RED}FAIL{RESET}"
-            print(f"  {test_name:.<50} {status}")
+            logger.info(f"  {test_name:.<50} {status}")
         
-        print(f"\n{BLUE}Total: {passed}/{total} tests passed{RESET}\n")
+        logger.info(f"\n{BLUE}Total: {passed}/{total} tests passed{RESET}\n")
         
         if passed == total:
-            print(f"{GREEN}✓ All tests passed! Streaming is working correctly.{RESET}\n")
+            logger.info(f"{GREEN}✓ All tests passed! Streaming is working correctly.{RESET}\n")
             return 0
         else:
-            print(f"{RED}✗ Some tests failed. Please check the output above.{RESET}\n")
+            logger.info(f"{RED}✗ Some tests failed. Please check the output above.{RESET}\n")
             return 1
 
 if __name__ == "__main__":
@@ -269,8 +274,8 @@ if __name__ == "__main__":
         exit_code = asyncio.run(main())
         sys.exit(exit_code)
     except KeyboardInterrupt:
-        print(f"\n{YELLOW}Tests interrupted by user{RESET}\n")
+        logger.info(f"\n{YELLOW}Tests interrupted by user{RESET}\n")
         sys.exit(1)
     except Exception as e:
-        print(f"\n{RED}Fatal error: {e}{RESET}\n")
+        logger.error(f"\n{RED}Fatal error: {e}{RESET}\n")
         sys.exit(1)

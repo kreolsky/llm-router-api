@@ -135,6 +135,3 @@ def setup_logging():
     
     return logger
 
-
-# Initialize the global logger instance
-logger = setup_logging()

@@ -1,7 +1,6 @@
 from fastapi import FastAPI, Request, HTTPException, status, Depends, File, Form, UploadFile
 from typing import Optional
 import uvicorn
-import logging
 import httpx
 from typing import Dict, Any
 
@@ -12,13 +11,8 @@ from ..services.chat_service.chat_service import ChatService
 from ..services.model_service import ModelService
 from ..services.embedding_service import EmbeddingService
 from ..services.transcription_service import TranscriptionService
-from ..core.logging.config import setup_logging
+from ..core.logging import logger, RequestLogger, DebugLogger, PerformanceLogger
 from .middleware import RequestLoggerMiddleware
-
-# Configure logging
-setup_logging()
-
-logger = logging.getLogger("nnp-llm-router")
 
 app = FastAPI()
 
@@ -94,9 +88,40 @@ async def create_transcription(
     return_timestamps: Optional[bool] = Form(False), # Add return_timestamps
     auth_data: tuple = Depends(check_endpoint_access("/v1/audio/transcriptions"))
 ):
-    logger.info(f"Transcription request received from {request.client.host}")
-    logger.info(f"Request Headers: {dict(request.headers)}")
-    logger.info(f"Form Fields: model={model}, response_format={response_format}, temperature={temperature}, language={language}, return_timestamps={return_timestamps}") # Log return_timestamps
+    # Get request_id from request state if available
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    user_id = getattr(request.state, 'project_name', 'unknown')
+    
+    # Log incoming transcription request with structured data
+    RequestLogger.log_request(
+        logger=logger,
+        operation="Transcription Request",
+        request_id=request_id,
+        user_id=user_id,
+        additional_data={
+            "method": request.method,
+            "url": str(request.url),
+            "client_host": request.client.host,
+            "form_fields": {
+                "model": model,
+                "response_format": response_format,
+                "temperature": temperature,
+                "language": language,
+                "return_timestamps": return_timestamps
+            }
+        }
+    )
+    
+    # Debug log request headers
+    DebugLogger.log_data_flow(
+        logger=logger,
+        title="DEBUG: Transcription Request Headers",
+        data=dict(request.headers),
+        data_flow="incoming",
+        component="api",
+        request_id=request_id
+    )
+    
     # Determine which file was provided
     if audio_file:
         uploaded_file = audio_file
@@ -111,7 +136,21 @@ async def create_transcription(
             field_name="audio_file or file"
         )
 
-    logger.info(f"Audio File: filename={uploaded_file.filename}, content_type={uploaded_file.content_type}, size={uploaded_file.size if hasattr(uploaded_file, 'size') else 'unknown'}")
+    # Log file details with structured data
+    logger.info(
+        "Transcription file received",
+        extra={
+            "log_type": "request",
+            "request_id": request_id,
+            "user_id": user_id,
+            "file_details": {
+                "filename": uploaded_file.filename,
+                "content_type": uploaded_file.content_type,
+                "size": uploaded_file.size if hasattr(uploaded_file, 'size') else 'unknown'
+            }
+        }
+    )
+    
     return await app.state.transcription_service.create_transcription(
         uploaded_file, model, auth_data, response_format, temperature, language, return_timestamps
     )

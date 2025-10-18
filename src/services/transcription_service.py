@@ -1,5 +1,4 @@
 import httpx
-import logging
 from typing import Dict, Any, Tuple, Optional
 from fastapi import HTTPException, status, UploadFile
 
@@ -7,7 +6,7 @@ from ..core.config_manager import ConfigManager
 from ..services.model_service import ModelService
 from ..providers.openai import OpenAICompatibleProvider
 from ..core.error_handling import ErrorHandler, ErrorContext
-from ..core.logging import DebugLogger, std_logger, logger
+from ..core.logging import logger, RequestLogger, DebugLogger, PerformanceLogger
 
 class TranscriptionService:
     def __init__(self, config_manager: ConfigManager, client: httpx.AsyncClient, model_service: ModelService):
@@ -46,7 +45,11 @@ class TranscriptionService:
 
     async def _process_transcription_request(self, audio_data: bytes, filename: str, content_type: str, model_id: str, auth_data: Tuple[str, str, Any, Any], response_format: str = "json", temperature: float = 0.0, language: str = None, return_timestamps: bool = False) -> Any:
         user_id, api_key, _, _ = auth_data
-        logger.info(f"User {user_id} requesting transcription for model {model_id}")
+        logger.info(f"User {user_id} requesting transcription for model {model_id}", extra={
+            "user_id": user_id,
+            "model_id": model_id,
+            "operation": "transcription_request"
+        })
         
         # Create error context
         context = ErrorContext(
@@ -83,7 +86,7 @@ class TranscriptionService:
 
             # DEBUG логирование ответа
             DebugLogger.log_data_flow(
-                logger=std_logger,
+                logger=logger,
                 title="DEBUG: Transcription Response JSON",
                 data=response,
                 data_flow="from_provider",
@@ -111,7 +114,7 @@ class TranscriptionService:
         
         # DEBUG логирование параметров запроса
         DebugLogger.log_data_flow(
-            logger=std_logger,
+            logger=logger,
             title="DEBUG: Transcription Request Parameters",
             data={
                 "model_id": model_id,
@@ -130,7 +133,10 @@ class TranscriptionService:
         
         # Если модель не указана, проксируем запрос как есть
         if not model_id:
-            logger.info(f"User {user_id} requesting transcription without model specification")
+            logger.info(f"User {user_id} requesting transcription without model specification", extra={
+                "user_id": user_id,
+                "operation": "transcription_without_model"
+            })
             return await self._proxy_transcription_request(
                 audio_data=audio_data,
                 filename=audio_file.filename,
@@ -161,7 +167,10 @@ class TranscriptionService:
     async def _proxy_transcription_request(self, audio_data: bytes, filename: str, content_type: str, auth_data: Tuple[str, str, Any, Any], response_format: str = "json", temperature: float = 0.0, language: str = None, return_timestamps: bool = False) -> Any:
         """Проксирует запрос на бэкенд без указания модели."""
         user_id, api_key, _, _ = auth_data
-        logger.info(f"User {user_id} proxying transcription request without model specification")
+        logger.info(f"User {user_id} proxying transcription request without model specification", extra={
+            "user_id": user_id,
+            "operation": "transcription_proxy_request"
+        })
         
         # Create error context
         context = ErrorContext(
@@ -217,7 +226,7 @@ class TranscriptionService:
 
             # DEBUG логирование ответа
             DebugLogger.log_data_flow(
-                logger=std_logger,
+                logger=logger,
                 title="DEBUG: Transcription Proxy Response JSON",
                 data=response,
                 data_flow="from_provider",

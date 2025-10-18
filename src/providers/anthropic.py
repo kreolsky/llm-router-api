@@ -7,7 +7,7 @@ from fastapi import HTTPException, status
 from .base import BaseProvider
 from ..utils.deep_merge import deep_merge
 from ..core.error_handling import ErrorHandler, ErrorContext
-from ..core.logging import DebugLogger, logger, std_logger
+from ..core.logging import DebugLogger, logger
 
 class AnthropicProvider(BaseProvider):
     def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient):
@@ -42,7 +42,7 @@ class AnthropicProvider(BaseProvider):
 
         # DEBUG логирование запроса к провайдеру
         DebugLogger.log_provider_request(
-            logger=std_logger,
+            logger=logger,
             provider_name="anthropic",
             url=f"{self.base_url}/messages",
             headers=self.headers,
@@ -68,7 +68,7 @@ class AnthropicProvider(BaseProvider):
                 
                 # DEBUG логирование ответа от провайдера
                 DebugLogger.log_provider_response(
-                    logger=std_logger,
+                    logger=logger,
                     provider_name="anthropic",
                     response_data=response_json,
                     request_id=request_body.get("request_id", "unknown")

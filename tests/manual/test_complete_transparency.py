@@ -58,9 +58,9 @@ async def test_complete_transparency():
     full_reasoning = "".join(reasoning_parts)
     combined_response = full_reasoning + full_response
     
-    print(f"Reasoning content: {full_reasoning}")
-    print(f"Final answer: {full_response}")
-    print(f"Combined response: {combined_response}")
+    logger.info(f"Reasoning content: {full_reasoning}")
+    logger.info(f"Final answer: {full_response}")
+    logger.info(f"Combined response: {combined_response}")
     
     # Should contain reasoning steps, not just final answer
     has_reasoning = len(full_reasoning) > 10
@@ -117,7 +117,7 @@ async def test_non_streaming_transparency():
         # Check that we have content
         if "choices" in response_data and response_data["choices"]:
             content = response_data["choices"][0].get("message", {}).get("content", "")
-            print(f"Non-streaming response: {content}")
+            logger.info(f"Non-streaming response: {content}")
             
             success = len(content) > 50
             if success:

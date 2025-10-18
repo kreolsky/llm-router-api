@@ -8,7 +8,7 @@ configuration and usage throughout the application.
 
 import logging
 from typing import Optional, Dict, Any
-from .config import logger as default_logger
+from .config import setup_logging
 from .utils import RequestLogger, DebugLogger, PerformanceLogger, StreamingLogger
 
 
@@ -27,7 +27,7 @@ class Logger:
         Args:
             logger_instance: Optional custom logger instance. If None, uses the default logger.
         """
-        self._logger = logger_instance or default_logger
+        self._logger = logger_instance or setup_logging()
         self.request_logger = RequestLogger()
         self.debug_logger = DebugLogger()
         self.performance_logger = PerformanceLogger()

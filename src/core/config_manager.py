@@ -2,6 +2,7 @@ import yaml
 import os
 import asyncio
 from typing import Dict, Any
+from .logging import logger
 
 class ConfigManager:
     def __init__(self, config_dir: str = "config"):
@@ -17,6 +18,19 @@ class ConfigManager:
         self.debug = os.getenv("DEBUG", "false").lower() == "true"
         self.log_level = os.getenv("LOG_LEVEL", "INFO")
         self.sanitize_messages = os.getenv("SANITIZE_MESSAGES", "false").lower() == "true"
+        
+        # Log configuration initialization
+        logger.info("Configuration manager initialized", extra={
+            "config": {
+                "config_dir": config_dir,
+                "debug_enabled": self.debug,
+                "log_level": self.log_level,
+                "sanitize_messages": self.sanitize_messages,
+                "providers_config_exists": os.path.exists(self.providers_path),
+                "models_config_exists": os.path.exists(self.models_path),
+                "user_keys_config_exists": os.path.exists(self.user_keys_path)
+            }
+        })
 
     def _load_config(self) -> Dict[str, Any]:
         config = {}
@@ -28,10 +42,20 @@ class ConfigManager:
             with open(self.user_keys_path, 'r') as f:
                 config['user_keys'] = yaml.safe_load(f).get('user_keys', {})
         except FileNotFoundError as e:
-            # print(f"Configuration file not found: {e}") # Removed print for cleaner logs
+            logger.warning(f"Configuration file not found: {e}", extra={
+                "config": {
+                    "error_type": "file_not_found",
+                    "file_path": str(e.filename) if hasattr(e, 'filename') else 'unknown'
+                }
+            }, exc_info=True)
             pass # Silently ignore missing files for now
         except yaml.YAMLError as e:
-            print(f"Error parsing YAML file: {e}")
+            logger.error(f"Error parsing YAML file: {e}", extra={
+                "config": {
+                    "error_type": "yaml_parse_error",
+                    "error_message": str(e)
+                }
+            }, exc_info=True)
             # Handle YAML parsing errors
         return config
 
@@ -49,9 +73,21 @@ class ConfigManager:
         return self.sanitize_messages
 
     def reload_config(self):
-        # print("Reloading configuration...") # Removed print for cleaner logs
+        logger.info("Reloading configuration", extra={
+            "config": {
+                "operation": "reload_config",
+                "config_dir": self.config_dir
+            }
+        })
         self.config = self._load_config()
-        # print("Configuration reloaded.") # Removed print for cleaner logs
+        logger.info("Configuration reloaded", extra={
+            "config": {
+                "operation": "reload_complete",
+                "providers_count": len(self.config.get('providers', {})),
+                "models_count": len(self.config.get('models', {})),
+                "user_keys_count": len(self.config.get('user_keys', {}))
+            }
+        })
 
     def _initialize_mtimes(self):
         config_files = [
@@ -83,6 +119,12 @@ class ConfigManager:
                     pass
 
             if changed:
+                logger.debug("Configuration files changed, triggering reload", extra={
+                    "config": {
+                        "operation": "auto_reload",
+                        "changed_files": [fpath for fpath in config_files if fpath in self.last_mtimes]
+                    }
+                })
                 self.reload_config()
             
             await asyncio.sleep(5) # Check every 5 seconds
@@ -102,10 +144,20 @@ if __name__ == "__main__":
         f.write("user_keys:\n  test_key: {}\n")
 
     config_manager = ConfigManager()
-    print("Initial config:", config_manager.get_config())
+    logger.info("Initial config loaded", extra={
+        "config": {
+            "operation": "test_initial_load",
+            "config": config_manager.get_config()
+        }
+    })
 
     # Simulate a change and reload
     with open("config/providers.yaml", "w") as f:
         f.write("providers:\n  new_test_provider:\n    type: new_test\n")
     config_manager.reload_config()
-    print("Reloaded config:", config_manager.get_config())
+    logger.info("Reloaded config for testing", extra={
+        "config": {
+            "operation": "test_reload",
+            "config": config_manager.get_config()
+        }
+    })

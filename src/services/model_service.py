@@ -6,7 +6,7 @@ from typing import Dict, Any, Tuple
 from fastapi import HTTPException, status
 
 from ..core.config_manager import ConfigManager
-from ..core.logging import logger
+from ..core.logging import logger, RequestLogger, DebugLogger, PerformanceLogger
 from ..core.error_handling import ErrorHandler, ErrorContext
 
 class ModelService:
@@ -21,7 +21,11 @@ class ModelService:
         provider_api_key = os.getenv(provider_api_key_env) if provider_api_key_env else None
 
         if not provider_base_url:
-            logger.warning(f"Missing base_url for provider {provider_config.get('name', 'unknown')}")
+            provider_name = provider_config.get('name', 'unknown')
+            logger.warning(f"Missing base_url for provider {provider_name}", extra={
+                "provider_name": provider_name,
+                "error_type": "missing_base_url"
+            })
             return None, None, {}
 
         headers = {
@@ -72,14 +76,31 @@ class ModelService:
                 additional_model_details["architecture"] = found_provider_model.get("architecture")
                 additional_model_details["pricing"] = found_provider_model.get("pricing")
             else:
-                logger.warning(f"Provider model '{provider_model_name}' not found in provider's model list for {provider_name}")
+                logger.warning(f"Provider model '{provider_model_name}' not found in provider's model list for {provider_name}", extra={
+                    "provider_name": provider_name,
+                    "provider_model_name": provider_model_name,
+                    "error_type": "model_not_found_in_provider_list"
+                })
 
         except httpx.HTTPStatusError as e:
-            logger.error(f"HTTP error fetching model details from provider {provider_name}: {e.response.status_code} - {e.response.text}", extra={"error_message": e.response.text, "error_code": f"provider_http_error_{e.response.status_code}"}, exc_info=True)
+            logger.error(f"HTTP error fetching model details from provider {provider_name}: {e.response.status_code} - {e.response.text}", extra={
+                "provider_name": provider_name,
+                "error_message": e.response.text,
+                "error_code": f"provider_http_error_{e.response.status_code}",
+                "status_code": e.response.status_code
+            }, exc_info=True)
         except httpx.RequestError as e:
-            logger.error(f"Network error fetching model details from provider {provider_name}: {e}", extra={"error_message": str(e), "error_code": "provider_network_error"}, exc_info=True)
+            logger.error(f"Network error fetching model details from provider {provider_name}: {e}", extra={
+                "provider_name": provider_name,
+                "error_message": str(e),
+                "error_code": "provider_network_error"
+            }, exc_info=True)
         except Exception as e:
-            logger.error(f"Unexpected error fetching model details from provider {provider_name}: {e}", extra={"error_message": str(e), "error_code": "unexpected_error"}, exc_info=True)
+            logger.error(f"Unexpected error fetching model details from provider {provider_name}: {e}", extra={
+                "provider_name": provider_name,
+                "error_message": str(e),
+                "error_code": "unexpected_error"
+            }, exc_info=True)
         
         return additional_model_details
 

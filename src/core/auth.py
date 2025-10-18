@@ -2,6 +2,7 @@ from fastapi import Security, HTTPException, status, Request
 from fastapi.security import APIKeyHeader
 from typing import Dict, Any, Tuple, List
 from .error_handling import ErrorHandler, ErrorContext
+from .logging import logger
 
 api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
 
@@ -11,7 +12,22 @@ async def get_api_key(
 ) -> Tuple[str, str, List[str], List[str]]:
     config_manager = request.app.state.config_manager
     config = config_manager.get_config()
+    
+    # Log authentication attempt
+    logger.debug("Authentication attempt", extra={
+        "auth": {
+            "has_api_key": api_key is not None,
+            "request_path": str(request.url.path)
+        }
+    })
+    
     if not api_key:
+        logger.warning("Authentication failed: missing API key", extra={
+            "auth": {
+                "error_type": "missing_api_key",
+                "request_path": str(request.url.path)
+            }
+        })
         context = ErrorContext()
         raise ErrorHandler.handle_auth_errors("missing_api_key", context)
     
@@ -20,6 +36,13 @@ async def get_api_key(
         api_key = api_key[len("Bearer "):]
 
     if config is None or "user_keys" not in config:
+        logger.error("Server configuration error: user keys not loaded", extra={
+            "auth": {
+                "error_type": "config_error",
+                "config_loaded": config is not None,
+                "has_user_keys": config is not None and "user_keys" in config
+            }
+        })
         context = ErrorContext()
         raise ErrorHandler.handle_internal_server_error(
             "Server configuration error: user keys not loaded",
@@ -33,13 +56,30 @@ async def get_api_key(
             break
 
     if not found_project:
+        logger.warning("Authentication failed: invalid API key", extra={
+            "auth": {
+                "error_type": "invalid_api_key",
+                "request_path": str(request.url.path)
+            }
+        })
         context = ErrorContext()
         raise ErrorHandler.handle_auth_errors("invalid_api_key", context)
     
-    allowed_models = config["user_keys"][found_project].get("allowed_models", [])
-    allowed_endpoints = config["user_keys"][found_project].get("allowed_endpoints", [])
+    allowed_models = config["user_keys"][found_project].get("allowed_models") or []
+    allowed_endpoints = config["user_keys"][found_project].get("allowed_endpoints") or []
     
     request.state.project_name = found_project # Store project_name in request.state
+    
+    # Log successful authentication
+    logger.info("Authentication successful", extra={
+        "auth": {
+            "project_name": found_project,
+            "allowed_models_count": len(allowed_models),
+            "allowed_endpoints_count": len(allowed_endpoints),
+            "request_path": str(request.url.path)
+        }
+    })
+    
     return found_project, api_key, allowed_models, allowed_endpoints
 
 
@@ -65,6 +105,14 @@ def check_endpoint_access(endpoint_path: str):
         if not allowed_endpoints or endpoint_path in allowed_endpoints:
             return auth_data
             
+        logger.warning("Endpoint access denied", extra={
+            "auth": {
+                "error_type": "endpoint_not_allowed",
+                "user_id": user_id,
+                "endpoint_path": endpoint_path,
+                "allowed_endpoints": allowed_endpoints
+            }
+        })
         context = ErrorContext(endpoint_path=endpoint_path, user_id=user_id)
         raise ErrorHandler.handle_endpoint_not_allowed(endpoint_path, context)
     

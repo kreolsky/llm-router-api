@@ -17,6 +17,8 @@ to provide comprehensive performance insights for chat completion operations.
 import time
 from typing import Dict, Any
 
+from ...core.logging import logger, PerformanceLogger
+
 
 class StatisticsCollector:
     """

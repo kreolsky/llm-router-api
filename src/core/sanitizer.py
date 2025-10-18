@@ -6,7 +6,6 @@
 таких как OpenRouter.
 """
 
-import logging
 from typing import Dict, Any, List, Tuple
 
 from .logging import logger

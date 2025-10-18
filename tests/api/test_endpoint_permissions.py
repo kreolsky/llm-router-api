@@ -5,7 +5,10 @@ Tests that API keys have appropriate access to different endpoints.
 
 import pytest
 import httpx
+import logging
 from tests.test_utils import TestTimer
+
+logger = logging.getLogger(__name__)
 
 
 class TestEndpointPermissions:
@@ -413,9 +416,9 @@ class TestEndpointPermissions:
                     transcription_data = response.json()
                     assert "text" in transcription_data, "Response should contain transcription text"
                     assert len(transcription_data["text"]) > 0, "Transcription should not be empty"
-                    print(f"✓ {key_name} can access transcription without model")
+                    logger.info(f"✓ {key_name} can access transcription without model")
                 elif response.status_code in [403, 404]:
-                    print(f"⚠ {key_name} cannot access transcription without model")
+                    logger.warning(f"⚠ {key_name} cannot access transcription without model")
                 else:
                     # Unexpected status code
                     assert False, f"Unexpected status code {response.status_code} for {key_name}"
