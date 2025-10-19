@@ -150,7 +150,7 @@ class OpenAICompatibleProvider(BaseProvider):
             raise ErrorHandler.handle_provider_http_error(e, context, "openai")
         except httpx.RequestError as e:
             context = ErrorContext(provider_name="openai")
-            raise ErrorHandler.handle_service_unavailable(str(e), context, e)
+            raise ErrorHandler.handle_provider_network_error(e, context, "openai")
 
     async def embeddings(self, request_body: Dict[str, Any], provider_model_name: str, model_config: Dict[str, Any]) -> Any:
         # Transform request: Replace the model name with the provider's specific model name

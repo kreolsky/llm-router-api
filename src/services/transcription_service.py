@@ -7,7 +7,7 @@ from ..core.config_manager import ConfigManager
 from ..services.model_service import ModelService
 from ..providers.openai import OpenAICompatibleProvider
 from ..core.error_handling import ErrorHandler, ErrorContext
-from ..core.logging import logger  # Using the simplified universal Logger
+from ..core.logging import logger
 
 
 class TranscriptionService:

@@ -148,4 +148,8 @@ class OllamaProvider(BaseProvider):
             raise ErrorHandler.handle_provider_network_error(e, context, "ollama")
 
     async def transcriptions(self, audio_file: Any, request_params: Dict[str, Any], model_config: Dict[str, Any]) -> Any:
-        raise NotImplementedError("OllamaProvider does not support transcriptions.")
+        context = ErrorContext(provider_name="ollama")
+        raise ErrorHandler.handle_provider_config_error(
+            error_details="OllamaProvider does not support transcriptions.",
+            context=context
+        )

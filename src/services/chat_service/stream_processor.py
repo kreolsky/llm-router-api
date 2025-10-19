@@ -14,7 +14,8 @@ import time
 from typing import Dict, Any, AsyncGenerator, Optional
 
 from ...core.logging import logger
-from ...core.exceptions import ProviderStreamError, ProviderNetworkError
+from ...core.error_handling import ErrorHandler, ErrorContext
+from fastapi import HTTPException
 
 
 class StreamProcessor:
@@ -297,23 +298,32 @@ class StreamProcessor:
         Returns:
             bytes: Formatted error chunk in SSE format
         """
-        if isinstance(error, ProviderStreamError):
-            message = error.message
-            code = error.error_code
-        elif isinstance(error, ProviderNetworkError):
-            message = error.message
-            code = "provider_network_error"
+        if isinstance(error, HTTPException):
+            # Extract error details from HTTPException
+            error_detail = error.detail
+            if isinstance(error_detail, dict) and "error" in error_detail:
+                # Use the error details from HTTPException
+                error_payload = error_detail
+            else:
+                # Fallback if error_detail is not in expected format
+                error_payload = {
+                    "error": {
+                        "message": str(error_detail) if error_detail else str(error),
+                        "type": "api_error",
+                        "code": "http_exception",
+                        "param": None
+                    }
+                }
         else:
+            # Handle non-HTTPException errors
             message = f"An unexpected error occurred during streaming: {error}"
-            code = "unexpected_streaming_error"
-        
-        error_payload = {
-            "error": {
-                "message": message,
-                "type": "api_error",
-                "code": code,
-                "param": None
+            error_payload = {
+                "error": {
+                    "message": message,
+                    "type": "api_error",
+                    "code": "unexpected_streaming_error",
+                    "param": None
+                }
             }
-        }
         
         return f"data: {json.dumps(error_payload)}\n\n".encode('utf-8')

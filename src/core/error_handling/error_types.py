@@ -42,6 +42,7 @@ class ErrorType(Enum):
     PROVIDER_HTTP_ERROR = ("provider_http_error", None, "Provider error: {error_details}")
     PROVIDER_NETWORK_ERROR = ("provider_network_error", status.HTTP_500_INTERNAL_SERVER_ERROR, "Network error communicating with provider: {error_details}")
     PROVIDER_RATE_LIMIT_ERROR = ("rate_limit_exceeded", status.HTTP_429_TOO_MANY_REQUESTS, "Provider rate limit exceeded (429 Too Many Requests). Please retry after a delay.")
+    PROVIDER_STREAM_ERROR = ("provider_stream_error", None, "Provider streaming error: {error_details}")
 
     def __init__(self, code: str, status_code: Optional[int], message_template: str):
         self.code = code

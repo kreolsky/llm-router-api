@@ -8,7 +8,7 @@ from functools import wraps
 from fastapi.responses import StreamingResponse, JSONResponse
 
 from ..utils.deep_merge import deep_merge
-from ..core.exceptions import ProviderAPIError, ProviderNetworkError, ProviderStreamError # Import custom exceptions
+from ..core.error_handling import ErrorHandler, ErrorType, ErrorContext # Import error handling
 from ..core.logging import logger
 
 
@@ -28,14 +28,29 @@ def retry_on_rate_limit(max_retries: int = 3, base_delay: float = 1.0, max_delay
             for attempt in range(max_retries + 1):
                 try:
                     return await func(*args, **kwargs)
-                except ProviderStreamError as e:
-                    if e.status_code == 429 and attempt < max_retries:
+                except Exception as e:
+                    # Check if this is a rate limit error (429)
+                    is_rate_limit = False
+                    
+                    # Check for HTTPException with rate limit status code
+                    if hasattr(e, 'status_code') and e.status_code == 429:
+                        is_rate_limit = True
+                    # Check for original exception with 429 status
+                    elif hasattr(e, 'original_exception') and hasattr(e.original_exception, 'response') and e.original_exception.response.status_code == 429:
+                        is_rate_limit = True
+                    
+                    if is_rate_limit and attempt < max_retries:
                         # Экспоненциальное увеличение задержки
                         delay = min(base_delay * (2 ** attempt), max_delay)
                         last_exception = e
                         
                         # Извлекаем время ожидания из заголовка Retry-After, если есть
-                        retry_after = getattr(e.original_exception, 'response', None)
+                        retry_after = None
+                        if hasattr(e, 'original_exception') and hasattr(e.original_exception, 'response'):
+                            retry_after = e.original_exception.response
+                        elif hasattr(e, 'response'):
+                            retry_after = e.response
+                            
                         if retry_after and retry_after.headers:
                             retry_after_header = retry_after.headers.get('Retry-After')
                             if retry_after_header:
@@ -55,9 +70,6 @@ def retry_on_rate_limit(max_retries: int = 3, base_delay: float = 1.0, max_delay
                         continue
                     else:
                         raise e
-                except Exception as e:
-                    # Не повторяем попытки для других типов ошибок
-                    raise e
             raise last_exception
         return wrapper
     return decorator
@@ -71,17 +83,31 @@ class BaseProvider:
         self.client = client # Store the httpx client
 
         if not self.base_url:
-            raise ValueError("Provider base_url is not configured.")
+            context = ErrorContext(provider_name=self.__class__.__name__.replace("Provider", "").lower())
+            raise ErrorHandler.handle_provider_config_error(
+                error_details="Provider base_url is not configured.",
+                context=context
+            )
         
         # Only set API key and Authorization header if api_key_env is provided
         if self.api_key_env:
             if not self.api_key:
-                raise ValueError(f"API key for {self.api_key_env} is not set in environment variables.")
+                context = ErrorContext(provider_name=self.__class__.__name__.replace("Provider", "").lower())
+                raise ErrorHandler.handle_provider_config_error(
+                    error_details=f"API key for {self.api_key_env} is not set in environment variables.",
+                    context=context
+                )
             self.headers["Authorization"] = f"Bearer {self.api_key}"
 
     @retry_on_rate_limit(max_retries=3, base_delay=1.0, max_delay=30.0)
     async def _stream_request(self, client: httpx.AsyncClient, url_path: str, request_body: Dict[str, Any]) -> StreamingResponse:
         """Stream request with optimized timeouts for streaming"""
+        # Create error context for this request
+        context = ErrorContext(
+            request_id=request_body.get("request_id", "unknown"),
+            provider_name=self.__class__.__name__.replace("Provider", "").lower()
+        )
+        
         # DEBUG логирование запроса к провайдеру
         logger.debug_data(
             title="Base Provider Request",
@@ -158,18 +184,22 @@ class BaseProvider:
                   except (json.JSONDecodeError, httpx.ResponseNotRead):
                       pass # Если не JSON или ответ не прочитан, используем error_message по умолчанию
                   
-                  raise ProviderStreamError(
-                      message=error_message,
+                  # Use ErrorHandler to create and raise the appropriate exception
+                  http_exception = ErrorHandler.handle_provider_stream_error(
+                      error_details=error_message,
+                      context=context,
                       status_code=e.response.status_code,
                       error_code=error_code,
                       original_exception=e
-                  ) from e
+                  )
+                  raise http_exception from e
               except httpx.RequestError as e:
-                  # Raise custom network error
-                  raise ProviderNetworkError(
-                      message=f"Network or connection error to provider: {e}",
-                      original_exception=e
-                  ) from e
+                  # Use ErrorHandler to create and raise the appropriate exception
+                  http_exception = ErrorHandler.handle_provider_network_error(
+                      original_exception=e,
+                      context=context
+                  )
+                  raise http_exception from e
               
               async for chunk in response.aiter_bytes():
                   yield chunk

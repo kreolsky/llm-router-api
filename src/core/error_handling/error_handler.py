@@ -162,6 +162,32 @@ class ErrorHandler:
         )
     
     @staticmethod
+    def handle_provider_stream_error(
+        error_details: str,
+        context: ErrorContext,
+        status_code: int = 500,
+        error_code: str = "provider_stream_error",
+        original_exception: Optional[Exception] = None
+    ) -> HTTPException:
+        """Handle provider streaming errors with immediate logging."""
+        if context.provider_name:
+            ErrorLogger.log_provider_error(
+                provider_name=context.provider_name,
+                error_details=error_details,
+                status_code=status_code,
+                context=context,
+                original_exception=original_exception
+            )
+        
+        return ErrorHandler.create_http_exception(
+            error_type=ErrorType.PROVIDER_STREAM_ERROR,
+            context=context,
+            original_exception=original_exception,
+            error_details=error_details,
+            log_error=False  # Already logged above
+        )
+    
+    @staticmethod
     def handle_internal_server_error(
         error_details: str,
         context: ErrorContext,
