@@ -25,12 +25,10 @@ Usage:
     stream_processor = StreamProcessor()
 """
 
-from .statistics_collector import StatisticsCollector
 from .stream_processor import StreamProcessor
 from .chat_service import ChatService
 
 __all__ = [
-    "StatisticsCollector",
     "StreamProcessor",
     "ChatService"
 ]

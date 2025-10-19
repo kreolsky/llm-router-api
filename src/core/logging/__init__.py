@@ -20,7 +20,5 @@ def get_logger():
 # Экспортируем единый логгер
 logger = get_logger()
 
-from .utils import timing_context
-
 # Экспортируем только основные компоненты
-__all__ = ['logger', 'Logger', 'setup_logging', 'timing_context']
+__all__ = ['logger', 'Logger', 'setup_logging']
