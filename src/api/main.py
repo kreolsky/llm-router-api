@@ -12,6 +12,7 @@ from ..services.model_service import ModelService
 from ..services.embedding_service import EmbeddingService
 from ..services.transcription_service import TranscriptionService
 from ..core.logging import logger
+from ..utils.generate_key import generate_key
 from .middleware import RequestLoggerMiddleware
 
 app = FastAPI()
@@ -148,6 +149,36 @@ async def create_transcription(
     return await app.state.transcription_service.create_transcription(
         uploaded_file, model, auth_data, response_format, temperature, language, return_timestamps
     )
+
+@app.get("/tools/generate_key")
+async def generate_key_endpoint(request: Request):
+    """
+    Generate and return a new API key without authentication.
+    """
+    # Get request_id from request state if available
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    user_id = getattr(request.state, 'project_name', 'unknown')
+    
+    # Log incoming key generation request
+    logger.info(
+        "Key generation request received",
+        extra={
+            "log_type": "request",
+            "request_id": request_id,
+            "user_id": user_id,
+            "method": request.method,
+            "url": str(request.url),
+            "client_host": request.client.host
+        }
+    )
+    
+    key = generate_key()
+    logger.debug_data(
+        title="Generated API Key",
+        data={"key": key},
+        request_id=request_id
+    )
+    return {"key": key}
 
 
 if __name__ == "__main__":
