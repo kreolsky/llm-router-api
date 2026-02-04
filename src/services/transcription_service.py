@@ -38,14 +38,14 @@ class TranscriptionService:
     async def _get_provider_instance(self, provider_config: Dict[str, Any]) -> OpenAICompatibleProvider:
         """
         Create a provider instance for the given configuration.
-        
+
         Args:
             provider_config: Provider configuration dictionary
-            
+
         Returns:
             OpenAICompatibleProvider instance
         """
-        return OpenAICompatibleProvider(provider_config, self.client)
+        return OpenAICompatibleProvider(provider_config, self.client, self.config_manager)
 
     async def create_transcription(
         self,

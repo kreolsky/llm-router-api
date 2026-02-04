@@ -10,8 +10,8 @@ from ..core.error_handling import ErrorHandler, ErrorContext
 from ..core.logging import logger
 
 class AnthropicProvider(BaseProvider):
-    def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient):
-        super().__init__(config, client)
+    def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient, config_manager=None):
+        super().__init__(config, client, config_manager)
         self.headers["Content-Type"] = "application/json"
         # Anthropic specific headers
         for key, value in config.get("headers", {}).items():
@@ -60,10 +60,12 @@ class AnthropicProvider(BaseProvider):
             if anthropic_request["stream"]:
                 return await self._stream_request(self.client, "/messages", anthropic_request)
             else:
-                response = await self.client.post(f"{self.base_url}/messages", 
-                                             headers=self.headers, 
+                # Use config_manager.anthropic_timeout if available
+                anthropic_timeout = self.config_manager.anthropic_timeout if self.config_manager else 600
+                response = await self.client.post(f"{self.base_url}/messages",
+                                             headers=self.headers,
                                              json=anthropic_request,
-                                             timeout=600)
+                                             timeout=anthropic_timeout)
                 response.raise_for_status()
                 response_json = response.json()
                 

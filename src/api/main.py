@@ -26,14 +26,18 @@ async def startup_event():
     # Start config reloader task
     app.state.config_manager.start_reloader_task()
     
-    # Initialize httpx client
-    # Initialize httpx client with generous default timeouts
+    # Initialize httpx client with connection pool limits and configured timeouts
+    limits = httpx.Limits(
+        max_connections=app.state.config_manager.httpx_max_connections,
+        max_keepalive_connections=app.state.config_manager.httpx_max_keepalive_connections
+    )
     app.state.httpx_client = httpx.AsyncClient(
+        limits=limits,
         timeout=httpx.Timeout(
-            connect=60.0,
+            connect=app.state.config_manager.httpx_connect_timeout,
             read=None,
             write=None,
-            pool=None
+            pool=app.state.config_manager.httpx_pool_timeout
         )
     )
 
@@ -190,4 +194,4 @@ async def generate_key_endpoint(request: Request):
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000, workers=4)
+    uvicorn.run(app, host="0.0.0.0", port=8000, workers=config_manager.api_workers)

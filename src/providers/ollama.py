@@ -10,8 +10,8 @@ from ..core.error_handling import ErrorHandler, ErrorContext
 from ..core.logging import logger
 
 class OllamaProvider(BaseProvider):
-    def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient):
-        super().__init__(config, client)
+    def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient, config_manager=None):
+        super().__init__(config, client, config_manager)
         self.headers["Content-Type"] = "application/json"
 
     async def chat_completions(self, request_body: Dict[str, Any], provider_model_name: str, model_config: Dict[str, Any]) -> Any:
@@ -61,11 +61,13 @@ class OllamaProvider(BaseProvider):
             else:
                 # Ollama can be slower than cloud providers (especially for large models)
                 # Optimized timeout for non-streaming
+                # Use config_manager.ollama_connect_timeout if available
+                connect_timeout = self.config_manager.ollama_connect_timeout if self.config_manager else 60.0
                 ollama_timeout = httpx.Timeout(
-                    connect=60.0,  # Slightly longer for local/slow connections
+                    connect=connect_timeout,  # Slightly longer for local/slow connections
                     read=None,     # Disable read timeout
                     write=None,    # Disable write timeout
-                    pool=10.0
+                    pool=self.client.timeout.pool
                 )
                 response = await self.client.post(f"{self.base_url}/chat",
                                              headers=self.headers,

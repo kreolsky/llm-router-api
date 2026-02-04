@@ -72,6 +72,76 @@ class ConfigManager:
         """Возвращает True если нужно санитизировать сообщения"""
         return self.sanitize_messages
 
+    @property
+    def httpx_max_connections(self) -> int:
+        """Maximum number of concurrent connections in the httpx pool"""
+        return int(os.getenv("HTTPX_MAX_CONNECTIONS", "100"))
+
+    @property
+    def httpx_max_keepalive_connections(self) -> int:
+        """Maximum number of keep-alive connections in the httpx pool"""
+        return int(os.getenv("HTTPX_MAX_KEEPALIVE_CONNECTIONS", "20"))
+
+    @property
+    def httpx_connect_timeout(self) -> float:
+        """Connection timeout in seconds for httpx client"""
+        return float(os.getenv("HTTPX_CONNECT_TIMEOUT", "60.0"))
+
+    @property
+    def httpx_pool_timeout(self) -> float:
+        """Pool timeout in seconds for acquiring a connection from the pool"""
+        return float(os.getenv("HTTPX_POOL_TIMEOUT", "5.0"))
+
+    @property
+    def api_workers(self) -> int:
+        """Number of worker processes for uvicorn server"""
+        return int(os.getenv("API_WORKERS", "4"))
+
+    @property
+    def config_reload_interval(self) -> int:
+        """Interval in seconds between config file reload checks"""
+        return int(os.getenv("CONFIG_RELOAD_INTERVAL", "5"))
+
+    @property
+    def provider_max_retries(self) -> int:
+        """Maximum number of retry attempts for failed provider requests"""
+        return int(os.getenv("PROVIDER_MAX_RETRIES", "3"))
+
+    @property
+    def provider_retry_base_delay(self) -> float:
+        """Base delay between retry attempts in seconds (exponential backoff)"""
+        return float(os.getenv("PROVIDER_RETRY_BASE_DELAY", "1.0"))
+
+    @property
+    def provider_retry_max_delay(self) -> float:
+        """Maximum delay between retry attempts in seconds"""
+        return float(os.getenv("PROVIDER_RETRY_MAX_DELAY", "30.0"))
+
+    @property
+    def openai_connect_timeout(self) -> float:
+        """OpenAI connection timeout in seconds"""
+        return float(os.getenv("OPENAI_CONNECT_TIMEOUT", "60.0"))
+
+    @property
+    def openai_transcription_timeout(self) -> float:
+        """OpenAI transcription timeout in seconds"""
+        return float(os.getenv("OPENAI_TRANSCRIPTION_TIMEOUT", "3600.0"))
+
+    @property
+    def openai_embeddings_read_timeout(self) -> float:
+        """OpenAI embeddings read timeout in seconds"""
+        return float(os.getenv("OPENAI_EMBEDDINGS_READ_TIMEOUT", "30.0"))
+
+    @property
+    def anthropic_timeout(self) -> int:
+        """Anthropic request timeout in seconds"""
+        return int(os.getenv("ANTHROPIC_TIMEOUT", "600"))
+
+    @property
+    def ollama_connect_timeout(self) -> float:
+        """Ollama connection timeout in seconds"""
+        return float(os.getenv("OLLAMA_CONNECT_TIMEOUT", "60.0"))
+
     def reload_config(self):
         logger.info("Reloading configuration", extra={
             "config": {
@@ -127,7 +197,7 @@ class ConfigManager:
                 })
                 self.reload_config()
             
-            await asyncio.sleep(5) # Check every 5 seconds
+            await asyncio.sleep(self.config_reload_interval) # Check based on config_reload_interval
 
     def start_reloader_task(self):
         asyncio.create_task(self._reload_config_task())

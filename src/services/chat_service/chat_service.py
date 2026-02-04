@@ -170,7 +170,7 @@ class ChatService:
 
         # Получение провайдера
         try:
-            provider_instance = get_provider_instance(provider_config.get("type"), provider_config, self.httpx_client)
+            provider_instance = get_provider_instance(provider_config.get("type"), provider_config, self.httpx_client, self.config_manager)
         except ValueError as e:
             raise ErrorHandler.handle_provider_config_error(str(e), context, e)
         

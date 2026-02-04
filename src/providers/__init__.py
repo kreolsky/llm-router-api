@@ -1,4 +1,4 @@
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import httpx
 
 from .base import BaseProvider
@@ -7,13 +7,13 @@ from .anthropic import AnthropicProvider
 from .ollama import OllamaProvider
 from ..core.error_handling import ErrorHandler, ErrorContext
 
-def get_provider_instance(provider_type: str, provider_config: Dict[str, Any], client: httpx.AsyncClient) -> BaseProvider:
+def get_provider_instance(provider_type: str, provider_config: Dict[str, Any], client: httpx.AsyncClient, config_manager: Optional[Any] = None) -> BaseProvider:
     if provider_type == "openai":
-        return OpenAICompatibleProvider(provider_config, client)
+        return OpenAICompatibleProvider(provider_config, client, config_manager)
     elif provider_type == "anthropic":
-        return AnthropicProvider(provider_config, client)
+        return AnthropicProvider(provider_config, client, config_manager)
     elif provider_type == "ollama":
-        return OllamaProvider(provider_config, client)
+        return OllamaProvider(provider_config, client, config_manager)
     else:
         context = ErrorContext()
         raise ErrorHandler.handle_provider_not_found(

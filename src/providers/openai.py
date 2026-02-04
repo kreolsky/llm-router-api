@@ -9,8 +9,8 @@ from ..core.logging import logger
 from ..core.error_handling import ErrorHandler, ErrorContext
 
 class OpenAICompatibleProvider(BaseProvider):
-    def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient):
-        super().__init__(config, client)
+    def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient, config_manager=None):
+        super().__init__(config, client, config_manager)
         self.headers["Content-Type"] = "application/json"
 
     async def chat_completions(self, request_body: Dict[str, Any], provider_model_name: str, model_config: Dict[str, Any]) -> Any:
@@ -45,15 +45,16 @@ class OpenAICompatibleProvider(BaseProvider):
                 return await self._stream_request(self.client, "/chat/completions", request_body)
             else:
                 # Optimized timeout for non-streaming chat completions
-                # - connect: 10s to establish connection
-                # - read: 60s for full response (most responses are much faster)
-                # - write: 10s to send request
-                # - pool: 10s to get connection from pool
+                # - connect: use config_manager.openai_connect_timeout
+                # - read: None (disable read timeout)
+                # - write: None (disable write timeout)
+                # - pool: use client's pool timeout
+                connect_timeout = self.config_manager.openai_connect_timeout if self.config_manager else 60.0
                 non_stream_timeout = httpx.Timeout(
-                    connect=60.0,
+                    connect=connect_timeout,
                     read=None,    # Disable read timeout
                     write=None,   # Disable write timeout
-                    pool=10.0
+                    pool=self.client.timeout.pool
                 )
                 response = await self.client.post(f"{self.base_url}/chat/completions",
                                              headers=self.headers,
@@ -125,12 +126,14 @@ class OpenAICompatibleProvider(BaseProvider):
         data = {"model": model_id, **transcription_params}
 
         try:
+            # Use config_manager.openai_transcription_timeout if available
+            transcription_timeout = self.config_manager.openai_transcription_timeout if self.config_manager else 3600.0
             response = await self.client.post(
                 f"{base_url}/audio/transcriptions",
                 headers=headers,
                 files=files,
                 data=data,
-                timeout=3600.0 # Increased timeout for potentially large audio files
+                timeout=transcription_timeout
             )
             response.raise_for_status()
             response_json = response.json()
@@ -163,9 +166,11 @@ class OpenAICompatibleProvider(BaseProvider):
 
         try:
             # Optimized timeout for embeddings (usually faster than chat)
+            # Use config_manager.openai_embeddings_read_timeout if available
+            read_timeout = self.config_manager.openai_embeddings_read_timeout if self.config_manager else 30.0
             embeddings_timeout = httpx.Timeout(
                 connect=10.0,
-                read=30.0,   # Embeddings are typically fast
+                read=read_timeout,   # Embeddings are typically fast
                 write=10.0,
                 pool=10.0
             )
