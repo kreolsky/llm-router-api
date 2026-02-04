@@ -50,9 +50,9 @@ class OpenAICompatibleProvider(BaseProvider):
                 # - write: 10s to send request
                 # - pool: 10s to get connection from pool
                 non_stream_timeout = httpx.Timeout(
-                    connect=10.0,
-                    read=60.0,
-                    write=10.0,
+                    connect=60.0,
+                    read=None,    # Disable read timeout
+                    write=None,   # Disable write timeout
                     pool=10.0
                 )
                 response = await self.client.post(f"{self.base_url}/chat/completions",

@@ -27,7 +27,15 @@ async def startup_event():
     app.state.config_manager.start_reloader_task()
     
     # Initialize httpx client
-    app.state.httpx_client = httpx.AsyncClient()
+    # Initialize httpx client with generous default timeouts
+    app.state.httpx_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(
+            connect=60.0,
+            read=None,
+            write=None,
+            pool=None
+        )
+    )
 
     # Initialize ModelService
     app.state.model_service = ModelService(app.state.config_manager, app.state.httpx_client)
@@ -182,4 +190,4 @@ async def generate_key_endpoint(request: Request):
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000, workers=4)

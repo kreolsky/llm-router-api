@@ -62,9 +62,9 @@ class OllamaProvider(BaseProvider):
                 # Ollama can be slower than cloud providers (especially for large models)
                 # Optimized timeout for non-streaming
                 ollama_timeout = httpx.Timeout(
-                    connect=15.0,  # Slightly longer for local/slow connections
-                    read=120.0,    # 2 minutes for large model responses
-                    write=10.0,
+                    connect=60.0,  # Slightly longer for local/slow connections
+                    read=None,     # Disable read timeout
+                    write=None,    # Disable write timeout
                     pool=10.0
                 )
                 response = await self.client.post(f"{self.base_url}/chat",

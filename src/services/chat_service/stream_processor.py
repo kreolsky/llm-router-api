@@ -11,6 +11,7 @@ all provider responses are passed through exactly as received.
 
 import json
 import time
+import asyncio
 from typing import Dict, Any, AsyncGenerator, Optional
 
 from ...core.logging import logger
@@ -132,39 +133,150 @@ class StreamProcessor:
             })
         
         try:
+            # Buffer for partial SSE messages
+            buffer = ""
+            byte_buffer = b""
+            
+            # Check if we should use buffering at all
+            # If sanitization is disabled, we don't need to buffer
+            if not self.should_sanitize:
+                async for chunk in provider_stream:
+                    chunk_count += 1
+                    bytes_processed += len(chunk)
+                    
+                    # Try to decode for logging, but don't fail if it's binary
+                    try:
+                        chunk_content = chunk.decode('utf-8', errors='replace')
+                    except Exception:
+                        chunk_content = "<binary data>"
+
+                    # Log content directly in the message string
+                    preview = chunk_content[:1000].replace('\n', '\\n')
+                    logger.debug(f"Chunk {chunk_count} ({len(chunk)} bytes) | Content: {preview}...", request_id=request_id)
+                    
+                    # Yield the chunk to the client
+                    yield chunk
+                    
+                    # Use a minimal sleep to yield control to the event loop
+                    await asyncio.sleep(0)
+                
+                # Log completion for transparent mode
+                end_time = time.time()
+                duration = end_time - start_time
+                logger.info(f"Stream processing completed (transparent)", extra={
+                    "request_id": request_id,
+                    "duration": duration,
+                    "total_bytes": bytes_processed
+                })
+                return
+
             async for chunk in provider_stream:
                 chunk_count += 1
                 bytes_processed += len(chunk)
                 
-                if self.should_sanitize:
-                    original_chunk = chunk
-                    sanitized_chunk = self._sanitize_chunk_if_needed(chunk, request_id)
+                logger.debug(f"Received raw chunk {chunk_count} ({len(chunk)} bytes) for processing", extra={
+                    "request_id": request_id,
+                    "stream_processing": {
+                        "chunk_number": chunk_count,
+                        "chunk_size": len(chunk),
+                        "total_bytes": bytes_processed
+                    }
+                })
+                
+
+                # Sanitization logic with buffering
+                # We use a more robust way to handle split UTF-8 characters
+                byte_buffer += chunk
+                try:
+                    # Try to decode the entire byte buffer
+                    decoded_str = byte_buffer.decode('utf-8')
+                    buffer += decoded_str
+                    byte_buffer = b"" # Clear if successful
+                except UnicodeDecodeError as e:
+                    # If it fails, it might be a split character at the end
+                    # We'll wait for the next chunk, but only if it's at the very end
+                    if e.start > len(byte_buffer) - 4: # UTF-8 max 4 bytes
+                         logger.debug(f"Unicode split at end of chunk, buffering {len(byte_buffer)} bytes", extra={"request_id": request_id})
+                         continue
                     
-                    # Проверяем, был ли чанк изменен
-                    if sanitized_chunk != original_chunk:
+                    # If it's not at the end, it's a real error
+                    logger.warning(f"Unicode decode error in middle of chunk: {e}", extra={"request_id": request_id})
+                    buffer += byte_buffer.decode('utf-8', errors='replace')
+                    byte_buffer = b""
+                    continue
+
+                # SSE messages are separated by double newlines
+                # SSE messages can be separated by \n\n or \r\n\r\n
+                # We normalize to \n for easier processing
+                normalized_buffer = buffer.replace("\r\n", "\n")
+                
+                # Log buffer state if it's getting large
+                if len(buffer) > 10000:
+                    logger.warning(f"Large stream buffer: {len(buffer)} chars", extra={"request_id": request_id})
+
+                # SSE standard says messages are separated by \n\n
+                # But some providers might use just \n for comments or other data
+                # We look for \n\n to be sure we have a full message
+                while "\n\n" in normalized_buffer:
+                    # Check for comments (lines starting with :)
+                    if normalized_buffer.lstrip().startswith(":"):
+                        # Find the end of the comment line
+                        if "\n" in normalized_buffer:
+                            comment_line, buffer = buffer.split("\n", 1)
+                            normalized_buffer = buffer.replace("\r\n", "\n")
+                            logger.debug(f"Passing through SSE comment", extra={"request_id": request_id})
+                            yield (comment_line + "\n").encode('utf-8')
+                            continue
+                        else:
+                            # Comment is not finished yet
+                            break
+
+                    # Find the original separator in the raw buffer to split correctly
+                    if "\r\n\r\n" in buffer:
+                        message, buffer = buffer.split("\r\n\r\n", 1)
+                        sep = "\r\n\r\n"
+                    else:
+                        message, buffer = buffer.split("\n\n", 1)
+                        sep = "\n\n"
+                    
+                    # Update normalized buffer for the next iteration
+                    normalized_buffer = buffer.replace("\r\n", "\n")
+                    
+                    if not message.strip():
+                        yield sep.encode('utf-8')
+                        continue
+
+                    logger.debug(f"Processing SSE message (len={len(message)})", extra={
+                        "request_id": request_id,
+                        "message_preview": message[:100] + "..." if len(message) > 100 else message
+                    })
+
+                    sanitized_message = self._sanitize_sse_message(message, request_id)
+                    
+                    # Check if message was actually changed (for stats)
+                    if sanitized_message != message:
                         sanitized_count += 1
-                        logger.debug(f"Chunk {chunk_count} was sanitized", extra={
+                        logger.debug(f"Message in chunk {chunk_count} was sanitized", extra={
                             "request_id": request_id,
                             "stream_processing": {
                                 "chunk_number": chunk_count,
-                                "original_size": len(original_chunk),
-                                "sanitized_size": len(sanitized_chunk),
                                 "was_sanitized": True
                             }
                         })
                     
-                    yield sanitized_chunk
-                else:
-                    logger.debug(f"Passing through chunk {chunk_count} without sanitization", extra={
+                    # IMPORTANT: Use flush to ensure data is sent to client immediately
+                    logger.debug(f"Yielding sanitized message (len={len(sanitized_message)})", extra={
                         "request_id": request_id,
-                        "stream_processing": {
-                            "chunk_number": chunk_count,
-                            "chunk_size": len(chunk),
-                            "was_sanitized": False
-                        }
+                        "message_content": sanitized_message[:200] + "..." if len(sanitized_message) > 200 else sanitized_message
                     })
-                    yield chunk
+                    yield (sanitized_message + sep).encode('utf-8')
             
+            # Yield remaining buffer if any
+            if buffer.strip():
+                sanitized_message = self._sanitize_sse_message(buffer, request_id)
+                # Use \n\n as default separator for the last piece
+                yield (sanitized_message + "\n\n").encode('utf-8')
+
             # Финальная статистика
             end_time = time.time()
             duration = end_time - start_time
@@ -176,9 +288,8 @@ class StreamProcessor:
                 "stream_processing": {
                     "duration_seconds": duration,
                     "total_chunks": chunk_count,
-                    "sanitized_chunks": sanitized_count,
+                    "sanitized_messages": sanitized_count,
                     "bytes_processed": bytes_processed,
-                    "sanitization_ratio": sanitized_count / chunk_count if chunk_count > 0 else 0,
                     "chunks_per_second": chunk_count / duration if duration > 0 else 0,
                     "bytes_per_second": bytes_processed / duration if duration > 0 else 0
                 }
@@ -199,7 +310,6 @@ class StreamProcessor:
                 "stream_processing": {
                     "duration_seconds": duration,
                     "chunks_processed": chunk_count,
-                    "sanitized_chunks": sanitized_count,
                     "error": str(e),
                     "error_type": type(e).__name__
                 }
@@ -207,75 +317,45 @@ class StreamProcessor:
             
             yield self._format_error(e)
     
-    def _sanitize_chunk_if_needed(self, chunk: bytes, request_id: str) -> bytes:
+    def _sanitize_sse_message(self, message: str, request_id: str) -> str:
         """
-        Применяет санитизацию к чанку если это SSE с JSON данными
-        
-        Args:
-            chunk: Байты чанка от провайдера
-            request_id: ID запроса для логирования
+        Sanitizes a single SSE message string.
+        """
+        if not message.startswith('data: '):
+            return message
             
-        Returns:
-            bytes: Санитизированный чанк или оригинальный если санитизация не нужна
-        """
+        json_str = message[6:].strip()
+        if json_str == '[DONE]':
+            return message
+            
         try:
-            chunk_str = chunk.decode('utf-8')
-            
-            # Пропускаем служебные SSE сообщения
-            if not chunk_str.startswith('data: ') or chunk_str.strip() == 'data: [DONE]':
-                logger.debug(f"Skipping SSE control message: {chunk_str.strip()}", extra={
-                    "request_id": request_id,
-                    "sanitization": {
-                        "skipped_reason": "sse_control_message",
-                        "message": chunk_str.strip()
-                    }
-                })
-                return chunk
-            
-            # Извлекаем JSON данные
-            json_str = chunk_str[6:]  # Убираем 'data: '
-            if json_str.strip() == '[DONE]':
-                logger.debug("Skipping [DONE] message", extra={
-                    "request_id": request_id,
-                    "sanitization": {
-                        "skipped_reason": "done_message"
-                    }
-                })
-                return chunk
-            
-            # Парсим JSON
             chunk_data = json.loads(json_str)
-            
-            # Логируем перед санитизацией
-            logger.debug(f"Processing chunk for sanitization", extra={
+            logger.debug(f"JSON parsed successfully", extra={
                 "request_id": request_id,
-                "sanitization": {
-                    "chunk_keys": list(chunk_data.keys()),
-                    "has_choices": "choices" in chunk_data,
-                    "choices_count": len(chunk_data.get("choices", [])),
-                    "chunk_preview": json.dumps(chunk_data)[:200] + "..." if len(json.dumps(chunk_data)) > 200 else json.dumps(chunk_data)
-                }
+                "keys": list(chunk_data.keys())
             })
-            
-            # Применяем санитизацию
             sanitized_data = self._message_sanitizer.sanitize_stream_chunk(
                 chunk_data,
                 enabled=True
             )
-            
-            # Возвращаем в том же формате
-            return f"data: {json.dumps(sanitized_data)}\n\n".encode('utf-8')
-            
-        except (json.JSONDecodeError, UnicodeDecodeError) as e:
-            logger.warning(f"Could not parse chunk for sanitization", extra={
+            result = f"data: {json.dumps(sanitized_data, ensure_ascii=False)}"
+            logger.debug(f"Sanitization complete (len={len(result)})", extra={"request_id": request_id})
+            return result
+        except json.JSONDecodeError as e:
+            # Check if it's a comment or other non-JSON SSE message
+            if not json_str.startswith('{') and not json_str.startswith('['):
+                logger.debug(f"Non-JSON SSE message, passing through", extra={
+                    "request_id": request_id,
+                    "content": json_str[:50]
+                })
+                return message
+        except json.JSONDecodeError as e:
+            logger.warning(f"Could not parse SSE message for sanitization", extra={
                 "request_id": request_id,
-                "sanitization": {
-                    "error": str(e),
-                    "error_type": type(e).__name__,
-                    "chunk_preview": chunk[:100].decode('utf-8', errors='ignore') + "..." if len(chunk) > 100 else chunk.decode('utf-8', errors='ignore')
-                }
+                "error": str(e),
+                "message_preview": message[:100]
             })
-            return chunk
+            return message
     
     def get_processing_stats(self) -> Dict[str, Any]:
         """

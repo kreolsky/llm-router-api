@@ -218,7 +218,8 @@ class ChatService:
                         self.stream_processor.process_stream(
                             response_data.body_iterator, requested_model, request_id, user_id
                         ),
-                        media_type=response_data.media_type
+                        media_type=response_data.media_type,
+                        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"}
                     )
                 else:
                     # Для нестриминговых ответов логируем полный JSON

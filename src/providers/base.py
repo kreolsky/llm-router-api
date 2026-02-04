@@ -128,82 +128,111 @@ class BaseProvider:
         # - write: 10s to send request
         # - pool: 10s to get connection from pool
         stream_timeout = httpx.Timeout(
-            connect=10.0,
-            read=30.0,    # Time between chunks, not total time
-            write=10.0,
-            pool=10.0
+            connect=60.0,
+            read=None,    # Disable read timeout for streaming
+            write=None,   # Disable write timeout to allow large images
+            pool=None     # Disable pool timeout
         )
         
+        # Use a fresh client for each stream to avoid pool issues
         async def generate():
-            async with client.stream("POST", f"{self.base_url}{url_path}",
-                                     headers=self.headers,
-                                     json=request_body,
-                                     timeout=stream_timeout) as response:
-              
-              # DEBUG логирование заголовков ответа
-              logger.debug_data(
-                  title="Provider Response Headers",
-                  data={
-                      "status_code": response.status_code,
-                      "headers": dict(response.headers)
-                  },
-                  request_id=request_body.get("request_id", "unknown"),
-                  component="base_provider",
-                  data_flow="from_provider"
-              )
-              
-              try:
-                  response.raise_for_status()
-              except httpx.HTTPStatusError as e:
-                  # Сначала читаем ответ, чтобы избежать ResponseNotRead
-                  response_text = ""
-                  try:
-                      # Для стриминговых ответов нужно сначала прочитать контент
-                      response_text = e.response.text
-                  except httpx.ResponseNotRead:
-                      # Если ответ не может быть прочитан, используем общее сообщение
-                      response_text = "Unable to read error response from provider"
+            async with httpx.AsyncClient(timeout=stream_timeout) as stream_client:
+                logger.debug(f"Starting stream request to {url_path}", extra={
+                    "url": f"{self.base_url}{url_path}",
+                    "timeout": str(stream_timeout),
+                    "request_id": request_body.get("request_id", "unknown")
+                })
+                start_time = time.time()
+                try:
+                    async with stream_client.stream("POST", f"{self.base_url}{url_path}",
+                                             headers=self.headers,
+                                             json=request_body) as response:
+                        logger.debug(f"Stream response headers received after {time.time() - start_time:.2f}s", extra={
+                            "status_code": response.status_code,
+                            "request_id": request_body.get("request_id", "unknown")
+                        })
                   
-                  # Специальная обработка для ошибки 429
-                  error_code = "provider_api_error"
-                  if e.response.status_code == 429:
-                      error_message = "Provider rate limit exceeded (429 Too Many Requests). Please retry after a delay."
-                      error_code = "rate_limit_exceeded"
-                  else:
-                      error_message = f"Provider API error: {e.response.status_code} - {response_text}"
-                  
-                  # Пытаемся распарсить JSON из ответа
-                  try:
-                      error_json = e.response.json()
-                      if "error" in error_json and "message" in error_json["error"]:
-                          error_message = error_json["error"]["message"]
-                          if "code" in error_json["error"]:
-                              error_code = error_json["error"]["code"]
-                      elif "message" in error_json:
-                          error_message = error_json["message"]
-                  except (json.JSONDecodeError, httpx.ResponseNotRead):
-                      pass # Если не JSON или ответ не прочитан, используем error_message по умолчанию
-                  
-                  # Use ErrorHandler to create and raise the appropriate exception
-                  http_exception = ErrorHandler.handle_provider_stream_error(
-                      error_details=error_message,
-                      context=context,
-                      status_code=e.response.status_code,
-                      error_code=error_code,
-                      original_exception=e
-                  )
-                  raise http_exception from e
-              except httpx.RequestError as e:
-                  # Use ErrorHandler to create and raise the appropriate exception
-                  http_exception = ErrorHandler.handle_provider_network_error(
-                      original_exception=e,
-                      context=context
-                  )
-                  raise http_exception from e
-              
-              async for chunk in response.aiter_bytes():
-                  yield chunk
-        return StreamingResponse(generate(), media_type="text/event-stream")
+                        # DEBUG логирование заголовков ответа
+                        logger.debug_data(
+                            title="Provider Response Headers",
+                            data={
+                                "status_code": response.status_code,
+                                "headers": dict(response.headers)
+                            },
+                            request_id=request_body.get("request_id", "unknown"),
+                            component="base_provider",
+                            data_flow="from_provider"
+                        )
+                        
+                        try:
+                            response.raise_for_status()
+                        except httpx.HTTPStatusError as e:
+                            # Сначала читаем ответ, чтобы избежать ResponseNotRead
+                            response_text = ""
+                            try:
+                                # Для стриминговых ответов нужно сначала прочитать контент
+                                response_text = e.response.text
+                            except httpx.ResponseNotRead:
+                                # Если ответ не может быть прочитан, используем общее сообщение
+                                response_text = "Unable to read error response from provider"
+                            
+                            # Специальная обработка для ошибки 429
+                            error_code = "provider_api_error"
+                            if e.response.status_code == 429:
+                                error_message = "Provider rate limit exceeded (429 Too Many Requests). Please retry after a delay."
+                                error_code = "rate_limit_exceeded"
+                            else:
+                                error_message = f"Provider API error: {e.response.status_code} - {response_text}"
+                            
+                            # Пытаемся распарсить JSON из ответа
+                            try:
+                                error_json = e.response.json()
+                                if "error" in error_json and "message" in error_json["error"]:
+                                    error_message = error_json["error"]["message"]
+                                    if "code" in error_json["error"]:
+                                        error_code = error_json["error"]["code"]
+                                elif "message" in error_json:
+                                    error_message = error_json["message"]
+                            except (json.JSONDecodeError, httpx.ResponseNotRead):
+                                pass # Если не JSON или ответ не прочитан, используем error_message по умолчанию
+                            
+                            # Use ErrorHandler to create and raise the appropriate exception
+                            http_exception = ErrorHandler.handle_provider_stream_error(
+                                error_details=error_message,
+                                context=context,
+                                status_code=e.response.status_code,
+                                error_code=error_code,
+                                original_exception=e
+                            )
+                            raise http_exception from e
+                        except httpx.RequestError as e:
+                            # Use ErrorHandler to create and raise the appropriate exception
+                            http_exception = ErrorHandler.handle_provider_network_error(
+                                original_exception=e,
+                                context=context
+                            )
+                            raise http_exception from e
+                        
+                        logger.debug(f"Starting to iterate over stream chunks for {request_body.get('request_id', 'unknown')}")
+                        async for chunk in response.aiter_bytes():
+                            logger.debug(f"Provider yielded {len(chunk)} bytes", extra={
+                                "request_id": request_body.get("request_id", "unknown"),
+                                "chunk_size": len(chunk)
+                            })
+                            yield chunk
+                        logger.debug(f"Provider stream finished for {request_body.get('request_id', 'unknown')}")
+                except Exception as e:
+                    logger.error(f"Stream request failed after {time.time() - start_time:.2f}s: {str(e)}", extra={
+                        "error_type": type(e).__name__,
+                        "request_id": request_body.get("request_id", "unknown")
+                    })
+                    raise
+
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"}
+        )
 
     async def chat_completions(self, request_body: Dict[str, Any], provider_model_name: str, model_config: Dict[str, Any]) -> Any:
         raise NotImplementedError
