@@ -100,9 +100,11 @@ class BaseProvider:
         self.api_key = os.environ.get(self.api_key_env) if self.api_key_env else None
         self.client = client # Store the httpx client
         self.config_manager = config_manager # Store config_manager for retry settings
+        # Automatically set provider name from class name for logging
+        self.provider_name = self.__class__.__name__.replace("Provider", "").lower()
 
         if not self.base_url:
-            context = ErrorContext(provider_name=self.__class__.__name__.replace("Provider", "").lower())
+            context = ErrorContext(provider_name=self.provider_name)
             raise ErrorHandler.handle_provider_config_error(
                 error_details="Provider base_url is not configured.",
                 context=context
@@ -111,33 +113,213 @@ class BaseProvider:
         # Only set API key and Authorization header if api_key_env is provided
         if self.api_key_env:
             if not self.api_key:
-                context = ErrorContext(provider_name=self.__class__.__name__.replace("Provider", "").lower())
+                context = ErrorContext(provider_name=self.provider_name)
                 raise ErrorHandler.handle_provider_config_error(
                     error_details=f"API key for {self.api_key_env} is not set in environment variables.",
                     context=context
                 )
             self.headers["Authorization"] = f"Bearer {self.api_key}"
 
+    def _log_provider_data(self, title: str, data: Dict[str, Any], request_id: str, data_flow: str, component: str = None) -> None:
+        """
+        Standardized logging method for provider requests and responses.
+        
+        This method provides a consistent way to log provider data across all providers,
+        ensuring uniform debug information for troubleshooting.
+        
+        Args:
+            title: Descriptive title for the log entry (e.g., "OpenAI Request", "Anthropic Response")
+            data: Dictionary containing the data to log (request body, response, headers, etc.)
+            request_id: Unique identifier for the request
+            data_flow: Direction of data flow ("to_provider" or "from_provider")
+            component: Component name for logging (defaults to provider_name if not specified)
+        
+        Example:
+            self._log_provider_data(
+                title="Provider Request",
+                data={"url": url, "headers": headers, "request_body": body},
+                request_id="req-123",
+                data_flow="to_provider"
+            )
+        """
+        if component is None:
+            component = f"{self.provider_name}_provider"
+        
+        logger.debug_data(
+            title=title,
+            data=data,
+            request_id=request_id,
+            component=component,
+            data_flow=data_flow
+        )
+
+    def _get_timeout(self, timeout_type: str, default_value: float) -> float:
+        """
+        Get timeout value from config_manager or use default.
+        
+        This method standardizes timeout configuration across all providers,
+        allowing provider-specific timeouts while providing sensible defaults.
+        
+        Args:
+            timeout_type: Type of timeout (e.g., "openai_connect_timeout", "anthropic_timeout")
+            default_value: Default timeout value to use if config_manager is not available
+        
+        Returns:
+            Timeout value in seconds
+        
+        Example:
+            connect_timeout = self._get_timeout("openai_connect_timeout", 60.0)
+        """
+        if self.config_manager and hasattr(self.config_manager, timeout_type):
+            return getattr(self.config_manager, timeout_type)
+        return default_value
+
     @retry_on_rate_limit(config_manager=None)  # Will be set by self.config_manager in the wrapper
-    async def _stream_request(self, client: httpx.AsyncClient, url_path: str, request_body: Dict[str, Any]) -> StreamingResponse:
-        """Stream request with optimized timeouts for streaming"""
+    async def _make_request(
+        self,
+        method: str,
+        path: str,
+        request_body: Dict[str, Any] = None,
+        headers: Dict[str, str] = None,
+        timeout: httpx.Timeout = None,
+        files: Dict[str, Any] = None,
+        data: Dict[str, Any] = None,
+        request_id: str = "unknown"
+    ) -> Dict[str, Any]:
+        """
+        Unified method for non-streaming HTTP requests to provider APIs.
+        
+        This method centralizes HTTP request logic, logging, error handling, and timeout management
+        across all providers, reducing code duplication and ensuring consistent behavior.
+        
+        Args:
+            method: HTTP method ("GET", "POST", etc.)
+            path: API endpoint path (relative to base_url)
+            request_body: JSON body for the request (for POST requests)
+            headers: Additional headers to merge with default headers
+            timeout: Custom timeout configuration (uses default if not specified)
+            files: Files to upload (for multipart/form-data requests)
+            data: Form data for multipart requests
+            request_id: Unique identifier for the request (for logging)
+        
+        Returns:
+            JSON response from the provider
+        
+        Raises:
+            HTTPException: Wrapped httpx exceptions with proper error context
+        
+        Example:
+            response = await self._make_request(
+                method="POST",
+                path="/chat/completions",
+                request_body={"model": "gpt-4", "messages": [...]},
+                request_id="req-123"
+            )
+        """
         # Create error context for this request
         context = ErrorContext(
-            request_id=request_body.get("request_id", "unknown"),
-            provider_name=self.__class__.__name__.replace("Provider", "").lower()
+            request_id=request_id,
+            provider_name=self.provider_name
+        )
+        
+        # Merge headers if provided
+        merged_headers = {**self.headers}
+        if headers:
+            merged_headers.update(headers)
+        
+        # Log the outgoing request
+        self._log_provider_data(
+            title=f"{self.__class__.__name__} Request",
+            data={
+                "url": f"{self.base_url}{path}",
+                "headers": merged_headers,
+                "request_body": request_body,
+                "has_files": files is not None,
+                "has_data": data is not None
+            },
+            request_id=request_id,
+            data_flow="to_provider"
+        )
+        
+        try:
+            # Execute the HTTP request
+            if method.upper() == "POST":
+                response = await self.client.post(
+                    f"{self.base_url}{path}",
+                    headers=merged_headers,
+                    json=request_body,
+                    files=files,
+                    data=data,
+                    timeout=timeout
+                )
+            elif method.upper() == "GET":
+                response = await self.client.get(
+                    f"{self.base_url}{path}",
+                    headers=merged_headers,
+                    params=request_body,
+                    timeout=timeout
+                )
+            else:
+                raise ValueError(f"Unsupported HTTP method: {method}")
+            
+            # Raise exception for HTTP errors
+            response.raise_for_status()
+            
+            # Parse and return JSON response
+            response_json = response.json()
+            
+            # Log the incoming response
+            self._log_provider_data(
+                title=f"{self.__class__.__name__} Response",
+                data=response_json,
+                request_id=request_id,
+                data_flow="from_provider"
+            )
+            
+            return response_json
+            
+        except httpx.HTTPStatusError as e:
+            # Handle HTTP errors with proper context
+            raise ErrorHandler.handle_provider_http_error(e, context, self.provider_name)
+        except httpx.RequestError as e:
+            # Handle network errors with proper context
+            raise ErrorHandler.handle_provider_network_error(e, context, self.provider_name)
+
+    @retry_on_rate_limit(config_manager=None)  # Will be set by self.config_manager in the wrapper
+    async def _stream_request(self, client: httpx.AsyncClient, url_path: str, request_body: Dict[str, Any]) -> StreamingResponse:
+        """
+        Stream request with optimized timeouts for streaming.
+        
+        This method handles streaming requests to provider APIs, with proper timeout configuration
+        and error handling. It uses the unified logging infrastructure for consistency.
+        
+        Args:
+            client: httpx.AsyncClient instance to use for the request
+            url_path: API endpoint path (relative to base_url)
+            request_body: Request body containing parameters and request_id
+        
+        Returns:
+            StreamingResponse with SSE (Server-Sent Events) content
+        
+        Raises:
+            HTTPException: Wrapped httpx exceptions with proper error context
+        """
+        # Create error context for this request
+        request_id = request_body.get("request_id", "unknown")
+        context = ErrorContext(
+            request_id=request_id,
+            provider_name=self.provider_name
         )
         
         # DEBUG логирование запроса к провайдеру
-        logger.debug_data(
+        self._log_provider_data(
             title="Base Provider Request",
             data={
                 "url": f"{self.base_url}{url_path}",
                 "headers": self.headers,
-                "request_body": request_body,
-                "component": "base_provider"
+                "request_body": request_body
             },
-            request_id=request_body.get("request_id", "unknown"),
-            component="base_provider",
+            request_id=request_id,
             data_flow="to_provider"
         )
         
@@ -172,14 +354,13 @@ class BaseProvider:
                     })
               
                     # DEBUG логирование заголовков ответа
-                    logger.debug_data(
+                    self._log_provider_data(
                         title="Provider Response Headers",
                         data={
                             "status_code": response.status_code,
                             "headers": dict(response.headers)
                         },
-                        request_id=request_body.get("request_id", "unknown"),
-                        component="base_provider",
+                        request_id=request_id,
                         data_flow="from_provider"
                     )
                     

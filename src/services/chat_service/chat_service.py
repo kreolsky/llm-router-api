@@ -24,15 +24,15 @@ from fastapi import HTTPException, status, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from ...core.config_manager import ConfigManager
-from ...providers import get_provider_instance
 from ...services.model_service import ModelService
 from ...core.logging import logger
 from ...core.sanitizer import MessageSanitizer
 from ...core.error_handling import ErrorHandler, ErrorContext
+from ...services.base import BaseService
 from .stream_processor import StreamProcessor
 
 
-class ChatService:
+class ChatService(BaseService):
     """
     Main service for coordinating chat completion requests.
     
@@ -72,8 +72,8 @@ class ChatService:
             model_service: Model service for model-related operations
                 and validations
         """
-        self.config_manager = config_manager
-        self.httpx_client = httpx_client
+        # Initialize base service with config_manager and httpx_client
+        super().__init__(config_manager, httpx_client)
         self.model_service = model_service
         
         # Создаем StreamProcessor с конфигурацией для поддержки санитизации
@@ -114,15 +114,16 @@ class ChatService:
                 - 404: Model not found in configuration
                 - 500: Provider configuration error or internal server error
         """
-        project_name, api_key, allowed_models, _ = auth_data
-        request_id = request.state.request_id
-        user_id = project_name
+        # Extract request context using base class method
+        context_dict = self._get_request_context(request, auth_data)
+        request_id = context_dict["request_id"]
+        user_id = context_dict["user_id"]
 
         request_body = await request.json()
         requested_model = request_body.get("model")
 
         # DEBUG логирование полного запроса
-        logger.debug_data(
+        self._log_service_data(
             title="Chat Completion Request JSON",
             data=request_body,
             request_id=request_id,
@@ -145,34 +146,12 @@ class ChatService:
             model_id=requested_model
         )
         
-        # Валидация
-        if not requested_model:
-            raise ErrorHandler.handle_model_not_specified(context)
+        # Validate and get configuration using base class method
+        model_config, provider_name, provider_model_name, provider_config = \
+            self._validate_and_get_config(requested_model, auth_data, context)
 
-        if allowed_models and requested_model not in allowed_models:
-            raise ErrorHandler.handle_model_not_allowed(requested_model, context)
-
-        # Прямое извлечение конфигурации
-        current_config = self.config_manager.get_config()
-        models = current_config.get("models", {})
-        model_config = models.get(requested_model)
-        
-        if not model_config:
-            raise ErrorHandler.handle_model_not_found(requested_model, context)
-
-        # Получение конфигурации провайдера
-        provider_name = model_config.get("provider")
-        provider_model_name = model_config.get("provider_model_name", requested_model)
-        provider_config = current_config.get("providers", {}).get(provider_name)
-        
-        if not provider_config:
-            raise ErrorHandler.handle_provider_not_found(provider_name, requested_model, context)
-
-        # Получение провайдера
-        try:
-            provider_instance = get_provider_instance(provider_config.get("type"), provider_config, self.httpx_client, self.config_manager)
-        except ValueError as e:
-            raise ErrorHandler.handle_provider_config_error(str(e), context, e)
+        # Get provider instance using base class method
+        provider_instance = self._get_provider(provider_config, context)
         
         try:
             # Use the simple request context manager
@@ -202,7 +181,7 @@ class ChatService:
                 
                 # DEBUG логирование ответа от провайдера
                 if isinstance(response_data, StreamingResponse):
-                    logger.debug_data(
+                    self._log_service_data(
                         title="Streaming Response Started",
                         data={
                             "streaming": True,
@@ -223,7 +202,7 @@ class ChatService:
                     )
                 else:
                     # Для нестриминговых ответов логируем полный JSON
-                    logger.debug_data(
+                    self._log_service_data(
                         title="Chat Completion Response JSON",
                         data=response_data,
                         request_id=request_id,

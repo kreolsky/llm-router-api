@@ -15,85 +15,87 @@ class OllamaProvider(BaseProvider):
         self.headers["Content-Type"] = "application/json"
 
     async def chat_completions(self, request_body: Dict[str, Any], provider_model_name: str, model_config: Dict[str, Any]) -> Any:
+        """
+        Handle chat completions requests to Ollama API.
+        
+        This method transforms the OpenAI-compatible request to Ollama's format,
+        mapping parameters to Ollama's 'options' structure. It delegates to the
+        base provider's unified request methods for consistent error handling and logging.
+        
+        Args:
+            request_body: OpenAI-compatible request body
+            provider_model_name: The model name to use for this provider
+            model_config: Provider-specific model configuration including options
+        
+        Returns:
+            For streaming: StreamingResponse with SSE content
+            For non-streaming: JSON response from Ollama
+        """
         ollama_request_body = {
             "model": provider_model_name,
             "messages": request_body.get("messages", []),
             "stream": request_body.get("stream", False)
         }
 
-        # Map OpenAI-like parameters to Ollama's 'options'
-        ollama_options = {}
-        if "temperature" in request_body:
-            ollama_options["temperature"] = request_body["temperature"]
-        if "top_p" in request_body:
-            ollama_options["top_p"] = request_body["top_p"]
-        if "max_tokens" in request_body:
-            ollama_options["num_predict"] = request_body["max_tokens"]
-        if "stop" in request_body:
-            ollama_options["stop"] = request_body["stop"]
-        if "presence_penalty" in request_body:
-            ollama_options["presence_penalty"] = request_body["presence_penalty"]
-        if "frequency_penalty" in request_body:
-            ollama_options["frequency_penalty"] = request_body["frequency_penalty"]
+        # Map OpenAI-like parameters to Ollama's 'options' using dictionary comprehension
+        param_mapping = {
+            "temperature": "temperature",
+            "top_p": "top_p",
+            "max_tokens": "num_predict",
+            "stop": "stop",
+            "presence_penalty": "presence_penalty",
+            "frequency_penalty": "frequency_penalty"
+        }
+        
+        ollama_options = {
+            ollama_key: request_body[openai_key]
+            for openai_key, ollama_key in param_mapping.items()
+            if openai_key in request_body
+        }
         
         if ollama_options:
             ollama_request_body["options"] = ollama_options
 
-        # DEBUG логирование запроса к провайдеру
-        logger.debug_data(
-            title="Ollama Request",
-            data={
-                "url": f"{self.base_url}/chat",
-                "headers": self.headers,
-                "request_body": ollama_request_body,
-                "original_request_body": request_body,
-                "provider_model_name": provider_model_name,
-                "model_config": model_config
-            },
-            request_id=request_body.get("request_id", "unknown"),
-            component="ollama_provider",
-            data_flow="to_provider"
+        # Stream or non-streaming request
+        if ollama_request_body["stream"]:
+            return await self._stream_request(self.client, "/chat", ollama_request_body)
+        
+        # Ollama can be slower than cloud providers (especially for large models)
+        # Optimized timeout for non-streaming
+        # Use config_manager.ollama_connect_timeout if available
+        connect_timeout = self._get_timeout("ollama_connect_timeout", 60.0)
+        ollama_timeout = httpx.Timeout(
+            connect=connect_timeout,  # Slightly longer for local/slow connections
+            read=None,     # Disable read timeout
+            write=None,    # Disable write timeout
+            pool=self.client.timeout.pool
+        )
+        
+        # Use the base provider's unified request method
+        return await self._make_request(
+            method="POST",
+            path="/chat",
+            request_body=ollama_request_body,
+            timeout=ollama_timeout,
+            request_id=request_body.get("request_id", "unknown")
         )
 
-        try:
-            if ollama_request_body["stream"]:
-                return await self._stream_request(self.client, "/chat", ollama_request_body)
-            else:
-                # Ollama can be slower than cloud providers (especially for large models)
-                # Optimized timeout for non-streaming
-                # Use config_manager.ollama_connect_timeout if available
-                connect_timeout = self.config_manager.ollama_connect_timeout if self.config_manager else 60.0
-                ollama_timeout = httpx.Timeout(
-                    connect=connect_timeout,  # Slightly longer for local/slow connections
-                    read=None,     # Disable read timeout
-                    write=None,    # Disable write timeout
-                    pool=self.client.timeout.pool
-                )
-                response = await self.client.post(f"{self.base_url}/chat",
-                                             headers=self.headers,
-                                             json=ollama_request_body,
-                                             timeout=ollama_timeout)
-                response.raise_for_status()
-                response_json = response.json()
-                
-                # DEBUG логирование ответа от провайдера
-                logger.debug_data(
-                    title="Ollama Response",
-                    data=response_json,
-                    request_id=request_body.get("request_id", "unknown"),
-                    component="ollama_provider",
-                    data_flow="from_provider"
-                )
-                
-                return response_json
-        except httpx.HTTPStatusError as e:
-            context = ErrorContext(provider_name="ollama")
-            raise ErrorHandler.handle_provider_http_error(e, context, "ollama")
-        except httpx.RequestError as e:
-            context = ErrorContext(provider_name="ollama")
-            raise ErrorHandler.handle_provider_network_error(e, context, "ollama")
-
     async def embeddings(self, request_body: Dict[str, Any], provider_model_name: str, model_config: Dict[str, Any]) -> Any:
+        """
+        Handle embeddings requests to Ollama API.
+        
+        This method transforms the OpenAI-compatible request to Ollama's format,
+        mapping 'input' to 'prompt'. It delegates to the base provider's unified
+        request method for consistent error handling and logging.
+        
+        Args:
+            request_body: OpenAI-compatible request body with 'input' field
+            provider_model_name: The model name to use for this provider
+            model_config: Provider-specific model configuration including options
+        
+        Returns:
+            JSON response containing embeddings from Ollama
+        """
         # Ollama embeddings API expects 'model' and 'prompt'
         # The incoming request_body is OpenAI-compatible, with 'input'
         ollama_request_body = {
@@ -101,53 +103,22 @@ class OllamaProvider(BaseProvider):
             "prompt": request_body.get("input") # Map OpenAI 'input' to Ollama 'prompt'
         }
 
-        # DEBUG логирование запроса к провайдеру
-        logger.debug_data(
-            title="Ollama Embedding Request",
-            data={
-                "url": f"{self.base_url}/embeddings",
-                "headers": self.headers,
-                "request_body": ollama_request_body,
-                "original_request_body": request_body,
-                "provider_model_name": provider_model_name,
-                "model_config": model_config
-            },
-            request_id=request_body.get("request_id", "unknown"),
-            component="ollama_provider",
-            data_flow="to_provider"
+        # Ollama embeddings timeout
+        embeddings_timeout = httpx.Timeout(
+            connect=15.0,
+            read=60.0,   # Embeddings can take time for large texts
+            write=10.0,
+            pool=10.0
         )
-
-        try:
-            # Ollama embeddings timeout
-            embeddings_timeout = httpx.Timeout(
-                connect=15.0,
-                read=60.0,   # Embeddings can take time for large texts
-                write=10.0,
-                pool=10.0
-            )
-            response = await self.client.post(f"{self.base_url}/embeddings",
-                                             headers=self.headers,
-                                             json=ollama_request_body,
-                                             timeout=embeddings_timeout)
-            response.raise_for_status()
-            response_json = response.json()
-            
-            # DEBUG логирование ответа от провайдера
-            logger.debug_data(
-                title="Ollama Embedding Response",
-                data=response_json,
-                request_id=request_body.get("request_id", "unknown"),
-                component="ollama_provider",
-                data_flow="from_provider"
-            )
-            
-            return response_json
-        except httpx.HTTPStatusError as e:
-            context = ErrorContext(provider_name="ollama")
-            raise ErrorHandler.handle_provider_http_error(e, context, "ollama")
-        except httpx.RequestError as e:
-            context = ErrorContext(provider_name="ollama")
-            raise ErrorHandler.handle_provider_network_error(e, context, "ollama")
+        
+        # Use the base provider's unified request method
+        return await self._make_request(
+            method="POST",
+            path="/embeddings",
+            request_body=ollama_request_body,
+            timeout=embeddings_timeout,
+            request_id=request_body.get("request_id", "unknown")
+        )
 
     async def transcriptions(self, audio_file: Any, request_params: Dict[str, Any], model_config: Dict[str, Any]) -> Any:
         context = ErrorContext(provider_name="ollama")

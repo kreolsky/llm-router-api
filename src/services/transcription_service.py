@@ -8,9 +8,10 @@ from ..services.model_service import ModelService
 from ..providers.openai import OpenAICompatibleProvider
 from ..core.error_handling import ErrorHandler, ErrorContext
 from ..core.logging import logger
+from .base import BaseService
 
 
-class TranscriptionService:
+class TranscriptionService(BaseService):
     """
     Ultra-minimal transcription service that handles audio transcription requests.
     
@@ -20,6 +21,9 @@ class TranscriptionService:
     - Maintains proper access control using the project's standard pattern
     - Eliminates hardcoded provider references
     - Provides comprehensive error handling and logging
+    
+    Refactoring Phase 2: This service now inherits from BaseService to eliminate
+    duplicate code for validation, provider instantiation, and logging.
     """
     
     def __init__(self, config_manager: ConfigManager, client: httpx.AsyncClient, model_service: ModelService):
@@ -31,21 +35,27 @@ class TranscriptionService:
             client: HTTP client for making requests
             model_service: Model service for retrieving model configurations
         """
-        self.config_manager = config_manager
-        self.client = client
+        super().__init__(config_manager, client)
         self.model_service = model_service
 
     async def _get_provider_instance(self, provider_config: Dict[str, Any]) -> OpenAICompatibleProvider:
         """
         Create a provider instance for the given configuration.
+        
+        Note: This method is kept for backward compatibility but now delegates
+        to the base class _get_provider method. The base class method handles
+        all provider types, not just OpenAI-compatible providers.
 
         Args:
             provider_config: Provider configuration dictionary
 
         Returns:
-            OpenAICompatibleProvider instance
+            OpenAICompatibleProvider instance (or other provider type)
         """
-        return OpenAICompatibleProvider(provider_config, self.client, self.config_manager)
+        # Use base class method for provider instantiation
+        # Create a minimal context for error handling
+        context = ErrorContext()
+        return self._get_provider(provider_config, context)
 
     async def create_transcription(
         self,
@@ -85,7 +95,7 @@ class TranscriptionService:
         user_id, api_key, allowed_models, _ = auth_data
         
         # DEBUG logging of request parameters
-        logger.debug_data(
+        self._log_service_data(
             title="Transcription Request Parameters",
             data={
                 "model_id": model_id,
@@ -145,7 +155,7 @@ class TranscriptionService:
                 context.provider_name = provider_name
                 raise ErrorHandler.handle_provider_not_found(provider_name, model_id, context)
             
-            # Create provider instance
+            # Create provider instance using base class method
             provider_instance = await self._get_provider_instance(provider_config)
             
             # Send request to provider
@@ -163,7 +173,7 @@ class TranscriptionService:
             )
             
             # DEBUG logging of response
-            logger.debug_data(
+            self._log_service_data(
                 title="Transcription Response JSON",
                 data=response,
                 request_id="unknown",

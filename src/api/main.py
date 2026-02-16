@@ -27,6 +27,7 @@ async def startup_event():
     app.state.config_manager.start_reloader_task()
     
     # Initialize httpx client with connection pool limits and configured timeouts
+    # CRITICAL: read timeout prevents indefinite hangs when providers are unreachable
     limits = httpx.Limits(
         max_connections=app.state.config_manager.httpx_max_connections,
         max_keepalive_connections=app.state.config_manager.httpx_max_keepalive_connections
@@ -35,7 +36,7 @@ async def startup_event():
         limits=limits,
         timeout=httpx.Timeout(
             connect=app.state.config_manager.httpx_connect_timeout,
-            read=None,
+            read=app.state.config_manager.httpx_read_timeout,  # Fixed: was None causing indefinite hangs
             write=None,
             pool=app.state.config_manager.httpx_pool_timeout
         )

@@ -14,72 +14,54 @@ class OpenAICompatibleProvider(BaseProvider):
         self.headers["Content-Type"] = "application/json"
 
     async def chat_completions(self, request_body: Dict[str, Any], provider_model_name: str, model_config: Dict[str, Any]) -> Any:
+        """
+        Handle chat completions requests to OpenAI-compatible APIs.
+        
+        This method transforms the request to use the provider-specific model name,
+        merges model configuration options, and delegates to the base provider's
+        unified request methods for consistent error handling and logging.
+        
+        Args:
+            request_body: OpenAI-compatible request body
+            provider_model_name: The model name to use for this provider
+            model_config: Provider-specific model configuration including options
+        
+        Returns:
+            For streaming: StreamingResponse with SSE content
+            For non-streaming: JSON response from the provider
+        """
         # Transform request: Replace the model name with the provider's specific model name
         request_body["model"] = provider_model_name
         
         # Merge options from model_config into the request_body
-        options = model_config.get("options")
-        if options:
+        if options := model_config.get("options"):
             request_body = deep_merge(request_body, options)
 
-        # Ensure stream is handled correctly
-        stream = request_body.get("stream", False)
-
-        # DEBUG логирование запроса к провайдеру
-        logger.debug_data(
-            title="OpenAI Request",
-            data={
-                "url": f"{self.base_url}/chat/completions",
-                "headers": self.headers,
-                "request_body": request_body,
-                "provider_model_name": provider_model_name,
-                "model_config": model_config
-            },
-            request_id=request_body.get("request_id", "unknown"),
-            component="openai_provider",
-            data_flow="to_provider"
+        # Stream or non-streaming request
+        if request_body.get("stream", False):
+            return await self._stream_request(self.client, "/chat/completions", request_body)
+        
+        # Optimized timeout for non-streaming chat completions
+        # - connect: use config_manager.openai_connect_timeout
+        # - read: None (disable read timeout)
+        # - write: None (disable write timeout)
+        # - pool: use client's pool timeout
+        connect_timeout = self._get_timeout("openai_connect_timeout", 60.0)
+        non_stream_timeout = httpx.Timeout(
+            connect=connect_timeout,
+            read=None,    # Disable read timeout
+            write=None,   # Disable write timeout
+            pool=self.client.timeout.pool
         )
-
-        try:
-            if stream:
-                return await self._stream_request(self.client, "/chat/completions", request_body)
-            else:
-                # Optimized timeout for non-streaming chat completions
-                # - connect: use config_manager.openai_connect_timeout
-                # - read: None (disable read timeout)
-                # - write: None (disable write timeout)
-                # - pool: use client's pool timeout
-                connect_timeout = self.config_manager.openai_connect_timeout if self.config_manager else 60.0
-                non_stream_timeout = httpx.Timeout(
-                    connect=connect_timeout,
-                    read=None,    # Disable read timeout
-                    write=None,   # Disable write timeout
-                    pool=self.client.timeout.pool
-                )
-                response = await self.client.post(f"{self.base_url}/chat/completions",
-                                             headers=self.headers,
-                                             json=request_body,
-                                             timeout=non_stream_timeout)
-                response.raise_for_status()
-                response_json = response.json()
-                
-                # DEBUG логирование ответа от провайдера
-                logger.debug_data(
-                    title="OpenAI Response",
-                    data=response_json,
-                    request_id=request_body.get("request_id", "unknown"),
-                    component="openai_provider",
-                    data_flow="from_provider"
-                )
-                
-                return response_json
-        except httpx.HTTPStatusError as e:
-            # Create error context - we don't have request info here, so use minimal context
-            context = ErrorContext(provider_name="openai")
-            raise ErrorHandler.handle_provider_http_error(e, context, "openai")
-        except httpx.RequestError as e:
-            context = ErrorContext(provider_name="openai")
-            raise ErrorHandler.handle_provider_network_error(e, context, "openai")
+        
+        # Use the base provider's unified request method
+        return await self._make_request(
+            method="POST",
+            path="/chat/completions",
+            request_body=request_body,
+            timeout=non_stream_timeout,
+            request_id=request_body.get("request_id", "unknown")
+        )
 
     def _prepare_transcription_headers(self, api_key: str) -> Dict[str, str]:
         return {"Authorization": f"Bearer {api_key}"}
@@ -88,21 +70,28 @@ class OpenAICompatibleProvider(BaseProvider):
         return {"file": (filename, io.BytesIO(audio_data), content_type)}
 
     def _process_transcription_params(self, **kwargs) -> Dict[str, Any]:
-        transcription_params = {}
-        if 'language' in kwargs:
-            transcription_params['language'] = kwargs['language']
-        if 'temperature' in kwargs:
-            transcription_params['temperature'] = kwargs['temperature']
-        if 'prompt' in kwargs:
-            transcription_params['prompt'] = kwargs['prompt']
-        if 'response_format' in kwargs:
-            transcription_params['response_format'] = kwargs['response_format']
+        """
+        Process transcription parameters from kwargs.
+        
+        Args:
+            **kwargs: Transcription parameters (language, temperature, prompt, response_format, etc.)
+        
+        Returns:
+            Dictionary of processed transcription parameters
+        """
+        # Standard transcription parameters
+        transcription_params = {
+            key: kwargs[key]
+            for key in ['language', 'temperature', 'prompt', 'response_format']
+            if key in kwargs
+        }
         
         # Handle return_timestamps logic
-        if 'return_timestamps' in kwargs and kwargs['return_timestamps']:
-            transcription_params['response_format'] = 'verbose_json'
-        elif 'return_timestamps' in kwargs and not kwargs['return_timestamps'] and 'response_format' not in kwargs:
-            transcription_params['response_format'] = 'json'
+        if 'return_timestamps' in kwargs:
+            if kwargs['return_timestamps']:
+                transcription_params['response_format'] = 'verbose_json'
+            elif 'response_format' not in kwargs:
+                transcription_params['response_format'] = 'json'
         
         return transcription_params
 
@@ -118,6 +107,22 @@ class OpenAICompatibleProvider(BaseProvider):
     ) -> Dict[str, Any]:
         """
         Sends audio data for transcription to the OpenAI-compatible service.
+        
+        This method prepares the transcription request with proper headers, files,
+        and parameters, then delegates to the base provider's unified request method
+        for consistent error handling and logging.
+        
+        Args:
+            audio_data: Raw audio data bytes
+            filename: Name of the audio file
+            content_type: MIME type of the audio file (e.g., "audio/wav")
+            model_id: Model ID to use for transcription
+            api_key: API key for authentication
+            base_url: Base URL for the transcription service
+            **kwargs: Additional transcription parameters (language, temperature, prompt, etc.)
+        
+        Returns:
+            JSON response containing the transcription result
         """
         headers = self._prepare_transcription_headers(api_key)
         files = self._prepare_transcription_files(audio_data, filename, content_type)
@@ -125,75 +130,67 @@ class OpenAICompatibleProvider(BaseProvider):
         
         data = {"model": model_id, **transcription_params}
 
+        # Use config_manager.openai_transcription_timeout if available
+        transcription_timeout = self._get_timeout("openai_transcription_timeout", 3600.0)
+        
+        # Use the base provider's unified request method with custom base_url
+        # Note: We need to temporarily override base_url for this request
+        original_base_url = self.base_url
+        self.base_url = base_url
+        
         try:
-            # Use config_manager.openai_transcription_timeout if available
-            transcription_timeout = self.config_manager.openai_transcription_timeout if self.config_manager else 3600.0
-            response = await self.client.post(
-                f"{base_url}/audio/transcriptions",
+            response = await self._make_request(
+                method="POST",
+                path="/audio/transcriptions",
                 headers=headers,
                 files=files,
                 data=data,
-                timeout=transcription_timeout
+                timeout=transcription_timeout,
+                request_id="transcription_unknown"
             )
-            response.raise_for_status()
-            response_json = response.json()
-            
-            # DEBUG логирование ответа от провайдера
-            logger.debug_data(
-                title="OpenAI Transcription Response",
-                data=response_json,
-                request_id="transcription_unknown",
-                component="openai_provider",
-                data_flow="from_provider"
-            )
-            
-            return response_json
-        except httpx.HTTPStatusError as e:
-            context = ErrorContext(provider_name="openai")
-            raise ErrorHandler.handle_provider_http_error(e, context, "openai")
-        except httpx.RequestError as e:
-            context = ErrorContext(provider_name="openai")
-            raise ErrorHandler.handle_provider_network_error(e, context, "openai")
+            return response
+        finally:
+            # Restore original base_url
+            self.base_url = original_base_url
 
     async def embeddings(self, request_body: Dict[str, Any], provider_model_name: str, model_config: Dict[str, Any]) -> Any:
+        """
+        Handle embeddings requests to OpenAI-compatible APIs.
+        
+        This method transforms the request to use the provider-specific model name,
+        merges model configuration options, and delegates to the base provider's
+        unified request method for consistent error handling and logging.
+        
+        Args:
+            request_body: OpenAI-compatible request body with 'input' field
+            provider_model_name: The model name to use for this provider
+            model_config: Provider-specific model configuration including options
+        
+        Returns:
+            JSON response containing embeddings
+        """
         # Transform request: Replace the model name with the provider's specific model name
         request_body["model"] = provider_model_name
         
         # Merge options from model_config into the request_body
-        options = model_config.get("options")
-        if options:
+        if options := model_config.get("options"):
             request_body = deep_merge(request_body, options)
 
-        try:
-            # Optimized timeout for embeddings (usually faster than chat)
-            # Use config_manager.openai_embeddings_read_timeout if available
-            read_timeout = self.config_manager.openai_embeddings_read_timeout if self.config_manager else 30.0
-            embeddings_timeout = httpx.Timeout(
-                connect=10.0,
-                read=read_timeout,   # Embeddings are typically fast
-                write=10.0,
-                pool=10.0
-            )
-            response = await self.client.post(f"{self.base_url}/embeddings",
-                                             headers=self.headers,
-                                             json=request_body,
-                                             timeout=embeddings_timeout)
-            response.raise_for_status()
-            response_json = response.json()
-            
-            # DEBUG логирование ответа от провайдера
-            logger.debug_data(
-                title="OpenAI Embeddings Response",
-                data=response_json,
-                request_id=request_body.get("request_id", "unknown"),
-                component="openai_provider",
-                data_flow="from_provider"
-            )
-            
-            return response_json
-        except httpx.HTTPStatusError as e:
-            context = ErrorContext(provider_name="openai")
-            raise ErrorHandler.handle_provider_http_error(e, context, "openai")
-        except httpx.RequestError as e:
-            context = ErrorContext(provider_name="openai")
-            raise ErrorHandler.handle_provider_network_error(e, context, "openai")
+        # Optimized timeout for embeddings (usually faster than chat)
+        # Use config_manager.openai_embeddings_read_timeout if available
+        read_timeout = self._get_timeout("openai_embeddings_read_timeout", 30.0)
+        embeddings_timeout = httpx.Timeout(
+            connect=10.0,
+            read=read_timeout,   # Embeddings are typically fast
+            write=10.0,
+            pool=10.0
+        )
+        
+        # Use the base provider's unified request method
+        return await self._make_request(
+            method="POST",
+            path="/embeddings",
+            request_body=request_body,
+            timeout=embeddings_timeout,
+            request_id=request_body.get("request_id", "unknown")
+        )

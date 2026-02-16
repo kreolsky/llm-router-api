@@ -93,6 +93,11 @@ class ConfigManager:
         return float(os.getenv("HTTPX_POOL_TIMEOUT", "5.0"))
 
     @property
+    def httpx_read_timeout(self) -> float:
+        """Read timeout in seconds for httpx client - critical for preventing indefinite hangs when providers are unreachable"""
+        return float(os.getenv("HTTPX_READ_TIMEOUT", "60.0"))
+
+    @property
     def api_workers(self) -> int:
         """Number of worker processes for uvicorn server"""
         return int(os.getenv("API_WORKERS", "4"))
