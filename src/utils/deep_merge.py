@@ -1,10 +1,11 @@
 from typing import Dict, Any
 
 def deep_merge(dict1: Dict, dict2: Dict) -> Dict:
-    """Deep merges dict2 into dict1."""
+    """Deep merges dict2 into dict1, returning a new dict without mutating inputs."""
+    result = dict1.copy()
     for key, value in dict2.items():
-        if key in dict1 and isinstance(dict1[key], dict) and isinstance(value, dict):
-            dict1[key] = deep_merge(dict1[key], value)
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = deep_merge(result[key], value)
         else:
-            dict1[key] = value
-    return dict1
+            result[key] = value
+    return result

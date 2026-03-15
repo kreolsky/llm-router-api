@@ -56,7 +56,8 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
                 f"Unexpected error: {str(e)}",
                 request_id=request_id,
                 user_id=user_id,
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                exc_info=True
             )
             raise e
 

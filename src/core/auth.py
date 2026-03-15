@@ -1,3 +1,4 @@
+import hmac
 from fastapi import Security, HTTPException, status, Request
 from fastapi.security import APIKeyHeader
 from typing import Dict, Any, Tuple, List
@@ -51,7 +52,8 @@ async def get_api_key(
 
     found_project = None
     for project_name, project_data in config["user_keys"].items():
-        if project_data.get("api_key") == api_key:
+        stored_key = project_data.get("api_key", "")
+        if stored_key and hmac.compare_digest(stored_key, api_key):
             found_project = project_name
             break
 

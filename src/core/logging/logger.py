@@ -83,7 +83,7 @@ class Logger:
         """Log an error message."""
         processed_kwargs, exc_info = self._process_kwargs(kwargs)
         if exc_info is None:
-            exc_info = True
+            exc_info = False
             
         if processed_kwargs:
             self._logger.error(message, extra=processed_kwargs, exc_info=exc_info)

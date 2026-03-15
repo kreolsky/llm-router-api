@@ -10,9 +10,10 @@ class ConfigManager:
         self.providers_path = os.path.join(config_dir, "providers.yaml")
         self.models_path = os.path.join(config_dir, "models.yaml")
         self.user_keys_path = os.path.join(config_dir, "user_keys.yaml")
-        self.config = self._load_config()
+        self.config = self._load_config(fail_on_error=True)
         self.last_mtimes = {} # Initialize last_mtimes as instance variable
         self._initialize_mtimes()
+        self._on_reload_callbacks = []
         
         # Загружаем переменные окружения
         self.debug = os.getenv("DEBUG", "false").lower() == "true"
@@ -32,31 +33,25 @@ class ConfigManager:
             }
         })
 
-    def _load_config(self) -> Dict[str, Any]:
+    def _load_config(self, fail_on_error: bool = False) -> Dict[str, Any]:
         config = {}
-        try:
-            with open(self.providers_path, 'r') as f:
-                config['providers'] = yaml.safe_load(f).get('providers', {})
-            with open(self.models_path, 'r') as f:
-                config['models'] = yaml.safe_load(f).get('models', {})
-            with open(self.user_keys_path, 'r') as f:
-                config['user_keys'] = yaml.safe_load(f).get('user_keys', {})
-        except FileNotFoundError as e:
-            logger.warning(f"Configuration file not found: {e}", extra={
-                "config": {
-                    "error_type": "file_not_found",
-                    "file_path": str(e.filename) if hasattr(e, 'filename') else 'unknown'
-                }
-            }, exc_info=True)
-            pass # Silently ignore missing files for now
-        except yaml.YAMLError as e:
-            logger.error(f"Error parsing YAML file: {e}", extra={
-                "config": {
-                    "error_type": "yaml_parse_error",
-                    "error_message": str(e)
-                }
-            }, exc_info=True)
-            # Handle YAML parsing errors
+        file_map = [
+            (self.providers_path, 'providers'),
+            (self.models_path, 'models'),
+            (self.user_keys_path, 'user_keys'),
+        ]
+        for path, key in file_map:
+            try:
+                with open(path, 'r') as f:
+                    config[key] = yaml.safe_load(f).get(key, {})
+            except FileNotFoundError as e:
+                logger.error(f"Configuration file not found: {path}")
+                if fail_on_error:
+                    raise RuntimeError(f"Critical config file missing: {path}") from e
+            except yaml.YAMLError as e:
+                logger.error(f"Error parsing YAML file {path}: {e}", exc_info=True)
+                if fail_on_error:
+                    raise RuntimeError(f"Failed to parse config: {path}") from e
         return config
 
     def get_config(self) -> Dict[str, Any]:
@@ -147,6 +142,10 @@ class ConfigManager:
         """Ollama connection timeout in seconds"""
         return float(os.getenv("OLLAMA_CONNECT_TIMEOUT", "60.0"))
 
+    def add_reload_callback(self, callback):
+        """Register a callback to be called after config reload."""
+        self._on_reload_callbacks.append(callback)
+
     def reload_config(self):
         logger.info("Reloading configuration", extra={
             "config": {
@@ -154,15 +153,21 @@ class ConfigManager:
                 "config_dir": self.config_dir
             }
         })
-        self.config = self._load_config()
-        logger.info("Configuration reloaded", extra={
-            "config": {
-                "operation": "reload_complete",
-                "providers_count": len(self.config.get('providers', {})),
-                "models_count": len(self.config.get('models', {})),
-                "user_keys_count": len(self.config.get('user_keys', {}))
-            }
-        })
+        new_config = self._load_config(fail_on_error=False)
+        if new_config.get('providers') and new_config.get('models') and new_config.get('user_keys'):
+            self.config = new_config
+            logger.info("Configuration reloaded", extra={
+                "config": {
+                    "operation": "reload_complete",
+                    "providers_count": len(self.config.get('providers', {})),
+                    "models_count": len(self.config.get('models', {})),
+                    "user_keys_count": len(self.config.get('user_keys', {}))
+                }
+            })
+            for cb in self._on_reload_callbacks:
+                cb()
+        else:
+            logger.warning("Partial config reload rejected, keeping previous config")
 
     def _initialize_mtimes(self):
         config_files = [
@@ -178,34 +183,40 @@ class ConfigManager:
 
     async def _reload_config_task(self):
         while True:
-            changed = False
-            config_files = [
-                self.providers_path,
-                self.models_path,
-                self.user_keys_path,
-            ]
-            for fpath in config_files:
-                try:
-                    mtime = os.path.getmtime(fpath)
-                    if fpath not in self.last_mtimes or self.last_mtimes[fpath] < mtime:
-                        self.last_mtimes[fpath] = mtime
-                        changed = True
-                except FileNotFoundError:
-                    pass
+            try:
+                changed = False
+                config_files = [
+                    self.providers_path,
+                    self.models_path,
+                    self.user_keys_path,
+                ]
+                for fpath in config_files:
+                    try:
+                        mtime = os.path.getmtime(fpath)
+                        if fpath not in self.last_mtimes or self.last_mtimes[fpath] < mtime:
+                            self.last_mtimes[fpath] = mtime
+                            changed = True
+                    except FileNotFoundError:
+                        pass
 
-            if changed:
-                logger.debug("Configuration files changed, triggering reload", extra={
-                    "config": {
-                        "operation": "auto_reload",
-                        "changed_files": [fpath for fpath in config_files if fpath in self.last_mtimes]
-                    }
-                })
-                self.reload_config()
-            
-            await asyncio.sleep(self.config_reload_interval) # Check based on config_reload_interval
+                if changed:
+                    logger.debug("Configuration files changed, triggering reload", extra={
+                        "config": {
+                            "operation": "auto_reload",
+                            "changed_files": [fpath for fpath in config_files if fpath in self.last_mtimes]
+                        }
+                    })
+                    self.reload_config()
+            except asyncio.CancelledError:
+                logger.info("Config reload task cancelled")
+                return
+            except Exception as e:
+                logger.error(f"Config reload task error: {e}", exc_info=True)
 
-    def start_reloader_task(self):
-        asyncio.create_task(self._reload_config_task())
+            await asyncio.sleep(self.config_reload_interval)
+
+    def start_reloader_task(self) -> asyncio.Task:
+        return asyncio.create_task(self._reload_config_task())
 
 # Example usage (for testing purposes)
 if __name__ == "__main__":

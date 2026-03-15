@@ -1,3 +1,5 @@
+import asyncio
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException, status, Depends, File, Form, UploadFile
 from typing import Optional
 import uvicorn
@@ -13,51 +15,49 @@ from ..services.embedding_service import EmbeddingService
 from ..services.transcription_service import TranscriptionService
 from ..core.logging import logger
 from ..utils.generate_key import generate_key
+from ..providers import clear_provider_cache
 from .middleware import RequestLoggerMiddleware
 
-app = FastAPI()
 
-# Initialize ConfigManager
-config_manager = ConfigManager()
-app.state.config_manager = config_manager
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    config_manager = ConfigManager()
+    app.state.config_manager = config_manager
+    config_manager.add_reload_callback(clear_provider_cache)
+    reload_task = config_manager.start_reloader_task()
 
-@app.on_event("startup")
-async def startup_event():
-    # Start config reloader task
-    app.state.config_manager.start_reloader_task()
-    
     # Initialize httpx client with connection pool limits and configured timeouts
-    # CRITICAL: read timeout prevents indefinite hangs when providers are unreachable
     limits = httpx.Limits(
-        max_connections=app.state.config_manager.httpx_max_connections,
-        max_keepalive_connections=app.state.config_manager.httpx_max_keepalive_connections
+        max_connections=config_manager.httpx_max_connections,
+        max_keepalive_connections=config_manager.httpx_max_keepalive_connections
     )
     app.state.httpx_client = httpx.AsyncClient(
         limits=limits,
         timeout=httpx.Timeout(
-            connect=app.state.config_manager.httpx_connect_timeout,
-            read=app.state.config_manager.httpx_read_timeout,  # Fixed: was None causing indefinite hangs
+            connect=config_manager.httpx_connect_timeout,
+            read=config_manager.httpx_read_timeout,
             write=None,
-            pool=app.state.config_manager.httpx_pool_timeout
+            pool=config_manager.httpx_pool_timeout
         )
     )
 
-    # Initialize ModelService
-    app.state.model_service = ModelService(app.state.config_manager, app.state.httpx_client)
+    app.state.model_service = ModelService(config_manager, app.state.httpx_client)
+    app.state.chat_service = ChatService(config_manager, app.state.httpx_client, app.state.model_service)
+    app.state.embedding_service = EmbeddingService(config_manager, app.state.httpx_client)
+    app.state.transcription_service = TranscriptionService(config_manager, app.state.httpx_client, app.state.model_service)
 
-    # Initialize ChatService
-    app.state.chat_service = ChatService(app.state.config_manager, app.state.httpx_client, app.state.model_service)
+    yield
 
-    # Initialize EmbeddingService
-    app.state.embedding_service = EmbeddingService(app.state.config_manager, app.state.httpx_client)
-
-    # Initialize TranscriptionService
-    app.state.transcription_service = TranscriptionService(app.state.config_manager, app.state.httpx_client, app.state.model_service)
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    # Close httpx client
+    # Shutdown
+    reload_task.cancel()
+    try:
+        await reload_task
+    except asyncio.CancelledError:
+        pass
     await app.state.httpx_client.aclose()
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(RequestLoggerMiddleware)
 
@@ -105,7 +105,7 @@ async def create_transcription(
     # Get request_id from request state if available
     request_id = getattr(request.state, 'request_id', 'unknown')
     user_id = getattr(request.state, 'project_name', 'unknown')
-    
+
     # Log incoming transcription request with structured data
     logger.request(
         operation="Transcription Request",
@@ -120,7 +120,7 @@ async def create_transcription(
         language=language,
         return_timestamps=return_timestamps
     )
-    
+
     # Debug log request headers
     logger.debug_data(
         title="Transcription Request Headers",
@@ -129,7 +129,7 @@ async def create_transcription(
         component="api",
         data_flow="incoming"
     )
-    
+
     # Determine which file was provided
     if audio_file:
         uploaded_file = audio_file
@@ -158,20 +158,21 @@ async def create_transcription(
             }
         }
     )
-    
+
     return await app.state.transcription_service.create_transcription(
         uploaded_file, model, auth_data, response_format, temperature, language, return_timestamps
     )
 
 @app.get("/tools/generate_key")
-async def generate_key_endpoint(request: Request):
-    """
-    Generate and return a new API key without authentication.
-    """
+async def generate_key_endpoint(
+    request: Request,
+    auth_data: tuple = Depends(check_endpoint_access("/tools/generate_key"))
+):
+    """Generate and return a new API key."""
     # Get request_id from request state if available
     request_id = getattr(request.state, 'request_id', 'unknown')
     user_id = getattr(request.state, 'project_name', 'unknown')
-    
+
     # Log incoming key generation request
     logger.info(
         "Key generation request received",
@@ -184,7 +185,7 @@ async def generate_key_endpoint(request: Request):
             "client_host": request.client.host
         }
     )
-    
+
     key = generate_key()
     logger.debug_data(
         title="Generated API Key",
@@ -195,4 +196,4 @@ async def generate_key_endpoint(request: Request):
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000, workers=config_manager.api_workers)
+    uvicorn.run(app, host="0.0.0.0", port=8000)

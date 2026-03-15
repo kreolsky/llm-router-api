@@ -19,6 +19,7 @@ with complete transparent proxying.
 """
 
 import httpx
+import inspect
 from typing import Dict, Any, Tuple
 from fastapi import HTTPException, status, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -180,7 +181,7 @@ class ChatService(BaseService):
                 response_data = await provider_instance.chat_completions(request_body, provider_model_name, model_config)
                 
                 # DEBUG логирование ответа от провайдера
-                if isinstance(response_data, StreamingResponse):
+                if inspect.isasyncgen(response_data):
                     self._log_service_data(
                         title="Streaming Response Started",
                         data={
@@ -192,12 +193,12 @@ class ChatService(BaseService):
                         component="chat_service",
                         data_flow="from_provider"
                     )
-                    
+
                     return StreamingResponse(
                         self.stream_processor.process_stream(
-                            response_data.body_iterator, requested_model, request_id, user_id
+                            response_data, requested_model, request_id, user_id
                         ),
-                        media_type=response_data.media_type,
+                        media_type="text/event-stream",
                         headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"}
                     )
                 else:
