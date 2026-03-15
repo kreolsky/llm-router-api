@@ -12,7 +12,6 @@ from ..core.logging import logger
 class AnthropicProvider(BaseProvider):
     def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient, config_manager=None):
         super().__init__(config, client, config_manager)
-        self.headers["Content-Type"] = "application/json"
         # Anthropic specific headers
         for key, value in config.get("headers", {}).items():
             self.headers[key] = value
@@ -52,7 +51,6 @@ class AnthropicProvider(BaseProvider):
             if field in request_body:
                 anthropic_request[field] = request_body[field]
 
-        # Merge options from model_config into the anthropic_request
         if options := model_config.get("options"):
             anthropic_request = deep_merge(anthropic_request, options)
 

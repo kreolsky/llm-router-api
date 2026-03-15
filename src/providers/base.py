@@ -102,6 +102,8 @@ class BaseProvider:
         self.config_manager = config_manager # Store config_manager for retry settings
         # Automatically set provider name from class name for logging
         self.provider_name = self.__class__.__name__.replace("Provider", "").lower()
+        # Default Content-Type for all providers (can be overridden before super().__init__)
+        self.headers.setdefault("Content-Type", "application/json")
 
         if not self.base_url:
             context = ErrorContext(provider_name=self.provider_name)
@@ -153,6 +155,31 @@ class BaseProvider:
             data_flow=data_flow
         )
 
+    def _create_timeout(self, connect: float = None, read: float = None,
+                        write: float = None, pool: float = None) -> httpx.Timeout:
+        """
+        Create an httpx.Timeout with sensible defaults from the client.
+
+        Unspecified connect/pool values inherit from the client's timeout.
+        Unspecified read/write values default to None (no timeout).
+        """
+        return httpx.Timeout(
+            connect=connect if connect is not None else self.client.timeout.connect,
+            read=read,
+            write=write,
+            pool=pool if pool is not None else self.client.timeout.pool
+        )
+
+    def _apply_model_config(self, request_body: Dict[str, Any], provider_model_name: str,
+                            model_config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Set provider model name and merge model-level options into request body.
+        """
+        request_body["model"] = provider_model_name
+        if options := model_config.get("options"):
+            request_body = deep_merge(request_body, options)
+        return request_body
+
     def _get_timeout(self, timeout_type: str, default_value: float) -> float:
         """
         Get timeout value from config_manager or use default.
@@ -184,7 +211,8 @@ class BaseProvider:
         timeout: httpx.Timeout = None,
         files: Dict[str, Any] = None,
         data: Dict[str, Any] = None,
-        request_id: str = "unknown"
+        request_id: str = "unknown",
+        base_url: str = None
     ) -> Dict[str, Any]:
         """
         Unified method for non-streaming HTTP requests to provider APIs.
@@ -216,22 +244,24 @@ class BaseProvider:
                 request_id="req-123"
             )
         """
+        effective_base_url = base_url or self.base_url
+
         # Create error context for this request
         context = ErrorContext(
             request_id=request_id,
             provider_name=self.provider_name
         )
-        
+
         # Merge headers if provided
         merged_headers = {**self.headers}
         if headers:
             merged_headers.update(headers)
-        
+
         # Log the outgoing request
         self._log_provider_data(
             title=f"{self.__class__.__name__} Request",
             data={
-                "url": f"{self.base_url}{path}",
+                "url": f"{effective_base_url}{path}",
                 "headers": merged_headers,
                 "request_body": request_body,
                 "has_files": files is not None,
@@ -240,12 +270,12 @@ class BaseProvider:
             request_id=request_id,
             data_flow="to_provider"
         )
-        
+
         try:
             # Execute the HTTP request
             if method.upper() == "POST":
                 response = await self.client.post(
-                    f"{self.base_url}{path}",
+                    f"{effective_base_url}{path}",
                     headers=merged_headers,
                     json=request_body,
                     files=files,
@@ -254,7 +284,7 @@ class BaseProvider:
                 )
             elif method.upper() == "GET":
                 response = await self.client.get(
-                    f"{self.base_url}{path}",
+                    f"{effective_base_url}{path}",
                     headers=merged_headers,
                     params=request_body,
                     timeout=timeout
@@ -323,17 +353,7 @@ class BaseProvider:
             data_flow="to_provider"
         )
         
-        # Optimized timeout for streaming:
-        # - connect: 60s to establish connection
-        # - read: None (disable read timeout for streaming)
-        # - write: None (disable write timeout to allow large images)
-        # - pool: Use client's pool timeout
-        stream_timeout = httpx.Timeout(
-            connect=client.timeout.connect,
-            read=None,    # Disable read timeout for streaming
-            write=None,   # Disable write timeout to allow large images
-            pool=client.timeout.pool
-        )
+        stream_timeout = self._create_timeout()
         
         # Reuse the existing client instead of creating a new one
         async def generate():

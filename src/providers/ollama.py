@@ -12,7 +12,6 @@ from ..core.logging import logger
 class OllamaProvider(BaseProvider):
     def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient, config_manager=None):
         super().__init__(config, client, config_manager)
-        self.headers["Content-Type"] = "application/json"
 
     async def chat_completions(self, request_body: Dict[str, Any], provider_model_name: str, model_config: Dict[str, Any]) -> Any:
         """
@@ -60,16 +59,8 @@ class OllamaProvider(BaseProvider):
         if ollama_request_body["stream"]:
             return await self._stream_request(self.client, "/chat", ollama_request_body)
         
-        # Ollama can be slower than cloud providers (especially for large models)
-        # Optimized timeout for non-streaming
-        # Use config_manager.ollama_connect_timeout if available
         connect_timeout = self._get_timeout("ollama_connect_timeout", 60.0)
-        ollama_timeout = httpx.Timeout(
-            connect=connect_timeout,  # Slightly longer for local/slow connections
-            read=None,     # Disable read timeout
-            write=None,    # Disable write timeout
-            pool=self.client.timeout.pool
-        )
+        ollama_timeout = self._create_timeout(connect=connect_timeout)
         
         # Use the base provider's unified request method
         return await self._make_request(
@@ -103,13 +94,7 @@ class OllamaProvider(BaseProvider):
             "prompt": request_body.get("input") # Map OpenAI 'input' to Ollama 'prompt'
         }
 
-        # Ollama embeddings timeout
-        embeddings_timeout = httpx.Timeout(
-            connect=15.0,
-            read=60.0,   # Embeddings can take time for large texts
-            write=10.0,
-            pool=10.0
-        )
+        embeddings_timeout = self._create_timeout(connect=15.0, read=60.0, write=10.0, pool=10.0)
         
         # Use the base provider's unified request method
         return await self._make_request(

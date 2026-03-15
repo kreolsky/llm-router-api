@@ -104,6 +104,32 @@ class ModelService:
         
         return additional_model_details
 
+    def _build_model_response(self, model_id: str, **extra_fields) -> Dict[str, Any]:
+        """Build a standardized model response object."""
+        return {
+            "id": model_id,
+            "object": "model",
+            "created": int(time.time()),
+            "owned_by": "nnp-llm-router",
+            "parent": None,
+            "permission": [{
+                "id": f"model-perm-{model_id}",
+                "object": "model_permission",
+                "created": int(time.time()),
+                "allow_create_engine": False,
+                "allow_sampling": True,
+                "allow_logprobs": False,
+                "allow_search_indices": False,
+                "allow_view": True,
+                "allow_fine_tuning": False,
+                "organization": "*",
+                "group": None,
+                "is_blocking": False
+            }],
+            "root": model_id,
+            **extra_fields
+        }
+
     async def list_models(self, auth_data: Tuple[str, str, list, list]) -> Dict[str, Any]:
         _, _, allowed_models, _ = auth_data
         current_config = self.config_manager.get_config()
@@ -116,30 +142,7 @@ class ModelService:
                 continue
 
             if allowed_models is None or len(allowed_models) == 0 or model_id in allowed_models:
-                models_list.append({
-                    "id": model_id,
-                    "object": "model",
-                    "created": int(time.time()), # Placeholder
-                    "owned_by": "nnp-llm-router", # Custom owner
-                    "parent": None,
-                    "permission": [
-                        {
-                            "id": f"model-perm-{model_id}",
-                            "object": "model_permission",
-                            "created": int(time.time()),
-                            "allow_create_engine": False,
-                            "allow_sampling": True,
-                            "allow_logprobs": False,
-                            "allow_search_indices": False,
-                            "allow_view": True,
-                            "allow_fine_tuning": False,
-                            "organization": "*",
-                            "group": None,
-                            "is_blocking": False
-                        }
-                    ],
-                    "root": model_id
-                })
+                models_list.append(self._build_model_response(model_id))
         return {"object": "list", "data": models_list}
 
     async def retrieve_model(self, model_id: str, auth_data: Tuple[str, str, list, list]) -> Dict[str, Any]:
@@ -169,33 +172,11 @@ class ModelService:
         # Dynamically fetch additional model details from the provider
         additional_model_details = await self._get_model_details_from_provider(model_id, current_config, self.httpx_client)
 
-        response_data = {
-            "id": model_id,
-            "object": "model",
-            "created": int(time.time()), # Placeholder
-            "owned_by": "nnp-llm-router", # Custom owner
-            "parent": None,
-            "permission": [
-                {
-                    "id": f"model-perm-{model_id}",
-                    "object": "model_permission",
-                    "created": int(time.time()),
-                    "allow_create_engine": False,
-                    "allow_sampling": True,
-                    "allow_logprobs": False,
-                    "allow_search_indices": False,
-                    "allow_view": True,
-                    "allow_fine_tuning": False,
-                    "organization": "*",
-                    "group": None,
-                    "is_blocking": False
-                }
-            ],
-            "root": model_id,
-            "provider": provider_name,
-            "provider_model_name": provider_model_name,
-            "params": model_data.get("params"),
-            "options": model_data.get("options"),
-            **additional_model_details # Merge dynamically fetched details
-        }
-        return response_data
+        return self._build_model_response(
+            model_id,
+            provider=provider_name,
+            provider_model_name=provider_model_name,
+            params=model_data.get("params"),
+            options=model_data.get("options"),
+            **additional_model_details
+        )
