@@ -41,13 +41,25 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
         except HTTPException as e:
-            # Log HTTP exception
+            detail = e.detail
+            if isinstance(detail, dict):
+                error_obj = detail.get('error', {})
+                if isinstance(error_obj, dict):
+                    message = error_obj.get('message', str(detail))
+                    code = error_obj.get('code', 'unknown_error')
+                else:
+                    message = str(detail)
+                    code = 'unknown_error'
+            else:
+                message = str(detail)
+                code = 'unknown_error'
+
             logger.error(
-                f"HTTP Exception: {e.detail.get('error', {}).get('message', str(e.detail))}",
+                f"HTTP Exception: {message}",
                 request_id=request_id,
                 user_id=user_id,
                 status_code=e.status_code,
-                error_code=e.detail.get("error", {}).get("code", "unknown_error")
+                error_code=code
             )
             raise e
         except Exception as e:

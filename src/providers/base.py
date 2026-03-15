@@ -8,7 +8,8 @@ from functools import wraps
 from fastapi.responses import JSONResponse
 
 from ..utils.deep_merge import deep_merge
-from ..core.error_handling import ErrorHandler, ErrorType, ErrorContext # Import error handling
+from ..core.error_handling import ErrorHandler, ErrorType, ErrorContext
+from ..core.error_handling.error_logger import ErrorLogger
 from ..core.logging import logger
 
 
@@ -58,26 +59,9 @@ def retry_on_rate_limit(max_retries: Optional[int] = None, base_delay: Optional[
                         is_rate_limit = True
                     
                     if is_rate_limit and attempt < actual_max_retries:
-                        # Экспоненциальное увеличение задержки
                         delay = min(actual_base_delay * (2 ** attempt), actual_max_delay)
                         last_exception = e
-                        
-                        # Извлекаем время ожидания из заголовка Retry-After, если есть
-                        retry_after = None
-                        if hasattr(e, 'original_exception') and hasattr(e.original_exception, 'response'):
-                            retry_after = e.original_exception.response
-                        elif hasattr(e, 'response'):
-                            retry_after = e.response
-                            
-                        if retry_after and retry_after.headers:
-                            retry_after_header = retry_after.headers.get('Retry-After')
-                            if retry_after_header:
-                                try:
-                                    delay = float(retry_after_header)
-                                except ValueError:
-                                    # Если не число, пробуем разобрать как HTTP-дату
-                                    pass
-                        
+
                         logger.warning(f"Rate limit exceeded, retrying in {delay}s (attempt {attempt + 1}/{actual_max_retries})", extra={
                             "delay_seconds": delay,
                             "attempt": attempt + 1,
@@ -309,10 +293,41 @@ class BaseProvider:
             return response_json
             
         except httpx.HTTPStatusError as e:
-            # Handle HTTP errors with proper context
-            raise ErrorHandler.handle_provider_http_error(e, context, self.provider_name)
+            response_text = e.response.text
+
+            error_message = f"Provider API error: {e.response.status_code}"
+            try:
+                error_json = e.response.json()
+                if "error" in error_json and isinstance(error_json["error"], dict):
+                    error_message = error_json["error"].get("message", error_message)
+                elif "message" in error_json:
+                    error_message = error_json["message"]
+            except (json.JSONDecodeError, ValueError):
+                error_message = response_text or error_message
+
+            ErrorLogger.log_provider_error(
+                provider_name=self.provider_name,
+                error_details=response_text,
+                status_code=e.response.status_code,
+                context=context,
+                original_exception=e
+            )
+
+            from fastapi import HTTPException
+            raise HTTPException(
+                status_code=e.response.status_code,
+                detail={
+                    "error": {
+                        "code": e.response.status_code,
+                        "message": error_message,
+                        "metadata": {
+                            "provider_name": self.provider_name,
+                            "raw": response_text
+                        }
+                    }
+                }
+            )
         except httpx.RequestError as e:
-            # Handle network errors with proper context
             raise ErrorHandler.handle_provider_network_error(e, context, self.provider_name)
 
     async def _stream_request(self, client: httpx.AsyncClient, url_path: str, request_body: Dict[str, Any]) -> AsyncGenerator[bytes, None]:
@@ -376,32 +391,38 @@ class BaseProvider:
                     except httpx.ResponseNotRead:
                         response_text = "Unable to read error response from provider"
 
-                    error_code = "provider_api_error"
-                    if e.response.status_code == 429:
-                        error_message = "Provider rate limit exceeded (429 Too Many Requests). Please retry after a delay."
-                        error_code = "rate_limit_exceeded"
-                    else:
-                        error_message = f"Provider API error: {e.response.status_code} - {response_text}"
-
+                    error_message = f"Provider API error: {e.response.status_code}"
                     try:
                         error_json = e.response.json()
-                        if "error" in error_json and "message" in error_json["error"]:
-                            error_message = error_json["error"]["message"]
-                            if "code" in error_json["error"]:
-                                error_code = error_json["error"]["code"]
+                        if "error" in error_json and isinstance(error_json["error"], dict):
+                            error_message = error_json["error"].get("message", error_message)
                         elif "message" in error_json:
                             error_message = error_json["message"]
                     except (json.JSONDecodeError, httpx.ResponseNotRead):
-                        pass
+                        error_message = response_text or error_message
 
-                    http_exception = ErrorHandler.handle_provider_stream_error(
-                        error_details=error_message,
-                        context=context,
+                    ErrorLogger.log_provider_error(
+                        provider_name=self.provider_name,
+                        error_details=response_text,
                         status_code=e.response.status_code,
-                        error_code=error_code,
+                        context=context,
                         original_exception=e
                     )
-                    raise http_exception from e
+
+                    from fastapi import HTTPException
+                    raise HTTPException(
+                        status_code=e.response.status_code,
+                        detail={
+                            "error": {
+                                "code": e.response.status_code,
+                                "message": error_message,
+                                "metadata": {
+                                    "provider_name": self.provider_name,
+                                    "raw": response_text
+                                }
+                            }
+                        }
+                    ) from e
                 except httpx.PoolTimeout as e:
                     http_exception = ErrorHandler.handle_service_unavailable(
                         error_details="Connection pool exhausted. Please retry later.",

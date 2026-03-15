@@ -301,40 +301,31 @@ class StreamProcessor:
     
     def _format_error(self, error: Exception) -> bytes:
         """
-        Formats an error in SSE format for transparent error forwarding.
-        
+        Formats an error in SSE format (OpenRouter-compatible).
+
         Args:
             error: Exception to format
-            
+
         Returns:
             bytes: Formatted error chunk in SSE format
         """
         if isinstance(error, HTTPException):
-            # Extract error details from HTTPException
             error_detail = error.detail
             if isinstance(error_detail, dict) and "error" in error_detail:
-                # Use the error details from HTTPException
                 error_payload = error_detail
             else:
-                # Fallback if error_detail is not in expected format
                 error_payload = {
                     "error": {
-                        "message": str(error_detail) if error_detail else str(error),
-                        "type": "api_error",
-                        "code": "http_exception",
-                        "param": None
+                        "code": error.status_code,
+                        "message": str(error_detail) if error_detail else str(error)
                     }
                 }
         else:
-            # Handle non-HTTPException errors
-            message = f"An unexpected error occurred during streaming: {error}"
             error_payload = {
                 "error": {
-                    "message": message,
-                    "type": "api_error",
-                    "code": "unexpected_streaming_error",
-                    "param": None
+                    "code": 500,
+                    "message": f"An unexpected error occurred during streaming: {error}"
                 }
             }
-        
+
         return f"data: {json.dumps(error_payload)}\n\n".encode('utf-8')

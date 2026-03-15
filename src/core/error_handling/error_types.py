@@ -58,13 +58,19 @@ class ErrorType(Enum):
             return self.message_template
     
     def create_error_detail(self, **kwargs) -> Dict[str, Any]:
-        """Create standardized error detail dictionary."""
-        return {
+        """Create standardized error detail dictionary in OpenRouter format."""
+        result = {
             "error": {
-                "message": self.format_message(**kwargs),
-                "code": self.code
+                "code": self.status_code,
+                "message": self.format_message(**kwargs)
             }
         }
+        metadata = {}
+        if kwargs.get("provider_name"):
+            metadata["provider_name"] = kwargs["provider_name"]
+        if metadata:
+            result["error"]["metadata"] = metadata
+        return result
 
 
 class ErrorContext:

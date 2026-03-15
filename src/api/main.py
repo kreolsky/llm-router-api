@@ -59,6 +59,19 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(HTTPException)
+async def custom_http_exception_handler(request: Request, exc: HTTPException):
+    """Return error detail directly without FastAPI's {"detail": ...} wrapper."""
+    content = exc.detail
+    if isinstance(content, dict) and "error" in content:
+        return JSONResponse(status_code=exc.status_code, content=content)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": {"code": exc.status_code, "message": str(content)}}
+    )
+
 app.add_middleware(RequestLoggerMiddleware)
 
 @app.get("/health")

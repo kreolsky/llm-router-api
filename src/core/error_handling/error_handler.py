@@ -50,11 +50,24 @@ class ErrorHandler:
         
         # Handle provider errors with dynamic status codes
         status_code = error_type.status_code
-        if error_type == ErrorType.PROVIDER_HTTP_ERROR and original_exception:
+        if error_type in (ErrorType.PROVIDER_HTTP_ERROR, ErrorType.PROVIDER_STREAM_ERROR) and original_exception:
             if hasattr(original_exception, 'response') and hasattr(original_exception.response, 'status_code'):
                 status_code = original_exception.response.status_code
-                # Update error detail with provider-specific code
-                error_detail["error"]["code"] = f"provider_http_error_{status_code}"
+            elif hasattr(original_exception, 'status_code'):
+                status_code = original_exception.status_code
+        # Update numeric code in error detail
+        error_detail["error"]["code"] = status_code
+
+        # Add metadata with raw provider response for provider errors
+        if error_type in (ErrorType.PROVIDER_HTTP_ERROR, ErrorType.PROVIDER_STREAM_ERROR):
+            metadata = error_detail["error"].setdefault("metadata", {})
+            if context and context.provider_name:
+                metadata["provider_name"] = context.provider_name
+            if original_exception and hasattr(original_exception, 'response'):
+                try:
+                    metadata["raw"] = original_exception.response.text
+                except Exception:
+                    pass
         
         # Log the error if requested
         if log_error:
