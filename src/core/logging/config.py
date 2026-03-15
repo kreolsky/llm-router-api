@@ -7,53 +7,16 @@ instead of JSON, maintaining all functionality while reducing complexity.
 
 import logging
 import os
-import json
-import re
+
+from ...utils.unicode import decode_unicode_escapes
 
 
 class UnicodeFormatter(logging.Formatter):
-    """
-    Custom formatter that decodes Unicode escape sequences in log messages.
-    """
-    
-    def __init__(self, fmt=None, datefmt=None):
-        super().__init__(fmt, datefmt)
-        # Pattern to match Unicode escape sequences
-        self.unicode_pattern = re.compile(r'\\u([0-9a-fA-F]{4})')
-    
-    def _decode_unicode_escapes(self, text):
-        """Decode \\uXXXX escape sequences in log messages.
+    """Custom formatter that decodes Unicode escape sequences in log messages."""
 
-        Sibling of ErrorLogger._decode_unicode_escapes with the same purpose.
-        Duplicated here because the formatter runs inside the logging pipeline
-        and importing from error_logger would create a circular dependency.
-        """
-        if not text:
-            return text
-
-        try:
-            # WHY: JSON error objects with \u escapes decode cleanly via json roundtrip
-            if '"error":' in text and '\\u' in text:
-                decoded = json.loads(text)
-                if isinstance(decoded, dict):
-                    return json.dumps(decoded, ensure_ascii=False)
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-        # WHY: fallback regex for non-JSON texts with \u escapes
-        def replace_unicode(match):
-            hex_code = match.group(1)
-            try:
-                return chr(int(hex_code, 16))
-            except ValueError:
-                return match.group(0)
-        
-        return self.unicode_pattern.sub(replace_unicode, text)
-    
     def format(self, record):
         formatted = super().format(record)
-        formatted = self._decode_unicode_escapes(formatted)
-        return formatted
+        return decode_unicode_escapes(formatted)
 
 
 def setup_logging():

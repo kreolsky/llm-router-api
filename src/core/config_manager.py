@@ -59,10 +59,6 @@ class ConfigManager:
         return self.config
     
     @property
-    def is_debug_enabled(self) -> bool:
-        return self.debug
-
-    @property
     def should_sanitize_messages(self) -> bool:
         return self.sanitize_messages
 
@@ -86,10 +82,6 @@ class ConfigManager:
     def httpx_read_timeout(self) -> float:
         # WHY: without a read timeout, requests hang indefinitely when providers are unreachable
         return float(os.getenv("HTTPX_READ_TIMEOUT", "60.0"))
-
-    @property
-    def api_workers(self) -> int:
-        return int(os.getenv("API_WORKERS", "4"))
 
     @property
     def config_reload_interval(self) -> int:
@@ -203,33 +195,3 @@ class ConfigManager:
 
     def start_reloader_task(self) -> asyncio.Task:
         return asyncio.create_task(self._reload_config_task())
-
-# Example usage (for testing purposes)
-if __name__ == "__main__":
-    # Create dummy config files for testing
-    os.makedirs("config", exist_ok=True)
-    with open("config/providers.yaml", "w") as f:
-        f.write("providers:\n  test_provider:\n    type: test\n")
-    with open("config/models.yaml", "w") as f:
-        f.write("models:\n  test_model:\n    provider: test_provider\n")
-    with open("config/user_keys.yaml", "w") as f:
-        f.write("user_keys:\n  test_key: {}\n")
-
-    config_manager = ConfigManager()
-    logger.info("Initial config loaded", extra={
-        "config": {
-            "operation": "test_initial_load",
-            "config": config_manager.get_config()
-        }
-    })
-
-    # Simulate a change and reload
-    with open("config/providers.yaml", "w") as f:
-        f.write("providers:\n  new_test_provider:\n    type: new_test\n")
-    config_manager.reload_config()
-    logger.info("Reloaded config for testing", extra={
-        "config": {
-            "operation": "test_reload",
-            "config": config_manager.get_config()
-        }
-    })

@@ -151,6 +151,52 @@ class BaseProvider:
             request_body = deep_merge(request_body, options)
         return request_body
 
+    def _raise_provider_http_error(self, e: httpx.HTTPStatusError, context: ErrorContext) -> None:
+        """Extract error message from provider response and raise HTTPException.
+
+        Handles ResponseNotRead (streaming context where body isn't buffered).
+        Logs via ErrorLogger before raising.
+        """
+        from fastapi import HTTPException
+
+        response_text = ""
+        try:
+            response_text = e.response.text
+        except httpx.ResponseNotRead:
+            response_text = "Unable to read error response from provider"
+
+        error_message = f"Provider API error: {e.response.status_code}"
+        try:
+            error_json = e.response.json()
+            if "error" in error_json and isinstance(error_json["error"], dict):
+                error_message = error_json["error"].get("message", error_message)
+            elif "message" in error_json:
+                error_message = error_json["message"]
+        except (json.JSONDecodeError, ValueError, httpx.ResponseNotRead):
+            error_message = response_text or error_message
+
+        ErrorLogger.log_provider_error(
+            provider_name=self.provider_name,
+            error_details=response_text,
+            status_code=e.response.status_code,
+            context=context,
+            original_exception=e
+        )
+
+        raise HTTPException(
+            status_code=e.response.status_code,
+            detail={
+                "error": {
+                    "code": e.response.status_code,
+                    "message": error_message,
+                    "metadata": {
+                        "provider_name": self.provider_name,
+                        "raw": response_text
+                    }
+                }
+            }
+        ) from e
+
     def _get_timeout(self, timeout_type: str, default_value: float) -> float:
         """Read a named timeout from config_manager, falling back to default_value."""
         if self.config_manager and hasattr(self.config_manager, timeout_type):
@@ -234,40 +280,7 @@ class BaseProvider:
             return response_json
             
         except httpx.HTTPStatusError as e:
-            response_text = e.response.text
-
-            error_message = f"Provider API error: {e.response.status_code}"
-            try:
-                error_json = e.response.json()
-                if "error" in error_json and isinstance(error_json["error"], dict):
-                    error_message = error_json["error"].get("message", error_message)
-                elif "message" in error_json:
-                    error_message = error_json["message"]
-            except (json.JSONDecodeError, ValueError):
-                error_message = response_text or error_message
-
-            ErrorLogger.log_provider_error(
-                provider_name=self.provider_name,
-                error_details=response_text,
-                status_code=e.response.status_code,
-                context=context,
-                original_exception=e
-            )
-
-            from fastapi import HTTPException
-            raise HTTPException(
-                status_code=e.response.status_code,
-                detail={
-                    "error": {
-                        "code": e.response.status_code,
-                        "message": error_message,
-                        "metadata": {
-                            "provider_name": self.provider_name,
-                            "raw": response_text
-                        }
-                    }
-                }
-            )
+            self._raise_provider_http_error(e, context)
         except httpx.RequestError as e:
             raise ErrorHandler.handle_provider_network_error(e, context, self.provider_name)
 
@@ -328,45 +341,7 @@ class BaseProvider:
                 try:
                     response.raise_for_status()
                 except httpx.HTTPStatusError as e:
-                    response_text = ""
-                    try:
-                        response_text = e.response.text
-                    except httpx.ResponseNotRead:
-                        # WHY: in streaming context, response body may not be buffered yet
-                        response_text = "Unable to read error response from provider"
-
-                    error_message = f"Provider API error: {e.response.status_code}"
-                    try:
-                        error_json = e.response.json()
-                        if "error" in error_json and isinstance(error_json["error"], dict):
-                            error_message = error_json["error"].get("message", error_message)
-                        elif "message" in error_json:
-                            error_message = error_json["message"]
-                    except (json.JSONDecodeError, httpx.ResponseNotRead):
-                        error_message = response_text or error_message
-
-                    ErrorLogger.log_provider_error(
-                        provider_name=self.provider_name,
-                        error_details=response_text,
-                        status_code=e.response.status_code,
-                        context=context,
-                        original_exception=e
-                    )
-
-                    from fastapi import HTTPException
-                    raise HTTPException(
-                        status_code=e.response.status_code,
-                        detail={
-                            "error": {
-                                "code": e.response.status_code,
-                                "message": error_message,
-                                "metadata": {
-                                    "provider_name": self.provider_name,
-                                    "raw": response_text
-                                }
-                            }
-                        }
-                    ) from e
+                    self._raise_provider_http_error(e, context)
                 # WHY: PoolTimeout means all connections in use, not a network failure — maps to 503
                 except httpx.PoolTimeout as e:
                     http_exception = ErrorHandler.handle_service_unavailable(

@@ -1,47 +1,13 @@
 """Centralized error logging with Unicode decoding."""
 
 from typing import Dict, Any, Optional
-import json
-import re
 from .error_types import ErrorType, ErrorContext
 from ..logging.config import setup_logging
+from ...utils.unicode import decode_unicode_escapes
 
 
 class ErrorLogger:
     """Unified error logger using the shared logging system."""
-
-    @staticmethod
-    def _decode_unicode_escapes(text):
-        """Decode \\uXXXX escape sequences in provider error messages.
-
-        Provider APIs return errors in mixed encodings, so three strategies
-        are tried in order until one succeeds.
-        """
-        if not text:
-            return text
-
-        try:
-            if '\\u' in text:
-                # WHY: JSON objects with \u escapes decode cleanly via json roundtrip
-                if text.startswith('{') and text.endswith('}'):
-                    decoded = json.loads(text)
-                    if isinstance(decoded, dict):
-                        return json.dumps(decoded, ensure_ascii=False)
-                # WHY: plain strings with \u escapes decode via Python's unicode_escape codec
-                return text.encode().decode('unicode_escape')
-        except (json.JSONDecodeError, ValueError, UnicodeError):
-            pass
-
-        # WHY: fallback regex for texts where neither JSON parse nor codec works
-        unicode_pattern = re.compile(r'\\u([0-9a-fA-F]{4})')
-        def replace_unicode(match):
-            hex_code = match.group(1)
-            try:
-                return chr(int(hex_code, 16))
-            except ValueError:
-                return match.group(0)
-        
-        return unicode_pattern.sub(replace_unicode, text)
     
     @staticmethod
     def _get_logger():
@@ -86,7 +52,7 @@ class ErrorLogger:
         logger = ErrorLogger._get_logger()
         
         # Decode Unicode escape sequences in error details
-        decoded_error_details = ErrorLogger._decode_unicode_escapes(error_details)
+        decoded_error_details = decode_unicode_escapes(error_details)
         
         log_extra = context.to_log_extra()
         log_extra.update({

@@ -1,14 +1,10 @@
 """Anthropic provider translating OpenAI-format requests to Messages API."""
 import httpx
-import json
 from typing import Dict, Any
-from fastapi.responses import JSONResponse, StreamingResponse
-from fastapi import HTTPException, status
+from fastapi.responses import JSONResponse
 
 from .base import BaseProvider
 from ..utils.deep_merge import deep_merge
-from ..core.error_handling import ErrorHandler, ErrorContext
-from ..core.logging import logger
 
 class AnthropicProvider(BaseProvider):
     def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient, config_manager=None):

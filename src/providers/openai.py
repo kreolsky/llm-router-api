@@ -1,12 +1,9 @@
 """OpenAI-compatible provider for chat, embeddings, and transcription."""
 import httpx
 from typing import Dict, Any
-from fastapi import HTTPException, status
 import io
 
 from .base import BaseProvider
-from ..core.logging import logger
-from ..core.error_handling import ErrorHandler, ErrorContext
 
 class OpenAICompatibleProvider(BaseProvider):
     def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient, config_manager=None):
