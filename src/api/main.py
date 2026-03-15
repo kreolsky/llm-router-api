@@ -1,3 +1,4 @@
+"""FastAPI application, lifespan management, and route definitions."""
 import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException, status, Depends, File, Form, UploadFile
@@ -21,13 +22,12 @@ from .middleware import RequestLoggerMiddleware
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
+    """Initialize ConfigManager, httpx pool, and all services; tear down on shutdown."""
     config_manager = ConfigManager()
     app.state.config_manager = config_manager
     config_manager.add_reload_callback(clear_provider_cache)
     reload_task = config_manager.start_reloader_task()
 
-    # Initialize httpx client with connection pool limits and configured timeouts
     limits = httpx.Limits(
         max_connections=config_manager.httpx_max_connections,
         max_keepalive_connections=config_manager.httpx_max_keepalive_connections
@@ -49,7 +49,6 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Shutdown
     reload_task.cancel()
     try:
         await reload_task
@@ -63,7 +62,7 @@ from fastapi.responses import JSONResponse
 
 @app.exception_handler(HTTPException)
 async def custom_http_exception_handler(request: Request, exc: HTTPException):
-    """Return error detail directly without FastAPI's {"detail": ...} wrapper."""
+    # WHY: FastAPI wraps detail in {"detail": ...} by default; we return error dict directly for OpenRouter compatibility
     content = exc.detail
     if isinstance(content, dict) and "error" in content:
         return JSONResponse(status_code=exc.status_code, content=content)
@@ -105,21 +104,20 @@ async def create_embeddings(
 
 @app.post("/v1/audio/transcriptions")
 async def create_transcription(
-    request: Request, # Add Request to access headers
-    audio_file: Optional[UploadFile] = File(None), # Make audio_file optional
-    file: Optional[UploadFile] = File(None), # Add 'file' as an optional parameter
-    model: Optional[str] = Form(None), # Делаем модель необязательной
+    request: Request,
+    # WHY: some clients send 'audio_file', others 'file' — accept both
+    audio_file: Optional[UploadFile] = File(None),
+    file: Optional[UploadFile] = File(None),
+    model: Optional[str] = Form(None),
     response_format: str = Form("json"),
     temperature: float = Form(0.0),
     language: Optional[str] = Form(None),
-    return_timestamps: Optional[bool] = Form(False), # Add return_timestamps
+    return_timestamps: Optional[bool] = Form(False),
     auth_data: tuple = Depends(check_endpoint_access("/v1/audio/transcriptions"))
 ):
-    # Get request_id from request state if available
     request_id = getattr(request.state, 'request_id', 'unknown')
     user_id = getattr(request.state, 'project_name', 'unknown')
 
-    # Log incoming transcription request with structured data
     logger.request(
         operation="Transcription Request",
         request_id=request_id,
@@ -134,7 +132,6 @@ async def create_transcription(
         return_timestamps=return_timestamps
     )
 
-    # Debug log request headers
     logger.debug_data(
         title="Transcription Request Headers",
         data=dict(request.headers),
@@ -143,7 +140,6 @@ async def create_transcription(
         data_flow="incoming"
     )
 
-    # Determine which file was provided
     if audio_file:
         uploaded_file = audio_file
     elif file:
@@ -157,7 +153,6 @@ async def create_transcription(
             field_name="audio_file or file"
         )
 
-    # Log file details with structured data
     logger.info(
         "Transcription file received",
         extra={
@@ -181,12 +176,9 @@ async def generate_key_endpoint(
     request: Request,
     auth_data: tuple = Depends(check_endpoint_access("/tools/generate_key"))
 ):
-    """Generate and return a new API key."""
-    # Get request_id from request state if available
     request_id = getattr(request.state, 'request_id', 'unknown')
     user_id = getattr(request.state, 'project_name', 'unknown')
 
-    # Log incoming key generation request
     logger.info(
         "Key generation request received",
         extra={

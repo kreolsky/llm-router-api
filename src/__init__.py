@@ -1,1 +1,1 @@
-# This file makes src a Python package.
+"""NNP AI Router: multi-provider LLM gateway."""

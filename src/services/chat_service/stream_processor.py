@@ -1,13 +1,4 @@
-"""
-Stream Processor Module
-
-This module provides the StreamProcessor class for transparently forwarding
-streaming responses from AI providers to clients without any processing
-or modification.
-
-The StreamProcessor implements complete transparent proxying, ensuring that
-all provider responses are passed through exactly as received.
-"""
+"""Stream processor for forwarding and optionally sanitizing provider SSE streams."""
 
 import json
 import time
@@ -19,34 +10,15 @@ from fastapi import HTTPException
 
 
 class StreamProcessor:
-    """
-    Transparent stream processor that forwards provider responses with optional sanitization.
-    
-    This processor implements configurable proxying, ensuring that all
-    provider responses are passed through with optional sanitization based on configuration.
-    
-    Key Features:
-    - Configurable sanitization: Can sanitize streaming responses based on SANITIZE_MESSAGES flag
-    - Complete transparency: Passes through all provider responses unchanged when sanitization is disabled
-    - Error handling: Properly formats errors while maintaining transparency
-    - Simple and reliable: Minimal code for maximum reliability
-    """
-    
+    """Forwards provider SSE streams with optional message sanitization."""
+
     def __init__(self, config_manager=None):
-        """
-        Initialize StreamProcessor with optional config manager for sanitization.
-        
-        Args:
-            config_manager: Configuration manager instance for checking SANITIZE_MESSAGES flag
-        """
         self.config_manager = config_manager
         self.should_sanitize = self._determine_sanitization_status()
         
-        # Метрики для отслеживания
         self.total_chunks_processed = 0
         self.total_chunks_sanitized = 0
         
-        # Импортируем санитайзер только если нужен
         self._message_sanitizer = None
         if self.should_sanitize:
             from ...core.sanitizer import MessageSanitizer
@@ -65,12 +37,7 @@ class StreamProcessor:
             })
     
     def _determine_sanitization_status(self) -> bool:
-        """
-        Определяет статус санитизации на основе конфигурации
-        
-        Returns:
-            True если санитизация включена, иначе False
-        """
+        """Check config_manager for sanitization flag, defaulting to disabled."""
         if not self.config_manager:
             logger.debug("No config manager provided, sanitization disabled")
             return False
@@ -93,17 +60,15 @@ class StreamProcessor:
                            model_id: str,
                            request_id: str,
                            user_id: str) -> AsyncGenerator[bytes, None]:
-        """
-        Process stream with optional sanitization and comprehensive logging.
-        
-        Args:
-            provider_stream: Raw byte stream from the provider
-            model_id: ID of the model being used for the request
-            request_id: Unique identifier for the request for logging and tracking
-            user_id: Identifier for the user making the request
-            
-        Yields:
-            bytes: Chunks from the provider, optionally sanitized
+        """Process provider stream with optional sanitization.
+
+        Two code paths: when sanitization is disabled, chunks pass through unchanged
+        (transparent mode). When enabled, chunks are buffered and decoded as UTF-8,
+        split on SSE double-newline boundaries (\\n\\n or \\r\\n\\r\\n), and each
+        SSE data message is parsed and sanitized.
+
+        UTF-8 split handling: if a multi-byte character is split at a chunk boundary,
+        the partial bytes are buffered until the next chunk completes them.
         """
         start_time = time.time()
         chunk_count = 0
@@ -118,12 +83,9 @@ class StreamProcessor:
         })
         
         try:
-            # Buffer for partial SSE messages
             buffer = ""
             byte_buffer = b""
             
-            # Check if we should use buffering at all
-            # If sanitization is disabled, we don't need to buffer
             if not self.should_sanitize:
                 is_debug = logger.is_debug_enabled()
                 async for chunk in provider_stream:
@@ -157,7 +119,8 @@ class StreamProcessor:
                 except UnicodeDecodeError as e:
                     # If it fails, it might be a split character at the end
                     # We'll wait for the next chunk, but only if it's at the very end
-                    if e.start > len(byte_buffer) - 4: # UTF-8 max 4 bytes
+                    # WHY: UTF-8 chars can be up to 4 bytes; a split in the last 4 bytes is recoverable
+                    if e.start > len(byte_buffer) - 4:
                          logger.debug(f"Unicode split at end of chunk, buffering {len(byte_buffer)} bytes", extra={"request_id": request_id})
                          continue
                     
@@ -251,8 +214,10 @@ class StreamProcessor:
             yield self._format_error(e)
     
     def _sanitize_sse_message(self, message: str, request_id: str) -> str:
-        """
-        Sanitizes a single SSE message string.
+        """Sanitize a single SSE message, stripping service fields from JSON data.
+
+        Only processes lines starting with 'data: ' (SSE data frames).
+        Passes '[DONE]' sentinel and non-JSON data lines through unchanged.
         """
         if not message.startswith('data: '):
             return message
@@ -289,9 +254,7 @@ class StreamProcessor:
             return message
     
     def get_processing_stats(self) -> Dict[str, Any]:
-        """
-        Возвращает статистику обработки стримов
-        """
+        """Return cumulative sanitization metrics."""
         return {
             "total_chunks_processed": self.total_chunks_processed,
             "total_chunks_sanitized": self.total_chunks_sanitized,
@@ -300,15 +263,7 @@ class StreamProcessor:
         }
     
     def _format_error(self, error: Exception) -> bytes:
-        """
-        Formats an error in SSE format (OpenRouter-compatible).
-
-        Args:
-            error: Exception to format
-
-        Returns:
-            bytes: Formatted error chunk in SSE format
-        """
+        """Format an error as an SSE data chunk (OpenRouter-compatible)."""
         if isinstance(error, HTTPException):
             error_detail = error.detail
             if isinstance(error_detail, dict) and "error" in error_detail:

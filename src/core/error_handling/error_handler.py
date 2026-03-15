@@ -1,9 +1,4 @@
-"""
-Main Error Handler
-
-This module provides the main error handling utility for creating standardized
-HTTPExceptions with proper logging across the LLM Router project.
-"""
+"""Factory for creating standardized HTTPExceptions with logging."""
 
 from typing import Optional, Dict, Any
 from fastapi import HTTPException
@@ -24,41 +19,26 @@ class ErrorHandler:
         log_error: bool = True,
         **format_kwargs
     ) -> HTTPException:
+        """Create a standardized HTTPException with proper logging.
+
+        PROVIDER_HTTP_ERROR and PROVIDER_STREAM_ERROR use dynamic status codes
+        extracted from original_exception rather than a fixed value.
         """
-        Create a standardized HTTPException with proper logging.
-        
-        Args:
-            error_type: The type of error to create
-            context: Error context information
-            original_exception: Original exception that caused this error
-            log_error: Whether to log the error
-            **format_kwargs: Additional kwargs for message formatting
-            
-        Returns:
-            HTTPException with standardized format
-        """
-        
-        # Use provided context or create empty one
         if context is None:
             context = ErrorContext()
-        
-        # Merge format kwargs with context
+
         format_dict = {**context.__dict__, **format_kwargs}
-        
-        # Create error detail
         error_detail = error_type.create_error_detail(**format_dict)
-        
-        # Handle provider errors with dynamic status codes
+
+        # WHY: provider errors carry the upstream status code, not a fixed one
         status_code = error_type.status_code
         if error_type in (ErrorType.PROVIDER_HTTP_ERROR, ErrorType.PROVIDER_STREAM_ERROR) and original_exception:
             if hasattr(original_exception, 'response') and hasattr(original_exception.response, 'status_code'):
                 status_code = original_exception.response.status_code
             elif hasattr(original_exception, 'status_code'):
                 status_code = original_exception.status_code
-        # Update numeric code in error detail
         error_detail["error"]["code"] = status_code
 
-        # Add metadata with raw provider response for provider errors
         if error_type in (ErrorType.PROVIDER_HTTP_ERROR, ErrorType.PROVIDER_STREAM_ERROR):
             metadata = error_detail["error"].setdefault("metadata", {})
             if context and context.provider_name:
@@ -69,7 +49,6 @@ class ErrorHandler:
                 except Exception:
                     pass
         
-        # Log the error if requested
         if log_error:
             additional_data = {"error_detail": error_detail}
             ErrorLogger.log_error(
@@ -79,7 +58,6 @@ class ErrorHandler:
                 additional_data=additional_data
             )
         
-        # Create and return HTTPException
         return HTTPException(
             status_code=status_code,
             detail=error_detail
@@ -87,7 +65,6 @@ class ErrorHandler:
     
     @staticmethod
     def handle_model_not_specified(context: ErrorContext) -> HTTPException:
-        """Handle model not specified error."""
         return ErrorHandler.create_http_exception(
             error_type=ErrorType.MODEL_NOT_SPECIFIED,
             context=context
@@ -95,7 +72,6 @@ class ErrorHandler:
     
     @staticmethod
     def handle_model_not_allowed(model_id: str, context: ErrorContext) -> HTTPException:
-        """Handle model not allowed error."""
         context.model_id = model_id
         return ErrorHandler.create_http_exception(
             error_type=ErrorType.MODEL_NOT_ALLOWED,
@@ -104,7 +80,6 @@ class ErrorHandler:
     
     @staticmethod
     def handle_model_not_found(model_id: str, context: ErrorContext) -> HTTPException:
-        """Handle model not found error."""
         context.model_id = model_id
         return ErrorHandler.create_http_exception(
             error_type=ErrorType.MODEL_NOT_FOUND,
@@ -113,7 +88,6 @@ class ErrorHandler:
     
     @staticmethod
     def handle_provider_not_found(provider_name: str, model_id: str, context: ErrorContext) -> HTTPException:
-        """Handle provider not found error."""
         context.provider_name = provider_name
         context.model_id = model_id
         return ErrorHandler.create_http_exception(
@@ -123,7 +97,6 @@ class ErrorHandler:
     
     @staticmethod
     def handle_provider_config_error(error_details: str, context: ErrorContext, original_exception: Optional[Exception] = None) -> HTTPException:
-        """Handle provider configuration error."""
         return ErrorHandler.create_http_exception(
             error_type=ErrorType.PROVIDER_CONFIG_ERROR,
             context=context,
@@ -137,7 +110,6 @@ class ErrorHandler:
         context: ErrorContext,
         provider_name: Optional[str] = None
     ) -> HTTPException:
-        """Handle provider HTTP errors."""
         if provider_name:
             context.provider_name = provider_name
         
@@ -163,7 +135,6 @@ class ErrorHandler:
         context: ErrorContext,
         provider_name: Optional[str] = None
     ) -> HTTPException:
-        """Handle provider network errors."""
         if provider_name:
             context.provider_name = provider_name
         
@@ -182,7 +153,6 @@ class ErrorHandler:
         error_code: str = "provider_stream_error",
         original_exception: Optional[Exception] = None
     ) -> HTTPException:
-        """Handle provider streaming errors with immediate logging."""
         if context.provider_name:
             ErrorLogger.log_provider_error(
                 provider_name=context.provider_name,
@@ -206,7 +176,6 @@ class ErrorHandler:
         context: ErrorContext,
         original_exception: Optional[Exception] = None
     ) -> HTTPException:
-        """Handle internal server errors."""
         return ErrorHandler.create_http_exception(
             error_type=ErrorType.INTERNAL_SERVER_ERROR,
             context=context,
@@ -220,7 +189,6 @@ class ErrorHandler:
         context: ErrorContext,
         original_exception: Optional[Exception] = None
     ) -> HTTPException:
-        """Handle authentication errors."""
         if auth_type == "missing_api_key":
             return ErrorHandler.create_http_exception(
                 error_type=ErrorType.MISSING_API_KEY,
@@ -242,7 +210,6 @@ class ErrorHandler:
     
     @staticmethod
     def handle_endpoint_not_allowed(endpoint_path: str, context: ErrorContext) -> HTTPException:
-        """Handle endpoint not allowed error."""
         context.endpoint_path = endpoint_path
         return ErrorHandler.create_http_exception(
             error_type=ErrorType.ENDPOINT_NOT_ALLOWED,
@@ -255,7 +222,6 @@ class ErrorHandler:
         context: ErrorContext,
         original_exception: Optional[Exception] = None
     ) -> HTTPException:
-        """Handle service unavailable errors."""
         return ErrorHandler.create_http_exception(
             error_type=ErrorType.SERVICE_UNAVAILABLE,
             context=context,

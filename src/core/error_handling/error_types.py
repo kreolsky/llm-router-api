@@ -1,9 +1,4 @@
-"""
-Error Types and Context Definitions
-
-This module defines standardized error types and context information for
-consistent error handling across the LLM Router project.
-"""
+"""Standardized error types and context for the LLM Router."""
 
 from enum import Enum
 from typing import Dict, Any, Optional

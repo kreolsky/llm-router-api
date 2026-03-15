@@ -1,3 +1,4 @@
+"""Request/response logging middleware with request ID injection."""
 import time
 import os
 import json
@@ -8,14 +9,16 @@ from ..core.logging import logger
 
 
 class RequestLoggerMiddleware(BaseHTTPMiddleware):
+    """Injects request_id into state and logs request/response lifecycle."""
+
     async def dispatch(self, request: Request, call_next):
+        """Generate request_id, log lifecycle, and add X-Process-Time header."""
         start_time = time.time()
         request_id = os.urandom(8).hex()
         request.state.request_id = request_id
 
         user_id = request.state.project_name if hasattr(request.state, 'project_name') else "unknown"
 
-        # Log incoming request
         logger.request(
             operation="Incoming Request",
             request_id=request_id,
@@ -24,7 +27,6 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
             url=str(request.url)
         )
         
-        # DEBUG logging of request body
         if request.method in ["POST", "PUT", "PATCH"] and logger.is_debug_enabled():
             try:
                 request_body = await request.json()
@@ -63,7 +65,6 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
             )
             raise e
         except Exception as e:
-            # Log unexpected exception
             logger.error(
                 f"Unexpected error: {str(e)}",
                 request_id=request_id,
@@ -76,7 +77,6 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
         process_time = time.time() - start_time
         response.headers["X-Process-Time"] = str(process_time)
 
-        # Log response
         logger.response(
             operation="Outgoing Response",
             request_id=request_id,

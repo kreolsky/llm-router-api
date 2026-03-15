@@ -22,26 +22,24 @@ class Logger:
     """
     
     def __init__(self):
-        """Initialize the Logger with default configuration."""
         self._logger = setup_logging()
-    
+
     def is_debug_enabled(self) -> bool:
-        """Check if debug logging is enabled."""
         return self._logger.isEnabledFor(logging.DEBUG)
-    
+
     def _process_kwargs(self, kwargs: Dict[str, Any]) -> Tuple[Dict[str, Any], Any]:
-        """
-        Process kwargs to extract 'extra' and 'exc_info', and merge them correctly.
-        Returns a tuple of (processed_kwargs, exc_info).
+        """Extract extra/exc_info from kwargs and prefix reserved logging keys with ctx_.
+
+        The stdlib logging module reserves certain keys in the extra dict (e.g. 'args',
+        'name', 'msg'). Passing them directly causes KeyError, so they are prefixed.
         """
         exc_info = kwargs.pop('exc_info', None)
-        
-        # Extract extra if it's in kwargs and merge it
+
         extra_input = kwargs.pop('extra', {})
         if isinstance(extra_input, dict):
             kwargs.update(extra_input)
-            
-        # Remove reserved keys that would cause KeyError in logging
+
+        # WHY: stdlib logging reserves certain keys in extra dict — passing them causes KeyError
         reserved_keys = [
             'args', 'asctime', 'created', 'exc_info', 'exc_text', 'filename',
             'funcName', 'levelname', 'levelno', 'lineno', 'module', 'msecs',
@@ -50,37 +48,32 @@ class Logger:
         ]
         for key in reserved_keys:
             if key in kwargs:
-                # Prefix reserved keys to avoid conflict
                 kwargs[f"ctx_{key}"] = kwargs.pop(key)
                 
         return kwargs, exc_info
 
     def info(self, message: str, **kwargs):
-        """Log an info message."""
         processed_kwargs, _ = self._process_kwargs(kwargs)
         if processed_kwargs:
             self._logger.info(message, extra=processed_kwargs)
         else:
             self._logger.info(message)
-    
+
     def debug(self, message: str, **kwargs):
-        """Log a debug message."""
         processed_kwargs, _ = self._process_kwargs(kwargs)
         if processed_kwargs:
             self._logger.debug(message, extra=processed_kwargs)
         else:
             self._logger.debug(message)
-    
+
     def warning(self, message: str, **kwargs):
-        """Log a warning message."""
         processed_kwargs, _ = self._process_kwargs(kwargs)
         if processed_kwargs:
             self._logger.warning(message, extra=processed_kwargs)
         else:
             self._logger.warning(message)
-    
+
     def error(self, message: str, **kwargs):
-        """Log an error message."""
         processed_kwargs, exc_info = self._process_kwargs(kwargs)
         if exc_info is None:
             exc_info = False
@@ -111,9 +104,7 @@ class Logger:
         self.info(message, request_id=request_id, **kwargs)
     
     def _truncate_large_values(self, data: Any, max_length: int = 1000) -> Any:
-        """
-        Recursively truncate large strings in a dictionary or list.
-        """
+        """Recursively truncate large strings in nested data structures."""
         if isinstance(data, str):
             if len(data) > max_length:
                 return data[:max_length] + f"... [truncated, total length: {len(data)}]"
@@ -128,11 +119,9 @@ class Logger:
         """Log debug data with full details when LOG_LEVEL=DEBUG."""
         if not self.is_debug_enabled():
             return
-        
-        # Truncate large values to avoid memory issues and log bloat
+
         truncated_data = self._truncate_large_values(data)
-        
-        # Format data for logging
+
         if isinstance(truncated_data, dict):
             data_str = json.dumps(truncated_data, indent=2, ensure_ascii=False)
         else:
@@ -156,20 +145,13 @@ class Logger:
     
     @contextmanager
     def request_context(self, operation: str, request_id: str, **kwargs):
-        """
-        Simple context manager for request-scoped logging.
-        
-        Automatically logs request start, completion, and handles errors.
-        """
+        """Context manager that logs request start, completion, and errors."""
         start_time = time.time()
-        
-        # Log request start
         self.request(operation=operation, request_id=request_id, **kwargs)
-        
+
         try:
             yield
         except Exception as e:
-            # Log error
             self.error(
                 f"{operation} failed: {str(e)}",
                 request_id=request_id,
@@ -177,7 +159,6 @@ class Logger:
             )
             raise
         finally:
-            # Log completion
             duration_ms = int((time.time() - start_time) * 1000)
             self.info(
                 f"Completed: {operation} | duration={duration_ms}ms",

@@ -1,3 +1,4 @@
+"""Model listing and detail retrieval with dynamic provider enrichment."""
 import httpx
 import os
 import time
@@ -15,7 +16,10 @@ class ModelService:
         self.httpx_client = httpx_client
 
     async def _get_provider_api_details(self, provider_config: Dict[str, Any]) -> Tuple[str, str, Dict[str, str]]:
-        """Extracts base URL, API key, and headers for a given provider."""
+        """Return (base_url, api_key, headers) for a provider.
+
+        Returns (None, None, {}) when base_url is missing — callers must check.
+        """
         provider_base_url = provider_config.get("base_url")
         provider_api_key_env = provider_config.get("api_key_env")
         provider_api_key = os.getenv(provider_api_key_env) if provider_api_key_env else None
@@ -45,6 +49,10 @@ class ModelService:
         return response.json()
 
     async def _get_model_details_from_provider(self, model_id: str, current_config: Dict[str, Any], client: httpx.AsyncClient) -> Dict[str, Any]:
+        """Fetch live model metadata from provider, returning {} on any error.
+
+        # WHY: provider detail errors are non-fatal; the model response is valid without enrichment.
+        """
         model_data = current_config.get("models", {}).get(model_id)
         if not model_data:
             return {}
@@ -131,6 +139,7 @@ class ModelService:
         }
 
     async def list_models(self, auth_data: Tuple[str, str, list, list]) -> Dict[str, Any]:
+        """Return OpenAI-compatible model list filtered by allowed_models and is_hidden."""
         _, _, allowed_models, _ = auth_data
         current_config = self.config_manager.get_config()
         models_config = current_config.get("models", {})
@@ -146,9 +155,8 @@ class ModelService:
         return {"object": "list", "data": models_list}
 
     async def retrieve_model(self, model_id: str, auth_data: Tuple[str, str, list, list]) -> Dict[str, Any]:
+        """Return model details enriched with live provider metadata."""
         _, _, allowed_models, _ = auth_data
-
-        # Check if the model is allowed for this user
         if allowed_models and model_id not in allowed_models:
             context = ErrorContext(model_id=model_id)
             raise ErrorHandler.handle_model_not_allowed(model_id, context)
@@ -169,7 +177,6 @@ class ModelService:
             context = ErrorContext(model_id=model_id, provider_name=provider_name)
             raise ErrorHandler.handle_provider_not_found(provider_name, model_id, context)
 
-        # Dynamically fetch additional model details from the provider
         additional_model_details = await self._get_model_details_from_provider(model_id, current_config, self.httpx_client)
 
         return self._build_model_response(

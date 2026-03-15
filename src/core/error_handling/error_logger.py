@@ -1,9 +1,4 @@
-"""
-Error Logging Utility
-
-This module provides centralized error logging functionality for consistent
-error logging across the LLM Router project.
-"""
+"""Centralized error logging with Unicode decoding."""
 
 from typing import Dict, Any, Optional
 import json
@@ -13,36 +8,31 @@ from ..logging.config import setup_logging
 
 
 class ErrorLogger:
-    """Единый логгер ошибок, использующий общую систему."""
-    
+    """Unified error logger using the shared logging system."""
+
     @staticmethod
     def _decode_unicode_escapes(text):
-        """
-        Decode Unicode escape sequences in error messages.
-        
-        Args:
-            text (str): Text that may contain Unicode escape sequences
-            
-        Returns:
-            str: Text with Unicode escape sequences decoded to actual characters
+        """Decode \\uXXXX escape sequences in provider error messages.
+
+        Provider APIs return errors in mixed encodings, so three strategies
+        are tried in order until one succeeds.
         """
         if not text:
             return text
-            
-        # Try to decode JSON with Unicode escapes
+
         try:
             if '\\u' in text:
-                # Check if it's a JSON string
+                # WHY: JSON objects with \u escapes decode cleanly via json roundtrip
                 if text.startswith('{') and text.endswith('}'):
                     decoded = json.loads(text)
                     if isinstance(decoded, dict):
                         return json.dumps(decoded, ensure_ascii=False)
-                # For non-JSON strings, use encode-decode
+                # WHY: plain strings with \u escapes decode via Python's unicode_escape codec
                 return text.encode().decode('unicode_escape')
         except (json.JSONDecodeError, ValueError, UnicodeError):
             pass
-        
-        # Fallback: manually decode Unicode escape sequences
+
+        # WHY: fallback regex for texts where neither JSON parse nor codec works
         unicode_pattern = re.compile(r'\\u([0-9a-fA-F]{4})')
         def replace_unicode(match):
             hex_code = match.group(1)
@@ -55,7 +45,6 @@ class ErrorLogger:
     
     @staticmethod
     def _get_logger():
-        """Получить логгер из единой системы."""
         return setup_logging()
     
     @staticmethod
@@ -65,7 +54,7 @@ class ErrorLogger:
         original_exception: Optional[Exception] = None,
         additional_data: Optional[Dict[str, Any]] = None
     ):
-        """Логировать ошибку с использованием единой системы."""
+        """Log an error with unified formatting."""
         logger = ErrorLogger._get_logger()
         
         log_extra = context.to_log_extra()

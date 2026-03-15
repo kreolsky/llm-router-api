@@ -1,3 +1,4 @@
+"""Authentication and authorization for the API gateway."""
 import hmac
 from fastapi import Security, HTTPException, status, Request
 from fastapi.security import APIKeyHeader
@@ -11,10 +12,15 @@ async def get_api_key(
     request: Request,
     api_key: str = Security(api_key_header)
 ) -> Tuple[str, str, List[str], List[str]]:
+    """Authenticate request and return (project_name, api_key, allowed_models, allowed_endpoints).
+
+    Strips "Bearer " prefix from Authorization header if present.
+    Uses constant-time comparison to prevent timing attacks.
+    Sets request.state.project_name as a side effect for downstream handlers.
+    """
     config_manager = request.app.state.config_manager
     config = config_manager.get_config()
-    
-    # Log authentication attempt
+
     logger.debug("Authentication attempt", extra={
         "auth": {
             "has_api_key": api_key is not None,
@@ -53,6 +59,7 @@ async def get_api_key(
     found_project = None
     for project_name, project_data in config["user_keys"].items():
         stored_key = project_data.get("api_key", "")
+        # INVARIANT: constant-time comparison prevents timing attacks
         if stored_key and hmac.compare_digest(stored_key, api_key):
             found_project = project_name
             break
@@ -70,9 +77,9 @@ async def get_api_key(
     allowed_models = config["user_keys"][found_project].get("allowed_models") or []
     allowed_endpoints = config["user_keys"][found_project].get("allowed_endpoints") or []
     
-    request.state.project_name = found_project # Store project_name in request.state
-    
-    # Log successful authentication
+    # SIDE EFFECT: sets project_name read by downstream handlers
+    request.state.project_name = found_project
+
     logger.info("Authentication successful", extra={
         "auth": {
             "project_name": found_project,
@@ -86,14 +93,9 @@ async def get_api_key(
 
 
 def check_endpoint_access(endpoint_path: str):
-    """
-    Декоратор для проверки доступа пользователя к конкретному endpoint.
-    
-    Args:
-        endpoint_path: Путь к endpoint для проверки
-        
-    Returns:
-        Функцию-зависимость для FastAPI
+    """Return a FastAPI dependency that checks if the user's key grants access to endpoint_path.
+
+    Empty allowed_endpoints list means unrestricted access (default for admin keys).
     """
     from fastapi import Depends
     
@@ -103,7 +105,7 @@ def check_endpoint_access(endpoint_path: str):
     ):
         user_id, _, _, allowed_endpoints = auth_data
         
-        # Если список разрешенных endpoints пуст, доступ разрешен ко всем endpoints
+        # WHY: empty allowed_endpoints means unrestricted access (default for admin keys)
         if not allowed_endpoints or endpoint_path in allowed_endpoints:
             return auth_data
             

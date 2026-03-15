@@ -1,3 +1,4 @@
+"""YAML-based configuration management with hot-reload support."""
 import yaml
 import os
 import asyncio
@@ -15,7 +16,6 @@ class ConfigManager:
         self._initialize_mtimes()
         self._on_reload_callbacks = []
         
-        # Загружаем переменные окружения
         self.debug = os.getenv("DEBUG", "false").lower() == "true"
         self.log_level = os.getenv("LOG_LEVEL", "INFO")
         self.sanitize_messages = os.getenv("SANITIZE_MESSAGES", "false").lower() == "true"
@@ -34,6 +34,7 @@ class ConfigManager:
         })
 
     def _load_config(self, fail_on_error: bool = False) -> Dict[str, Any]:
+        """Load and merge all YAML config files."""
         config = {}
         file_map = [
             (self.providers_path, 'providers'),
@@ -59,94 +60,78 @@ class ConfigManager:
     
     @property
     def is_debug_enabled(self) -> bool:
-        """Возвращает True если включен режим отладки"""
         return self.debug
-    
+
     @property
     def should_sanitize_messages(self) -> bool:
-        """Возвращает True если нужно санитизировать сообщения"""
         return self.sanitize_messages
 
     @property
     def httpx_max_connections(self) -> int:
-        """Maximum number of concurrent connections in the httpx pool"""
         return int(os.getenv("HTTPX_MAX_CONNECTIONS", "100"))
 
     @property
     def httpx_max_keepalive_connections(self) -> int:
-        """Maximum number of keep-alive connections in the httpx pool"""
         return int(os.getenv("HTTPX_MAX_KEEPALIVE_CONNECTIONS", "20"))
 
     @property
     def httpx_connect_timeout(self) -> float:
-        """Connection timeout in seconds for httpx client"""
         return float(os.getenv("HTTPX_CONNECT_TIMEOUT", "60.0"))
 
     @property
     def httpx_pool_timeout(self) -> float:
-        """Pool timeout in seconds for acquiring a connection from the pool"""
         return float(os.getenv("HTTPX_POOL_TIMEOUT", "5.0"))
 
     @property
     def httpx_read_timeout(self) -> float:
-        """Read timeout in seconds for httpx client - critical for preventing indefinite hangs when providers are unreachable"""
+        # WHY: without a read timeout, requests hang indefinitely when providers are unreachable
         return float(os.getenv("HTTPX_READ_TIMEOUT", "60.0"))
 
     @property
     def api_workers(self) -> int:
-        """Number of worker processes for uvicorn server"""
         return int(os.getenv("API_WORKERS", "4"))
 
     @property
     def config_reload_interval(self) -> int:
-        """Interval in seconds between config file reload checks"""
         return int(os.getenv("CONFIG_RELOAD_INTERVAL", "5"))
 
     @property
     def provider_max_retries(self) -> int:
-        """Maximum number of retry attempts for failed provider requests"""
         return int(os.getenv("PROVIDER_MAX_RETRIES", "3"))
 
     @property
     def provider_retry_base_delay(self) -> float:
-        """Base delay between retry attempts in seconds (exponential backoff)"""
         return float(os.getenv("PROVIDER_RETRY_BASE_DELAY", "1.0"))
 
     @property
     def provider_retry_max_delay(self) -> float:
-        """Maximum delay between retry attempts in seconds"""
         return float(os.getenv("PROVIDER_RETRY_MAX_DELAY", "30.0"))
 
     @property
     def openai_connect_timeout(self) -> float:
-        """OpenAI connection timeout in seconds"""
         return float(os.getenv("OPENAI_CONNECT_TIMEOUT", "60.0"))
 
     @property
     def openai_transcription_timeout(self) -> float:
-        """OpenAI transcription timeout in seconds"""
         return float(os.getenv("OPENAI_TRANSCRIPTION_TIMEOUT", "3600.0"))
 
     @property
     def openai_embeddings_read_timeout(self) -> float:
-        """OpenAI embeddings read timeout in seconds"""
         return float(os.getenv("OPENAI_EMBEDDINGS_READ_TIMEOUT", "30.0"))
 
     @property
     def anthropic_timeout(self) -> int:
-        """Anthropic request timeout in seconds"""
         return int(os.getenv("ANTHROPIC_TIMEOUT", "600"))
 
     @property
     def ollama_connect_timeout(self) -> float:
-        """Ollama connection timeout in seconds"""
         return float(os.getenv("OLLAMA_CONNECT_TIMEOUT", "60.0"))
 
     def add_reload_callback(self, callback):
-        """Register a callback to be called after config reload."""
         self._on_reload_callbacks.append(callback)
 
     def reload_config(self):
+        """Reload config from disk and invoke registered callbacks."""
         logger.info("Reloading configuration", extra={
             "config": {
                 "operation": "reload_config",
@@ -182,6 +167,7 @@ class ConfigManager:
                 pass
 
     async def _reload_config_task(self):
+        """Background task polling config files for mtime changes."""
         while True:
             try:
                 changed = False

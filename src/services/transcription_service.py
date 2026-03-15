@@ -1,3 +1,4 @@
+"""Audio transcription service with default model fallback."""
 import httpx
 import os
 from typing import Dict, Any, Tuple, Optional
@@ -66,7 +67,6 @@ class TranscriptionService(BaseService):
         context = ErrorContext(user_id=user_id, model_id=model_id)
 
         try:
-            # Validate model access and get configuration (reuse BaseService)
             model_config, provider_name, provider_model_name, provider_config = \
                 self._validate_and_get_config(model_id, auth_data, context)
 

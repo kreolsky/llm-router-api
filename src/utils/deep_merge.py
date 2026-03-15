@@ -1,3 +1,4 @@
+"""Recursive dictionary merge utility."""
 from typing import Dict, Any
 
 def deep_merge(dict1: Dict, dict2: Dict) -> Dict:

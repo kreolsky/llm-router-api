@@ -1,6 +1,7 @@
+"""Base provider with shared HTTP, streaming, retry, and error handling logic."""
 import httpx
 import os
-import json # Import json for parsing error responses
+import json
 import asyncio
 import time
 from typing import Dict, Any, AsyncGenerator, Callable, Optional
@@ -14,14 +15,12 @@ from ..core.logging import logger
 
 
 def retry_on_rate_limit(max_retries: Optional[int] = None, base_delay: Optional[float] = None, max_delay: Optional[float] = None, config_manager=None):
-    """
-    Декоратор для повторных попыток при ошибках 429 (Too Many Requests)
+    """Retry decorator for 429 (Too Many Requests) with exponential backoff.
 
-    Args:
-        max_retries: Максимальное количество повторных попыток (optional, uses config_manager if not provided)
-        base_delay: Базовая задержка между попытками (секунды) (optional, uses config_manager if not provided)
-        max_delay: Максимальная задержка (секунды) (optional, uses config_manager if not provided)
-        config_manager: ConfigManager instance to get retry settings from
+    Backoff formula: min(base_delay * 2^attempt, max_delay).
+    Rate-limit detection checks both e.status_code == 429 and
+    e.original_exception.response.status_code == 429 (wrapped httpx errors).
+    Config resolution: self.config_manager > closure arg > hardcoded defaults.
     """
     def decorator(func: Callable):
         @wraps(func)
@@ -78,15 +77,23 @@ def retry_on_rate_limit(max_retries: Optional[int] = None, base_delay: Optional[
 
 class BaseProvider:
     def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient, config_manager=None):
+        """Initialize provider from config dict.
+
+        Reads API key from the env var named by config['api_key_env'].
+        Stores the shared httpx.AsyncClient (lifecycle managed in main.py lifespan).
+        Auto-derives provider_name from class name for logging.
+        Sets default Content-Type: application/json (subclasses may override before super().__init__).
+
+        Raises:
+            HTTPException: If base_url is missing or the env var for the API key is unset.
+        """
         self.base_url = config.get("base_url")
         self.api_key_env = config.get("api_key_env")
         self.headers = config.get("headers", {})
         self.api_key = os.environ.get(self.api_key_env) if self.api_key_env else None
-        self.client = client # Store the httpx client
-        self.config_manager = config_manager # Store config_manager for retry settings
-        # Automatically set provider name from class name for logging
+        self.client = client
+        self.config_manager = config_manager
         self.provider_name = self.__class__.__name__.replace("Provider", "").lower()
-        # Default Content-Type for all providers (can be overridden before super().__init__)
         self.headers.setdefault("Content-Type", "application/json")
 
         if not self.base_url:
@@ -107,27 +114,7 @@ class BaseProvider:
             self.headers["Authorization"] = f"Bearer {self.api_key}"
 
     def _log_provider_data(self, title: str, data: Dict[str, Any], request_id: str, data_flow: str, component: str = None) -> None:
-        """
-        Standardized logging method for provider requests and responses.
-        
-        This method provides a consistent way to log provider data across all providers,
-        ensuring uniform debug information for troubleshooting.
-        
-        Args:
-            title: Descriptive title for the log entry (e.g., "OpenAI Request", "Anthropic Response")
-            data: Dictionary containing the data to log (request body, response, headers, etc.)
-            request_id: Unique identifier for the request
-            data_flow: Direction of data flow ("to_provider" or "from_provider")
-            component: Component name for logging (defaults to provider_name if not specified)
-        
-        Example:
-            self._log_provider_data(
-                title="Provider Request",
-                data={"url": url, "headers": headers, "request_body": body},
-                request_id="req-123",
-                data_flow="to_provider"
-            )
-        """
+        """Log request/response data with standardized provider context."""
         if component is None:
             component = f"{self.provider_name}_provider"
         
@@ -165,22 +152,7 @@ class BaseProvider:
         return request_body
 
     def _get_timeout(self, timeout_type: str, default_value: float) -> float:
-        """
-        Get timeout value from config_manager or use default.
-        
-        This method standardizes timeout configuration across all providers,
-        allowing provider-specific timeouts while providing sensible defaults.
-        
-        Args:
-            timeout_type: Type of timeout (e.g., "openai_connect_timeout", "anthropic_timeout")
-            default_value: Default timeout value to use if config_manager is not available
-        
-        Returns:
-            Timeout value in seconds
-        
-        Example:
-            connect_timeout = self._get_timeout("openai_connect_timeout", 60.0)
-        """
+        """Read a named timeout from config_manager, falling back to default_value."""
         if self.config_manager and hasattr(self.config_manager, timeout_type):
             return getattr(self.config_manager, timeout_type)
         return default_value
@@ -198,50 +170,24 @@ class BaseProvider:
         request_id: str = "unknown",
         base_url: str = None
     ) -> Dict[str, Any]:
-        """
-        Unified method for non-streaming HTTP requests to provider APIs.
-        
-        This method centralizes HTTP request logic, logging, error handling, and timeout management
-        across all providers, reducing code duplication and ensuring consistent behavior.
-        
-        Args:
-            method: HTTP method ("GET", "POST", etc.)
-            path: API endpoint path (relative to base_url)
-            request_body: JSON body for the request (for POST requests)
-            headers: Additional headers to merge with default headers
-            timeout: Custom timeout configuration (uses default if not specified)
-            files: Files to upload (for multipart/form-data requests)
-            data: Form data for multipart requests
-            request_id: Unique identifier for the request (for logging)
-        
-        Returns:
-            JSON response from the provider
-        
-        Raises:
-            HTTPException: Wrapped httpx exceptions with proper error context
-        
-        Example:
-            response = await self._make_request(
-                method="POST",
-                path="/chat/completions",
-                request_body={"model": "gpt-4", "messages": [...]},
-                request_id="req-123"
-            )
+        """Unified non-streaming HTTP request to provider APIs.
+
+        Decorated with @retry_on_rate_limit, so 429 responses are retried automatically.
+        HTTPStatusError: extracts error message from provider JSON response.
+        RequestError: maps to a network error. base_url param allows per-request
+        override (used by transcription service).
         """
         effective_base_url = base_url or self.base_url
 
-        # Create error context for this request
         context = ErrorContext(
             request_id=request_id,
             provider_name=self.provider_name
         )
 
-        # Merge headers if provided
         merged_headers = {**self.headers}
         if headers:
             merged_headers.update(headers)
 
-        # Log the outgoing request
         self._log_provider_data(
             title=f"{self.__class__.__name__} Request",
             data={
@@ -256,7 +202,6 @@ class BaseProvider:
         )
 
         try:
-            # Execute the HTTP request
             if method.upper() == "POST":
                 response = await self.client.post(
                     f"{effective_base_url}{path}",
@@ -276,13 +221,9 @@ class BaseProvider:
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
             
-            # Raise exception for HTTP errors
             response.raise_for_status()
-            
-            # Parse and return JSON response
             response_json = response.json()
-            
-            # Log the incoming response
+
             self._log_provider_data(
                 title=f"{self.__class__.__name__} Response",
                 data=response_json,
@@ -331,11 +272,13 @@ class BaseProvider:
             raise ErrorHandler.handle_provider_network_error(e, context, self.provider_name)
 
     async def _stream_request(self, client: httpx.AsyncClient, url_path: str, request_body: Dict[str, Any]) -> AsyncGenerator[bytes, None]:
-        """
-        Async generator that streams bytes from a provider API.
+        """Async generator streaming raw bytes from a provider API.
 
-        Yields raw byte chunks from the provider's streaming response.
-        The caller is responsible for wrapping in StreamingResponse.
+        Uses client.stream() context manager for memory-efficient chunk iteration.
+        Error hierarchy inside stream context:
+        - HTTPStatusError with ResponseNotRead fallback for error body
+        - PoolTimeout → 503 (connection pool exhausted)
+        - RequestError → generic network error
         """
         request_id = request_body.get("request_id", "unknown")
         context = ErrorContext(
@@ -389,6 +332,7 @@ class BaseProvider:
                     try:
                         response_text = e.response.text
                     except httpx.ResponseNotRead:
+                        # WHY: in streaming context, response body may not be buffered yet
                         response_text = "Unable to read error response from provider"
 
                     error_message = f"Provider API error: {e.response.status_code}"
@@ -423,6 +367,7 @@ class BaseProvider:
                             }
                         }
                     ) from e
+                # WHY: PoolTimeout means all connections in use, not a network failure — maps to 503
                 except httpx.PoolTimeout as e:
                     http_exception = ErrorHandler.handle_service_unavailable(
                         error_details="Connection pool exhausted. Please retry later.",

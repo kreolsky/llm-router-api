@@ -1,3 +1,4 @@
+"""Ollama provider mapping OpenAI-format requests to Ollama's API."""
 import httpx
 import json
 from typing import Dict, Any
@@ -14,29 +15,14 @@ class OllamaProvider(BaseProvider):
         super().__init__(config, client, config_manager)
 
     async def chat_completions(self, request_body: Dict[str, Any], provider_model_name: str, model_config: Dict[str, Any]) -> Any:
-        """
-        Handle chat completions requests to Ollama API.
-        
-        This method transforms the OpenAI-compatible request to Ollama's format,
-        mapping parameters to Ollama's 'options' structure. It delegates to the
-        base provider's unified request methods for consistent error handling and logging.
-        
-        Args:
-            request_body: OpenAI-compatible request body
-            provider_model_name: The model name to use for this provider
-            model_config: Provider-specific model configuration including options
-        
-        Returns:
-            For streaming: StreamingResponse with SSE content
-            For non-streaming: JSON response from Ollama
-        """
+        """Map OpenAI-format chat request to Ollama's /chat endpoint."""
         ollama_request_body = {
             "model": provider_model_name,
             "messages": request_body.get("messages", []),
             "stream": request_body.get("stream", False)
         }
 
-        # Map OpenAI-like parameters to Ollama's 'options' using dictionary comprehension
+        # Map OpenAI-like parameters to Ollama's 'options' structure
         param_mapping = {
             "temperature": "temperature",
             "top_p": "top_p",
@@ -55,14 +41,12 @@ class OllamaProvider(BaseProvider):
         if ollama_options:
             ollama_request_body["options"] = ollama_options
 
-        # Stream or non-streaming request
         if ollama_request_body["stream"]:
             return await self._stream_request(self.client, "/chat", ollama_request_body)
-        
+
         connect_timeout = self._get_timeout("ollama_connect_timeout", 60.0)
         ollama_timeout = self._create_timeout(connect=connect_timeout)
-        
-        # Use the base provider's unified request method
+
         return await self._make_request(
             method="POST",
             path="/chat",
@@ -72,31 +56,14 @@ class OllamaProvider(BaseProvider):
         )
 
     async def embeddings(self, request_body: Dict[str, Any], provider_model_name: str, model_config: Dict[str, Any]) -> Any:
-        """
-        Handle embeddings requests to Ollama API.
-        
-        This method transforms the OpenAI-compatible request to Ollama's format,
-        mapping 'input' to 'prompt'. It delegates to the base provider's unified
-        request method for consistent error handling and logging.
-        
-        Args:
-            request_body: OpenAI-compatible request body with 'input' field
-            provider_model_name: The model name to use for this provider
-            model_config: Provider-specific model configuration including options
-        
-        Returns:
-            JSON response containing embeddings from Ollama
-        """
-        # Ollama embeddings API expects 'model' and 'prompt'
-        # The incoming request_body is OpenAI-compatible, with 'input'
+        """Map OpenAI 'input' field to Ollama 'prompt' for /embeddings."""
         ollama_request_body = {
             "model": provider_model_name,
-            "prompt": request_body.get("input") # Map OpenAI 'input' to Ollama 'prompt'
+            "prompt": request_body.get("input")
         }
 
         embeddings_timeout = self._create_timeout(connect=15.0, read=60.0, write=10.0, pool=10.0)
-        
-        # Use the base provider's unified request method
+
         return await self._make_request(
             method="POST",
             path="/embeddings",
