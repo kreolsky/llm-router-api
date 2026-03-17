@@ -61,6 +61,7 @@ class MessageSanitizer:
                     choice_removed.extend(delta_removed)
                 
                 sanitized_choice, choice_removed_extra = cls._sanitize_dict(choice)
+                choice.clear()
                 choice.update(sanitized_choice)
                 choice_removed.extend(choice_removed_extra)
                 

@@ -68,9 +68,6 @@ class TestSanitizeStreamChunk:
         assert delta["content"] == "hi"
 
     def test_removes_service_fields_from_choice_level(self):
-        """Known limitation: choice.update(sanitized_choice) doesn't remove keys
-        already present in the original dict — service fields at choice level
-        survive. This test documents actual behavior."""
         chunk = {
             "choices": [
                 {"delta": {"content": "hi"}, "stream_end": True, "__internal__": "x"}
@@ -78,10 +75,9 @@ class TestSanitizeStreamChunk:
         }
         result = MessageSanitizer.sanitize_stream_chunk(chunk)
         choice = result["choices"][0]
-        # BUG: service fields at choice level are NOT removed due to
-        # choice.update(sanitized_choice) not deleting extra keys.
-        # delta-level fields ARE removed correctly.
-        assert "content" in choice["delta"]
+        assert "stream_end" not in choice
+        assert "__internal__" not in choice
+        assert choice["delta"]["content"] == "hi"
 
     def test_no_choices_returns_unchanged(self):
         chunk = {"id": "123", "object": "chat.completion.chunk"}
