@@ -32,7 +32,7 @@ class AnthropicProvider(BaseProvider):
             anthropic_request = deep_merge(anthropic_request, options)
 
         if anthropic_request["stream"]:
-            return await self._stream_request(self.client, "/messages", anthropic_request)
+            return self._stream_request(self.client, "/messages", anthropic_request)
 
         anthropic_timeout = self._get_timeout("anthropic_timeout", 600)
 

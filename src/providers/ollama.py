@@ -37,7 +37,7 @@ class OllamaProvider(BaseProvider):
             ollama_request_body["options"] = ollama_options
 
         if ollama_request_body["stream"]:
-            return await self._stream_request(self.client, "/chat", ollama_request_body)
+            return self._stream_request(self.client, "/chat", ollama_request_body)
 
         connect_timeout = self._get_timeout("ollama_connect_timeout", 60.0)
         ollama_timeout = self._create_timeout(connect=connect_timeout)

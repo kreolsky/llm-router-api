@@ -249,10 +249,15 @@ class BaseProvider:
 
         try:
             if method.upper() == "POST":
+                # WHY: multipart uploads (files) need httpx to set Content-Type with boundary;
+                # explicit Content-Type: application/json would break the multipart encoding
+                if files:
+                    merged_headers.pop("Content-Type", None)
+
                 response = await self.client.post(
                     f"{effective_base_url}{path}",
                     headers=merged_headers,
-                    json=request_body,
+                    json=request_body if not files else None,
                     files=files,
                     data=data,
                     timeout=timeout

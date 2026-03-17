@@ -14,7 +14,7 @@ class OpenAICompatibleProvider(BaseProvider):
         request_body = self._apply_model_config(request_body, provider_model_name, model_config)
 
         if request_body.get("stream", False):
-            return await self._stream_request(self.client, "/chat/completions", request_body)
+            return self._stream_request(self.client, "/chat/completions", request_body)
         
         connect_timeout = self._get_timeout("openai_connect_timeout", 60.0)
         non_stream_timeout = self._create_timeout(connect=connect_timeout)
