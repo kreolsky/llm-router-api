@@ -5,9 +5,9 @@ models:
   deepseek/reasoner:
     provider: deepseek
     provider_model_name: deepseek-reasoner
-#  kimi/chat:
-#    provider: kimi
-#    provider_model_name: kimi-k2-0905-preview
+  kimi/base:
+    provider: kimi
+    provider_model_name: kimi-k2.5
   glm/air:
     provider: zai
     provider_model_name: glm-4.5-air
