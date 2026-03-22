@@ -3,7 +3,7 @@ import httpx
 from typing import Dict, Any
 
 from .base import BaseProvider
-from ..core.error_handling import ErrorHandler, ErrorContext
+from ..core.error_handling import ErrorType, create_error
 
 class OllamaProvider(BaseProvider):
     def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient, config_manager=None):
@@ -68,8 +68,6 @@ class OllamaProvider(BaseProvider):
         )
 
     async def transcriptions(self, audio_file: Any, request_params: Dict[str, Any], model_config: Dict[str, Any]) -> Any:
-        context = ErrorContext(provider_name="ollama")
-        raise ErrorHandler.handle_provider_config_error(
-            error_details="OllamaProvider does not support transcriptions.",
-            context=context
-        )
+        raise create_error(ErrorType.PROVIDER_CONFIG_ERROR,
+                         error_details="OllamaProvider does not support transcriptions.",
+                         provider_name="ollama")

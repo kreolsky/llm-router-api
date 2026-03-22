@@ -6,7 +6,7 @@ from fastapi import HTTPException, UploadFile
 
 from ..core.config_manager import ConfigManager
 from ..services.model_service import ModelService
-from ..core.error_handling import ErrorHandler, ErrorContext
+from ..core.error_handling import ErrorType, create_error
 from ..core.logging import logger
 from .base import BaseService
 
@@ -64,13 +64,13 @@ class TranscriptionService(BaseService):
                 "default_model": model_id
             })
 
-        context = ErrorContext(user_id=user_id, model_id=model_id)
+        error_ctx = dict(user_id=user_id, model_id=model_id)
 
         try:
             model_config, provider_name, provider_model_name, provider_config = \
-                self._validate_and_get_config(model_id, auth_data, context)
+                self._validate_and_get_config(model_id, auth_data, **error_ctx)
 
-            provider_instance = self._get_provider(provider_config, context)
+            provider_instance = self._get_provider(provider_config, **error_ctx)
 
             response = await provider_instance.transcriptions(
                 audio_data=audio_data,
@@ -98,4 +98,4 @@ class TranscriptionService(BaseService):
         except HTTPException as e:
             raise e
         except Exception as e:
-            raise ErrorHandler.handle_internal_server_error(str(e), context, e)
+            raise create_error(ErrorType.INTERNAL_SERVER_ERROR, original_exception=e, error_details=str(e), **error_ctx)

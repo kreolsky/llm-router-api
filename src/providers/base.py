@@ -9,8 +9,7 @@ from functools import wraps
 from fastapi.responses import JSONResponse
 
 from ..utils.deep_merge import deep_merge
-from ..core.error_handling import ErrorHandler, ErrorType, ErrorContext
-from ..core.error_handling.error_logger import ErrorLogger
+from ..core.error_handling import ErrorType, create_error, log_provider_error
 from ..core.logging import logger
 
 
@@ -97,20 +96,16 @@ class BaseProvider:
         self.headers.setdefault("Content-Type", "application/json")
 
         if not self.base_url:
-            context = ErrorContext(provider_name=self.provider_name)
-            raise ErrorHandler.handle_provider_config_error(
-                error_details="Provider base_url is not configured.",
-                context=context
-            )
-        
+            raise create_error(ErrorType.PROVIDER_CONFIG_ERROR,
+                             error_details="Provider base_url is not configured.",
+                             provider_name=self.provider_name)
+
         # Only set API key and Authorization header if api_key_env is provided
         if self.api_key_env:
             if not self.api_key:
-                context = ErrorContext(provider_name=self.provider_name)
-                raise ErrorHandler.handle_provider_config_error(
-                    error_details=f"API key for {self.api_key_env} is not set in environment variables.",
-                    context=context
-                )
+                raise create_error(ErrorType.PROVIDER_CONFIG_ERROR,
+                                 error_details=f"API key for {self.api_key_env} is not set in environment variables.",
+                                 provider_name=self.provider_name)
             self.headers["Authorization"] = f"Bearer {self.api_key}"
 
     def _log_provider_data(self, title: str, data: Dict[str, Any], request_id: str, data_flow: str, component: str = None) -> None:
@@ -151,11 +146,11 @@ class BaseProvider:
             request_body = deep_merge(request_body, options)
         return request_body
 
-    def _raise_provider_http_error(self, e: httpx.HTTPStatusError, context: ErrorContext) -> None:
+    def _raise_provider_http_error(self, e: httpx.HTTPStatusError, request_id: str = "unknown") -> None:
         """Extract error message from provider response and raise HTTPException.
 
         Handles ResponseNotRead (streaming context where body isn't buffered).
-        Logs via ErrorLogger before raising.
+        Logs via log_provider_error before raising.
         """
         from fastapi import HTTPException
 
@@ -175,12 +170,12 @@ class BaseProvider:
         except (json.JSONDecodeError, ValueError, httpx.ResponseNotRead):
             error_message = response_text or error_message
 
-        ErrorLogger.log_provider_error(
+        log_provider_error(
             provider_name=self.provider_name,
             error_details=response_text,
             status_code=e.response.status_code,
-            context=context,
-            original_exception=e
+            original_exception=e,
+            request_id=request_id
         )
 
         raise HTTPException(
@@ -224,11 +219,6 @@ class BaseProvider:
         override (used by transcription service).
         """
         effective_base_url = base_url or self.base_url
-
-        context = ErrorContext(
-            request_id=request_id,
-            provider_name=self.provider_name
-        )
 
         merged_headers = {**self.headers}
         if headers:
@@ -285,9 +275,10 @@ class BaseProvider:
             return response_json
             
         except httpx.HTTPStatusError as e:
-            self._raise_provider_http_error(e, context)
+            self._raise_provider_http_error(e, request_id)
         except httpx.RequestError as e:
-            raise ErrorHandler.handle_provider_network_error(e, context, self.provider_name)
+            raise create_error(ErrorType.PROVIDER_NETWORK_ERROR, original_exception=e,
+                             error_details=str(e), request_id=request_id, provider_name=self.provider_name)
 
     async def _stream_request(self, client: httpx.AsyncClient, url_path: str, request_body: Dict[str, Any]) -> AsyncGenerator[bytes, None]:
         """Async generator streaming raw bytes from a provider API.
@@ -299,10 +290,6 @@ class BaseProvider:
         - RequestError → generic network error
         """
         request_id = request_body.get("request_id", "unknown")
-        context = ErrorContext(
-            request_id=request_id,
-            provider_name=self.provider_name
-        )
 
         self._log_provider_data(
             title="Base Provider Request",
@@ -346,21 +333,20 @@ class BaseProvider:
                 try:
                     response.raise_for_status()
                 except httpx.HTTPStatusError as e:
-                    self._raise_provider_http_error(e, context)
+                    self._raise_provider_http_error(e, request_id)
                 # WHY: PoolTimeout means all connections in use, not a network failure — maps to 503
                 except httpx.PoolTimeout as e:
-                    http_exception = ErrorHandler.handle_service_unavailable(
-                        error_details="Connection pool exhausted. Please retry later.",
-                        context=context,
-                        original_exception=e
-                    )
-                    raise http_exception from e
+                    raise create_error(ErrorType.SERVICE_UNAVAILABLE,
+                                     original_exception=e,
+                                     error_details="Connection pool exhausted. Please retry later.",
+                                     request_id=request_id,
+                                     provider_name=self.provider_name) from e
                 except httpx.RequestError as e:
-                    http_exception = ErrorHandler.handle_provider_network_error(
-                        original_exception=e,
-                        context=context
-                    )
-                    raise http_exception from e
+                    raise create_error(ErrorType.PROVIDER_NETWORK_ERROR,
+                                     original_exception=e,
+                                     error_details=str(e),
+                                     request_id=request_id,
+                                     provider_name=self.provider_name) from e
 
                 logger.debug(f"Starting to iterate over stream chunks for {request_id}")
                 async for chunk in response.aiter_bytes():

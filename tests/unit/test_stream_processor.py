@@ -103,16 +103,6 @@ class TestSanitizationMode:
         assert "event: ping" in combined
 
     @pytest.mark.asyncio
-    async def test_cumulative_stats(self):
-        sp = make_processor(sanitize=True)
-        payload = {"choices": [{"delta": {"content": "x", "done": True}}]}
-        chunk = sse(json.dumps(payload))
-        await collect(sp.process_stream(async_gen([chunk]), "m", "r", "u"))
-        stats = sp.get_processing_stats()
-        assert stats["total_chunks_processed"] >= 1
-        assert stats["sanitization_enabled"] is True
-
-    @pytest.mark.asyncio
     async def test_multiple_messages_in_one_chunk(self):
         sp = make_processor(sanitize=True)
         p1 = json.dumps({"id": "1"})
@@ -241,22 +231,7 @@ class TestFormatError:
 
 
 # ---------------------------------------------------------------------------
-# 7. get_processing_stats
-# ---------------------------------------------------------------------------
-
-class TestGetProcessingStats:
-
-    def test_initial_stats(self):
-        sp = StreamProcessor(config_manager=None)
-        stats = sp.get_processing_stats()
-        assert stats["total_chunks_processed"] == 0
-        assert stats["total_chunks_sanitized"] == 0
-        assert stats["sanitization_ratio"] == 0
-        assert stats["sanitization_enabled"] is False
-
-
-# ---------------------------------------------------------------------------
-# 8. _determine_sanitization_status
+# 7. _determine_sanitization_status
 # ---------------------------------------------------------------------------
 
 class TestDetermineSanitizationStatus:
@@ -285,7 +260,7 @@ class TestDetermineSanitizationStatus:
 
 
 # ---------------------------------------------------------------------------
-# 9. Remaining buffer at end of stream
+# 8. Remaining buffer at end of stream
 # ---------------------------------------------------------------------------
 
 class TestRemainingBuffer:

@@ -8,7 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 from src.services.base import BaseService
-from src.core.error_handling import ErrorHandler, ErrorContext
+from src.core.error_handling import ErrorType, create_error
 
 
 # ---------------------------------------------------------------------------
@@ -85,18 +85,16 @@ class TestValidateAndGetConfig:
         """Empty model string raises handle_model_not_specified (400)."""
         svc = _build_service()
         auth_data = _make_auth_data()
-        context = ErrorContext()
         with pytest.raises(HTTPException) as exc_info:
-            svc._validate_and_get_config("", auth_data, context)
+            svc._validate_and_get_config("", auth_data)
         assert exc_info.value.status_code == 400
 
     def test_none_model_raises_400(self):
         """None model raises handle_model_not_specified (400)."""
         svc = _build_service()
         auth_data = _make_auth_data()
-        context = ErrorContext()
         with pytest.raises(HTTPException) as exc_info:
-            svc._validate_and_get_config(None, auth_data, context)
+            svc._validate_and_get_config(None, auth_data)
         assert exc_info.value.status_code == 400
 
     def test_model_not_in_allowed_raises_403(self):
@@ -106,18 +104,16 @@ class TestValidateAndGetConfig:
             providers={"openai": {"type": "openai", "base_url": "https://api.openai.com"}}
         )
         auth_data = _make_auth_data(allowed_models=["gpt-3.5-turbo"])
-        context = ErrorContext()
         with pytest.raises(HTTPException) as exc_info:
-            svc._validate_and_get_config("gpt-4", auth_data, context)
+            svc._validate_and_get_config("gpt-4", auth_data)
         assert exc_info.value.status_code == 403
 
     def test_model_not_in_config_raises_404(self):
         """Model not in config raises handle_model_not_found (404)."""
         svc = _build_service(models={})
         auth_data = _make_auth_data()  # empty allowed_models = unrestricted
-        context = ErrorContext()
         with pytest.raises(HTTPException) as exc_info:
-            svc._validate_and_get_config("nonexistent-model", auth_data, context)
+            svc._validate_and_get_config("nonexistent-model", auth_data)
         assert exc_info.value.status_code == 404
 
     def test_provider_not_in_config_raises_404(self):
@@ -127,9 +123,8 @@ class TestValidateAndGetConfig:
             providers={}
         )
         auth_data = _make_auth_data()
-        context = ErrorContext()
         with pytest.raises(HTTPException) as exc_info:
-            svc._validate_and_get_config("gpt-4", auth_data, context)
+            svc._validate_and_get_config("gpt-4", auth_data)
         assert exc_info.value.status_code == 404
 
     def test_happy_path_returns_tuple(self):
@@ -146,10 +141,9 @@ class TestValidateAndGetConfig:
         }
         svc = _build_service(models=models, providers=providers)
         auth_data = _make_auth_data()
-        context = ErrorContext()
 
         model_config, provider_name, provider_model_name, provider_config = \
-            svc._validate_and_get_config("my-model", auth_data, context)
+            svc._validate_and_get_config("my-model", auth_data)
 
         assert model_config == models["my-model"]
         assert provider_name == "openai"
@@ -162,9 +156,8 @@ class TestValidateAndGetConfig:
         providers = {"openai": {"type": "openai"}}
         svc = _build_service(models=models, providers=providers)
         auth_data = _make_auth_data()
-        context = ErrorContext()
 
-        _, _, provider_model_name, _ = svc._validate_and_get_config("gpt-4", auth_data, context)
+        _, _, provider_model_name, _ = svc._validate_and_get_config("gpt-4", auth_data)
         assert provider_model_name == "gpt-4"
 
     def test_empty_allowed_models_unrestricted(self):
@@ -173,9 +166,8 @@ class TestValidateAndGetConfig:
         providers = {"openai": {"type": "openai"}}
         svc = _build_service(models=models, providers=providers)
         auth_data = _make_auth_data(allowed_models=[])
-        context = ErrorContext()
 
-        model_config, *_ = svc._validate_and_get_config("gpt-4", auth_data, context)
+        model_config, *_ = svc._validate_and_get_config("gpt-4", auth_data)
         assert model_config is not None
 
     def test_invariant_access_check_before_existence(self):
@@ -186,10 +178,9 @@ class TestValidateAndGetConfig:
         """
         svc = _build_service(models={})  # model does not exist in config
         auth_data = _make_auth_data(allowed_models=["only-this-model"])
-        context = ErrorContext()
 
         with pytest.raises(HTTPException) as exc_info:
-            svc._validate_and_get_config("secret-model", auth_data, context)
+            svc._validate_and_get_config("secret-model", auth_data)
         # Must be 403 (access denied), not 404 (not found)
         assert exc_info.value.status_code == 403
 
@@ -208,9 +199,8 @@ class TestGetProvider:
 
         svc = _build_service()
         provider_config = {"type": "openai", "base_url": "https://api.openai.com"}
-        context = ErrorContext()
 
-        result = svc._get_provider(provider_config, context)
+        result = svc._get_provider(provider_config)
         assert result is mock_provider
         mock_get.assert_called_once_with(
             "openai", provider_config, svc.httpx_client, svc.config_manager
@@ -223,8 +213,7 @@ class TestGetProvider:
 
         svc = _build_service()
         provider_config = {"type": "bad"}
-        context = ErrorContext()
 
         with pytest.raises(HTTPException) as exc_info:
-            svc._get_provider(provider_config, context)
+            svc._get_provider(provider_config)
         assert exc_info.value.status_code == 500

@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 
 from ..core.config_manager import ConfigManager
 from ..core.logging import logger
-from ..core.error_handling import ErrorHandler, ErrorContext
+from ..core.error_handling import ErrorType, create_error
 from .base import BaseService
 
 
@@ -26,11 +26,7 @@ class EmbeddingService(BaseService):
         request_body = await request.json()
         requested_model = request_body.get("model")
         
-        context = ErrorContext(
-            request_id=request_id,
-            user_id=user_id,
-            model_id=requested_model
-        )
+        error_ctx = dict(request_id=request_id, user_id=user_id, model_id=requested_model)
 
         self._log_service_data(
             title="Embedding Request JSON",
@@ -40,17 +36,17 @@ class EmbeddingService(BaseService):
             data_flow="incoming"
         )
 
-        logger.request(
-            operation="Embedding Creation Request",
+        logger.info(
+            f"Request: Embedding Creation | model={requested_model}",
             request_id=request_id,
             user_id=user_id,
             model_id=requested_model
         )
 
         model_config, provider_name, provider_model_name, provider_config = \
-            self._validate_and_get_config(requested_model, auth_data, context)
+            self._validate_and_get_config(requested_model, auth_data, **error_ctx)
 
-        provider_instance = self._get_provider(provider_config, context)
+        provider_instance = self._get_provider(provider_config, **error_ctx)
         
         try:
             response_data = await provider_instance.embeddings(request_body, provider_model_name, model_config)
@@ -63,8 +59,8 @@ class EmbeddingService(BaseService):
                 data_flow="from_provider"
             )
             
-            logger.response(
-                operation="Embedding Creation Response",
+            logger.info(
+                f"Response: Embedding Creation | model={requested_model}",
                 request_id=request_id,
                 user_id=user_id,
                 model_id=requested_model,
@@ -78,4 +74,4 @@ class EmbeddingService(BaseService):
         except HTTPException as e:
             raise e
         except Exception as e:
-            raise ErrorHandler.handle_internal_server_error(str(e), context, e)
+            raise create_error(ErrorType.INTERNAL_SERVER_ERROR, original_exception=e, error_details=str(e), **error_ctx)

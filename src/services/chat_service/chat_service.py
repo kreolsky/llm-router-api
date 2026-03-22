@@ -10,7 +10,7 @@ from ...core.config_manager import ConfigManager
 from ...services.model_service import ModelService
 from ...core.logging import logger
 from ...core.sanitizer import MessageSanitizer
-from ...core.error_handling import ErrorHandler, ErrorContext
+from ...core.error_handling import ErrorType, create_error
 from ...services.base import BaseService
 from .stream_processor import StreamProcessor
 
@@ -40,23 +40,19 @@ class ChatService(BaseService):
             data_flow="incoming"
         )
 
-        logger.request(
-            operation="Chat Completion Request",
+        logger.info(
+            f"Request: Chat Completion | model={requested_model}",
             request_id=request_id,
             user_id=user_id,
             model_id=requested_model
         )
 
-        context = ErrorContext(
-            request_id=request_id,
-            user_id=user_id,
-            model_id=requested_model
-        )
-        
+        error_ctx = dict(request_id=request_id, user_id=user_id, model_id=requested_model)
+
         model_config, provider_name, provider_model_name, provider_config = \
-            self._validate_and_get_config(requested_model, auth_data, context)
+            self._validate_and_get_config(requested_model, auth_data, **error_ctx)
 
-        provider_instance = self._get_provider(provider_config, context)
+        provider_instance = self._get_provider(provider_config, **error_ctx)
         
         try:
             with logger.request_context(
@@ -116,4 +112,4 @@ class ChatService(BaseService):
         except HTTPException as e:
             raise e
         except Exception as e:
-            raise ErrorHandler.handle_internal_server_error(str(e), context, e)
+            raise create_error(ErrorType.INTERNAL_SERVER_ERROR, original_exception=e, error_details=str(e), **error_ctx)

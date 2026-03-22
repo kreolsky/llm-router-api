@@ -1,13 +1,13 @@
-"""Standardized error types and context for the LLM Router."""
+"""Standardized error types for the LLM Router."""
 
 from enum import Enum
 from typing import Dict, Any, Optional
-from fastapi import HTTPException, status
+from fastapi import status
 
 
 class ErrorType(Enum):
     """Enumeration of standard error types in the system."""
-    
+
     # Validation Errors (400)
     MODEL_NOT_SPECIFIED = ("model_not_specified", status.HTTP_400_BAD_REQUEST, "Model not specified in request")
     MISSING_REQUIRED_FIELD = ("missing_required_field", status.HTTP_400_BAD_REQUEST, "Missing required field: {field_name}")
@@ -36,15 +36,14 @@ class ErrorType(Enum):
         self.code = code
         self.status_code = status_code
         self.message_template = message_template
-    
+
     def format_message(self, **kwargs) -> str:
         """Format the error message with provided parameters."""
         try:
             return self.message_template.format(**kwargs)
-        except KeyError as e:
-            # Fallback to template if formatting fails
+        except KeyError:
             return self.message_template
-    
+
     def create_error_detail(self, **kwargs) -> Dict[str, Any]:
         """Create standardized error detail dictionary in OpenRouter format."""
         result = {
@@ -53,49 +52,6 @@ class ErrorType(Enum):
                 "message": self.format_message(**kwargs)
             }
         }
-        metadata = {}
         if kwargs.get("provider_name"):
-            metadata["provider_name"] = kwargs["provider_name"]
-        if metadata:
-            result["error"]["metadata"] = metadata
+            result["error"]["metadata"] = {"provider_name": kwargs["provider_name"]}
         return result
-
-
-class ErrorContext:
-    """Context information for error handling."""
-    
-    def __init__(
-        self,
-        request_id: Optional[str] = None,
-        user_id: Optional[str] = None,
-        model_id: Optional[str] = None,
-        endpoint_path: Optional[str] = None,
-        provider_name: Optional[str] = None,
-        **additional_context
-    ):
-        self.request_id = request_id
-        self.user_id = user_id
-        self.model_id = model_id
-        self.endpoint_path = endpoint_path
-        self.provider_name = provider_name
-        self.additional_context = additional_context
-    
-    def to_log_extra(self) -> Dict[str, Any]:
-        """Convert context to logging extra dictionary."""
-        extra = {
-            "log_type": "error"
-        }
-        
-        if self.request_id:
-            extra["request_id"] = self.request_id
-        if self.user_id:
-            extra["user_id"] = self.user_id
-        if self.model_id:
-            extra["model_id"] = self.model_id
-        if self.endpoint_path:
-            extra["endpoint_path"] = self.endpoint_path
-        if self.provider_name:
-            extra["provider_name"] = self.provider_name
-        
-        extra.update(self.additional_context)
-        return extra

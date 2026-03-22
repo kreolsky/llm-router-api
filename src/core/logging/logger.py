@@ -83,26 +83,6 @@ class Logger:
         else:
             self._logger.error(message, exc_info=exc_info)
     
-    def request(self, operation: str, request_id: str, **kwargs):
-        """Log a request with context."""
-        message_parts = [f"Request: {operation}"]
-        if 'model_id' in kwargs:
-            message_parts.append(f"model={kwargs['model_id']}")
-        if 'provider_name' in kwargs:
-            message_parts.append(f"provider={kwargs['provider_name']}")
-        
-        message = " | ".join(message_parts)
-        self.info(message, request_id=request_id, **kwargs)
-    
-    def response(self, operation: str, request_id: str, status_code: int = 200, **kwargs):
-        """Log a response with context."""
-        message_parts = [f"Response: {operation}", f"status={status_code}"]
-        if 'processing_time_ms' in kwargs:
-            message_parts.append(f"time={kwargs['processing_time_ms']}ms")
-        
-        message = " | ".join(message_parts)
-        self.info(message, request_id=request_id, **kwargs)
-    
     def _truncate_large_values(self, data: Any, max_length: int = 1000) -> Any:
         """Recursively truncate large strings in nested data structures."""
         if isinstance(data, str):
@@ -134,14 +114,6 @@ class Logger:
             message += f" | flow={kwargs['data_flow']}"
         
         self.debug(f"{message}\n{data_str}", request_id=request_id, **kwargs)
-    
-    def performance(self, operation: str, start_time: float, request_id: str, **kwargs):
-        """Log performance metrics."""
-        duration_ms = int((time.time() - start_time) * 1000)
-        message_parts = [f"Performance: {operation}", f"duration={duration_ms}ms"]
-        
-        message = " | ".join(message_parts)
-        self.info(message, request_id=request_id, duration_ms=duration_ms, **kwargs)
     
     @contextmanager
     def request_context(self, operation: str, request_id: str, **kwargs):

@@ -1,155 +1,72 @@
-"""Factory for creating standardized HTTPExceptions with logging."""
+"""Single function for creating standardized HTTPExceptions with logging."""
 
+import logging
 from typing import Optional, Dict, Any
 from fastapi import HTTPException
-import httpx
 
-from .error_types import ErrorType, ErrorContext
-from .error_logger import ErrorLogger
+from .error_types import ErrorType
+from ...utils.unicode import decode_unicode_escapes
+
+_logger = logging.getLogger("llm_router")
 
 
-class ErrorHandler:
-    """Centralized error handling utility."""
-    
-    @staticmethod
-    def create_http_exception(
-        error_type: ErrorType,
-        context: Optional[ErrorContext] = None,
-        original_exception: Optional[Exception] = None,
-        **format_kwargs
-    ) -> HTTPException:
-        """Create a standardized HTTPException with proper logging."""
-        if context is None:
-            context = ErrorContext()
+def create_error(
+    error_type: ErrorType,
+    original_exception: Optional[Exception] = None,
+    **context
+) -> HTTPException:
+    """Create a standardized HTTPException with logging.
 
-        format_dict = {**context.__dict__, **format_kwargs}
-        error_detail = error_type.create_error_detail(**format_dict)
-        error_detail["error"]["code"] = error_type.status_code
+    All context fields (request_id, user_id, model_id, provider_name, etc.)
+    are passed as kwargs and used for both message formatting and log extras.
+    """
+    error_detail = error_type.create_error_detail(**context)
+    error_detail["error"]["code"] = error_type.status_code
 
-        ErrorLogger.log_error(
-            error_type=error_type,
-            context=context,
-            original_exception=original_exception,
-            additional_data={"error_detail": error_detail}
-        )
+    log_extra = {"log_type": "error", "error_type": error_type.code}
+    for key in ("request_id", "user_id", "model_id", "provider_name", "endpoint_path"):
+        if context.get(key):
+            log_extra[key] = context[key]
 
-        return HTTPException(
-            status_code=error_type.status_code,
-            detail=error_detail
-        )
-    
-    @staticmethod
-    def handle_model_not_specified(context: ErrorContext) -> HTTPException:
-        return ErrorHandler.create_http_exception(
-            error_type=ErrorType.MODEL_NOT_SPECIFIED,
-            context=context
-        )
-    
-    @staticmethod
-    def handle_model_not_allowed(model_id: str, context: ErrorContext) -> HTTPException:
-        context.model_id = model_id
-        return ErrorHandler.create_http_exception(
-            error_type=ErrorType.MODEL_NOT_ALLOWED,
-            context=context
-        )
-    
-    @staticmethod
-    def handle_model_not_found(model_id: str, context: ErrorContext) -> HTTPException:
-        context.model_id = model_id
-        return ErrorHandler.create_http_exception(
-            error_type=ErrorType.MODEL_NOT_FOUND,
-            context=context
-        )
-    
-    @staticmethod
-    def handle_provider_not_found(provider_name: str, model_id: str, context: ErrorContext) -> HTTPException:
-        context.provider_name = provider_name
-        context.model_id = model_id
-        return ErrorHandler.create_http_exception(
-            error_type=ErrorType.PROVIDER_NOT_FOUND,
-            context=context
-        )
-    
-    @staticmethod
-    def handle_provider_config_error(error_details: str, context: ErrorContext, original_exception: Optional[Exception] = None) -> HTTPException:
-        return ErrorHandler.create_http_exception(
-            error_type=ErrorType.PROVIDER_CONFIG_ERROR,
-            context=context,
-            original_exception=original_exception,
-            error_details=error_details
-        )
-    
-    @staticmethod
-    def handle_provider_network_error(
-        original_exception: httpx.RequestError,
-        context: ErrorContext,
-        provider_name: Optional[str] = None
-    ) -> HTTPException:
-        if provider_name:
-            context.provider_name = provider_name
-        
-        return ErrorHandler.create_http_exception(
-            error_type=ErrorType.PROVIDER_NETWORK_ERROR,
-            context=context,
-            original_exception=original_exception,
-            error_details=str(original_exception)
-        )
-    
-    @staticmethod
-    def handle_internal_server_error(
-        error_details: str,
-        context: ErrorContext,
-        original_exception: Optional[Exception] = None
-    ) -> HTTPException:
-        return ErrorHandler.create_http_exception(
-            error_type=ErrorType.INTERNAL_SERVER_ERROR,
-            context=context,
-            original_exception=original_exception,
-            error_details=error_details
-        )
-    
-    @staticmethod
-    def handle_auth_errors(
-        auth_type: str,
-        context: ErrorContext,
-        original_exception: Optional[Exception] = None
-    ) -> HTTPException:
-        if auth_type == "missing_api_key":
-            return ErrorHandler.create_http_exception(
-                error_type=ErrorType.MISSING_API_KEY,
-                context=context,
-                original_exception=original_exception
-            )
-        elif auth_type == "invalid_api_key":
-            return ErrorHandler.create_http_exception(
-                error_type=ErrorType.INVALID_API_KEY,
-                context=context,
-                original_exception=original_exception
-            )
-        else:
-            return ErrorHandler.handle_internal_server_error(
-                error_details=f"Authentication error: {auth_type}",
-                context=context,
-                original_exception=original_exception
-            )
-    
-    @staticmethod
-    def handle_endpoint_not_allowed(endpoint_path: str, context: ErrorContext) -> HTTPException:
-        context.endpoint_path = endpoint_path
-        return ErrorHandler.create_http_exception(
-            error_type=ErrorType.ENDPOINT_NOT_ALLOWED,
-            context=context
-        )
-    
-    @staticmethod
-    def handle_service_unavailable(
-        error_details: str,
-        context: ErrorContext,
-        original_exception: Optional[Exception] = None
-    ) -> HTTPException:
-        return ErrorHandler.create_http_exception(
-            error_type=ErrorType.SERVICE_UNAVAILABLE,
-            context=context,
-            original_exception=original_exception,
-            error_details=error_details
-        )
+    message = error_type.format_message(**context)
+
+    if original_exception:
+        log_extra["original_exception"] = str(original_exception)
+        log_extra["original_exception_type"] = type(original_exception).__name__
+        _logger.error(message, extra=log_extra, exc_info=True)
+    else:
+        _logger.error(message, extra=log_extra)
+
+    return HTTPException(status_code=error_type.status_code, detail=error_detail)
+
+
+def log_provider_error(
+    provider_name: str,
+    error_details: str,
+    status_code: int,
+    original_exception: Optional[Exception] = None,
+    **context
+) -> None:
+    """Log a provider-specific HTTP error with Unicode decoding."""
+    decoded = decode_unicode_escapes(error_details)
+
+    log_extra = {
+        "log_type": "error",
+        "error_type": "provider_error",
+        "provider_name": provider_name,
+        "provider_error_details": decoded,
+        "provider_status_code": status_code,
+    }
+    for key in ("request_id", "user_id", "model_id"):
+        if context.get(key):
+            log_extra[key] = context[key]
+
+    if original_exception:
+        log_extra["original_exception"] = str(original_exception)
+        log_extra["original_exception_type"] = type(original_exception).__name__
+
+    _logger.error(
+        f"Provider '{provider_name}' returned error {status_code}: {decoded}",
+        extra=log_extra,
+        exc_info=original_exception is not None
+    )

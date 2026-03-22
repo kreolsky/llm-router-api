@@ -3,7 +3,7 @@ import hmac
 from fastapi import Security, HTTPException, status, Request
 from fastapi.security import APIKeyHeader
 from typing import Dict, Any, Tuple, List
-from .error_handling import ErrorHandler, ErrorContext
+from .error_handling import ErrorType, create_error
 from .logging import logger
 
 api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
@@ -35,8 +35,7 @@ async def get_api_key(
                 "request_path": str(request.url.path)
             }
         })
-        context = ErrorContext()
-        raise ErrorHandler.handle_auth_errors("missing_api_key", context)
+        raise create_error(ErrorType.MISSING_API_KEY)
     
     # Remove "Bearer " prefix if present
     if api_key.startswith("Bearer "):
@@ -50,11 +49,7 @@ async def get_api_key(
                 "has_user_keys": config is not None and "user_keys" in config
             }
         })
-        context = ErrorContext()
-        raise ErrorHandler.handle_internal_server_error(
-            "Server configuration error: user keys not loaded",
-            context
-        )
+        raise create_error(ErrorType.INTERNAL_SERVER_ERROR, error_details="Server configuration error: user keys not loaded")
 
     found_project = None
     for project_name, project_data in config["user_keys"].items():
@@ -71,8 +66,7 @@ async def get_api_key(
                 "request_path": str(request.url.path)
             }
         })
-        context = ErrorContext()
-        raise ErrorHandler.handle_auth_errors("invalid_api_key", context)
+        raise create_error(ErrorType.INVALID_API_KEY)
     
     allowed_models = config["user_keys"][found_project].get("allowed_models") or []
     allowed_endpoints = config["user_keys"][found_project].get("allowed_endpoints") or []
@@ -117,7 +111,6 @@ def check_endpoint_access(endpoint_path: str):
                 "allowed_endpoints": allowed_endpoints
             }
         })
-        context = ErrorContext(endpoint_path=endpoint_path, user_id=user_id)
-        raise ErrorHandler.handle_endpoint_not_allowed(endpoint_path, context)
+        raise create_error(ErrorType.ENDPOINT_NOT_ALLOWED, endpoint_path=endpoint_path, user_id=user_id)
     
     return endpoint_checker

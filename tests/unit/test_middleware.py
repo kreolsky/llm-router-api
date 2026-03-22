@@ -66,18 +66,15 @@ class TestRequestLoggerMiddleware:
 
     @patch("src.api.middleware.logger")
     def test_logs_request_and_response(self, mock_logger, client):
-        """Middleware calls logger.request and logger.response."""
+        """Middleware calls logger.info for request and response."""
         client.get("/ok")
-        mock_logger.request.assert_called_once()
-        mock_logger.response.assert_called_once()
-
-        req_kwargs = mock_logger.request.call_args
-        assert req_kwargs.kwargs["operation"] == "Incoming Request"
-        assert req_kwargs.kwargs["method"] == "GET"
-
-        resp_kwargs = mock_logger.response.call_args
-        assert resp_kwargs.kwargs["operation"] == "Outgoing Response"
-        assert resp_kwargs.kwargs["status_code"] == 200
+        info_calls = mock_logger.info.call_args_list
+        # At least two info calls: one for request, one for response
+        assert len(info_calls) >= 2
+        req_msg = info_calls[0].args[0]
+        assert "Request: Incoming Request" in req_msg
+        resp_msg = info_calls[-1].args[0]
+        assert "Response: Outgoing Response" in resp_msg
 
     @patch("src.api.middleware.logger")
     def test_http_exception_returns_correct_status(self, mock_logger, client):
@@ -105,8 +102,9 @@ class TestRequestLoggerMiddleware:
     def test_user_id_defaults_to_unknown(self, mock_logger, client):
         """When project_name is not set, user_id defaults to 'unknown'."""
         client.get("/ok")
-        req_kwargs = mock_logger.request.call_args
-        assert req_kwargs.kwargs["user_id"] == "unknown"
+        info_calls = mock_logger.info.call_args_list
+        req_kwargs = info_calls[0].kwargs
+        assert req_kwargs["user_id"] == "unknown"
 
     @patch("src.api.middleware.logger")
     def test_post_body_logged_in_debug(self, mock_logger, client):

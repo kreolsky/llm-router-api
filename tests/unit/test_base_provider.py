@@ -10,7 +10,7 @@ import pytest
 from fastapi import HTTPException
 
 from src.providers.base import BaseProvider, retry_on_rate_limit
-from src.core.error_handling import ErrorHandler, ErrorType, ErrorContext
+from src.core.error_handling import ErrorType, create_error
 
 
 # ---------------------------------------------------------------------------
@@ -305,51 +305,47 @@ class TestRaiseProviderHttpError:
         error = httpx.HTTPStatusError("error", request=request, response=response)
         return error
 
-    @patch("src.providers.base.ErrorLogger")
-    def test_extracts_nested_error_message(self, mock_error_logger):
+    @patch("src.providers.base.log_provider_error")
+    def test_extracts_nested_error_message(self, mock_log):
         """Extracts error message from JSON {"error": {"message": ...}}."""
         provider = _build_provider()
-        context = ErrorContext(provider_name="test")
         err = self._make_http_status_error(
             400, json_body={"error": {"message": "bad request details"}}
         )
         with pytest.raises(HTTPException) as exc_info:
-            provider._raise_provider_http_error(err, context)
+            provider._raise_provider_http_error(err, "req-1")
         assert exc_info.value.detail["error"]["message"] == "bad request details"
         assert exc_info.value.status_code == 400
 
-    @patch("src.providers.base.ErrorLogger")
-    def test_extracts_flat_message(self, mock_error_logger):
+    @patch("src.providers.base.log_provider_error")
+    def test_extracts_flat_message(self, mock_log):
         """Extracts error message from {"message": ...}."""
         provider = _build_provider()
-        context = ErrorContext(provider_name="test")
         err = self._make_http_status_error(
             422, json_body={"message": "validation failed"}
         )
         with pytest.raises(HTTPException) as exc_info:
-            provider._raise_provider_http_error(err, context)
+            provider._raise_provider_http_error(err, "req-1")
         assert exc_info.value.detail["error"]["message"] == "validation failed"
 
-    @patch("src.providers.base.ErrorLogger")
-    def test_falls_back_to_response_text(self, mock_error_logger):
+    @patch("src.providers.base.log_provider_error")
+    def test_falls_back_to_response_text(self, mock_log):
         """Falls back to response text when JSON parse fails."""
         provider = _build_provider()
-        context = ErrorContext(provider_name="test")
         err = self._make_http_status_error(502, json_body=None, text_body="Bad Gateway")
         with pytest.raises(HTTPException) as exc_info:
-            provider._raise_provider_http_error(err, context)
+            provider._raise_provider_http_error(err, "req-1")
         assert exc_info.value.detail["error"]["message"] == "Bad Gateway"
 
-    @patch("src.providers.base.ErrorLogger")
-    def test_raises_with_correct_detail_structure(self, mock_error_logger):
+    @patch("src.providers.base.log_provider_error")
+    def test_raises_with_correct_detail_structure(self, mock_log):
         """HTTPException detail has correct structure with code, message, metadata."""
         provider = _build_provider()
-        context = ErrorContext(provider_name="test")
         err = self._make_http_status_error(
             503, json_body={"error": {"message": "overloaded"}}
         )
         with pytest.raises(HTTPException) as exc_info:
-            provider._raise_provider_http_error(err, context)
+            provider._raise_provider_http_error(err, "req-1")
         detail = exc_info.value.detail
         assert detail["error"]["code"] == 503
         assert detail["error"]["metadata"]["provider_name"] == "test"

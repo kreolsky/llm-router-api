@@ -5,7 +5,7 @@ import time
 from typing import Dict, Any, AsyncGenerator, Optional
 
 from ...core.logging import logger
-from ...core.error_handling import ErrorHandler, ErrorContext
+from ...core.error_handling import ErrorType, create_error
 from fastapi import HTTPException
 
 
@@ -15,9 +15,6 @@ class StreamProcessor:
     def __init__(self, config_manager=None):
         self.config_manager = config_manager
         self.should_sanitize = self._determine_sanitization_status()
-        
-        self.total_chunks_processed = 0
-        self.total_chunks_sanitized = 0
         
         self._message_sanitizer = None
         if self.should_sanitize:
@@ -192,9 +189,6 @@ class StreamProcessor:
                 "sanitized_messages": sanitized_count
             })
 
-            self.total_chunks_processed += chunk_count
-            self.total_chunks_sanitized += sanitized_count
-            
         except Exception as e:
             end_time = time.time()
             duration = end_time - start_time
@@ -252,15 +246,6 @@ class StreamProcessor:
                     "message_preview": message[:100]
                 })
             return message
-    
-    def get_processing_stats(self) -> Dict[str, Any]:
-        """Return cumulative sanitization metrics."""
-        return {
-            "total_chunks_processed": self.total_chunks_processed,
-            "total_chunks_sanitized": self.total_chunks_sanitized,
-            "sanitization_ratio": self.total_chunks_sanitized / self.total_chunks_processed if self.total_chunks_processed > 0 else 0,
-            "sanitization_enabled": self.should_sanitize
-        }
     
     def _format_error(self, error: Exception) -> bytes:
         """Format an error as an SSE data chunk (OpenRouter-compatible)."""

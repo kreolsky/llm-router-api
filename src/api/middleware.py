@@ -19,11 +19,10 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
 
         user_id = request.state.project_name if hasattr(request.state, 'project_name') else "unknown"
 
-        logger.request(
-            operation="Incoming Request",
+        logger.info(
+            f"Request: Incoming Request | method={request.method}",
             request_id=request_id,
             user_id=user_id,
-            method=request.method,
             url=str(request.url)
         )
         
@@ -77,12 +76,10 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
         process_time = time.time() - start_time
         response.headers["X-Process-Time"] = str(process_time)
 
-        logger.response(
-            operation="Outgoing Response",
+        logger.info(
+            f"Response: Outgoing Response | status={response.status_code} | time={round(process_time * 1000)}ms",
             request_id=request_id,
-            user_id=user_id,
-            status_code=response.status_code,
-            processing_time_ms=round(process_time * 1000)
+            user_id=user_id
         )
         
         return response

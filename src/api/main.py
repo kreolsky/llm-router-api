@@ -9,7 +9,7 @@ from typing import Dict, Any
 
 from ..core.config_manager import ConfigManager
 from ..core.auth import get_api_key, check_endpoint_access
-from ..core.error_handling import ErrorHandler, ErrorContext
+from ..core.error_handling import ErrorType, create_error
 from ..services.chat_service.chat_service import ChatService
 from ..services.model_service import ModelService
 from ..services.embedding_service import EmbeddingService
@@ -118,8 +118,8 @@ async def create_transcription(
     request_id = getattr(request.state, 'request_id', 'unknown')
     user_id = getattr(request.state, 'project_name', 'unknown')
 
-    logger.request(
-        operation="Transcription Request",
+    logger.info(
+        f"Request: Transcription | model={model}",
         request_id=request_id,
         user_id=user_id,
         method=request.method,
@@ -145,13 +145,7 @@ async def create_transcription(
     elif file:
         uploaded_file = file
     else:
-        context = ErrorContext()
-        from ..core.error_handling import ErrorType
-        raise ErrorHandler.create_http_exception(
-            error_type=ErrorType.MISSING_REQUIRED_FIELD,
-            context=context,
-            field_name="audio_file or file"
-        )
+        raise create_error(ErrorType.MISSING_REQUIRED_FIELD, field_name="audio_file or file")
 
     logger.info(
         "Transcription file received",
