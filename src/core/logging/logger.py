@@ -119,7 +119,7 @@ class Logger:
     def request_context(self, operation: str, request_id: str, **kwargs):
         """Context manager that logs request start, completion, and errors."""
         start_time = time.time()
-        self.request(operation=operation, request_id=request_id, **kwargs)
+        self.info(f"Started: {operation}", request_id=request_id, **kwargs)
 
         try:
             yield
