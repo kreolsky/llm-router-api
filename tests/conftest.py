@@ -251,7 +251,7 @@ def skip_if_service_unavailable(base_url: str):
             async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.get(f"{base_url}/health")
                 return response.status_code == 200
-        except:
+        except Exception:
             return False
     
     available = asyncio.run(check_service())
@@ -290,8 +290,3 @@ def assert_valid_embedding_structure(embedding: Dict[str, Any]):
     assert len(vector) > 0, "Embedding vector should not be empty"
     assert all(isinstance(x, (int, float)) for x in vector), "Embedding values should be numeric"
 
-
-# Make assertion functions available to tests
-pytest.assert_valid_response_structure = assert_valid_response_structure
-pytest.assert_valid_choice_structure = assert_valid_choice_structure
-pytest.assert_valid_embedding_structure = assert_valid_embedding_structure

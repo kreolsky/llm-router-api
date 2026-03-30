@@ -137,7 +137,3 @@ class Logger:
                 request_id=request_id,
                 **kwargs
             )
-
-
-# Create default logger instance
-logger = Logger()

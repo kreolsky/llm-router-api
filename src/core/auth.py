@@ -1,25 +1,27 @@
 """Authentication and authorization for the API gateway."""
 import hmac
 from fastapi import Security, HTTPException, status, Request
-from fastapi.security import APIKeyHeader
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Dict, Any, Tuple, List
 from .error_handling import ErrorType, create_error
 from .logging import logger
 
-api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
+bearer_scheme = HTTPBearer(auto_error=False)
 
 async def get_api_key(
     request: Request,
-    api_key: str = Security(api_key_header)
+    credentials: HTTPAuthorizationCredentials = Security(bearer_scheme)
 ) -> Tuple[str, str, List[str], List[str]]:
     """Authenticate request and return (project_name, api_key, allowed_models, allowed_endpoints).
 
-    Strips "Bearer " prefix from Authorization header if present.
+    Uses HTTPBearer scheme to extract token from Authorization header.
     Uses constant-time comparison to prevent timing attacks.
     Sets request.state.project_name as a side effect for downstream handlers.
     """
     config_manager = request.app.state.config_manager
     config = config_manager.get_config()
+
+    api_key = credentials.credentials if credentials else None
 
     logger.debug("Authentication attempt", extra={
         "auth": {
@@ -27,7 +29,7 @@ async def get_api_key(
             "request_path": str(request.url.path)
         }
     })
-    
+
     if not api_key:
         logger.warning("Authentication failed: missing API key", extra={
             "auth": {
@@ -36,10 +38,6 @@ async def get_api_key(
             }
         })
         raise create_error(ErrorType.MISSING_API_KEY)
-    
-    # Remove "Bearer " prefix if present
-    if api_key.startswith("Bearer "):
-        api_key = api_key[len("Bearer "):]
 
     if config is None or "user_keys" not in config:
         logger.error("Server configuration error: user keys not loaded", extra={

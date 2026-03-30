@@ -44,7 +44,7 @@ class ConfigManager:
         for path, key in file_map:
             try:
                 with open(path, 'r') as f:
-                    config[key] = yaml.safe_load(f).get(key, {})
+                    config[key] = (yaml.safe_load(f) or {}).get(key, {})
             except FileNotFoundError as e:
                 logger.error(f"Configuration file not found: {path}")
                 if fail_on_error:

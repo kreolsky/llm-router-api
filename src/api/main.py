@@ -190,7 +190,7 @@ async def generate_key_endpoint(
     key = generate_key()
     logger.debug_data(
         title="Generated API Key",
-        data={"key": key},
+        data={"key": f"{key[:10]}..."},
         request_id=request_id
     )
     return {"key": key}

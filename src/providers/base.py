@@ -6,6 +6,7 @@ import asyncio
 import time
 from typing import Dict, Any, AsyncGenerator, Callable, Optional
 from functools import wraps
+from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 
 from ..utils.deep_merge import deep_merge
@@ -152,8 +153,6 @@ class BaseProvider:
         Handles ResponseNotRead (streaming context where body isn't buffered).
         Logs via log_provider_error before raising.
         """
-        from fastapi import HTTPException
-
         response_text = ""
         try:
             response_text = e.response.text
@@ -339,19 +338,6 @@ class BaseProvider:
                     response.raise_for_status()
                 except httpx.HTTPStatusError as e:
                     self._raise_provider_http_error(e, request_id)
-                # WHY: PoolTimeout means all connections in use, not a network failure — maps to 503
-                except httpx.PoolTimeout as e:
-                    raise create_error(ErrorType.SERVICE_UNAVAILABLE,
-                                     original_exception=e,
-                                     error_details="Connection pool exhausted. Please retry later.",
-                                     request_id=request_id,
-                                     provider_name=self.provider_name) from e
-                except httpx.RequestError as e:
-                    raise create_error(ErrorType.PROVIDER_NETWORK_ERROR,
-                                     original_exception=e,
-                                     error_details=str(e),
-                                     request_id=request_id,
-                                     provider_name=self.provider_name) from e
 
                 logger.debug(f"Starting to iterate over stream chunks for {request_id}")
                 async for chunk in response.aiter_bytes():
@@ -361,6 +347,19 @@ class BaseProvider:
                     })
                     yield chunk
                 logger.debug(f"Provider stream finished for {request_id}")
+        # WHY: PoolTimeout means all connections in use, not a network failure — maps to 503
+        except httpx.PoolTimeout as e:
+            raise create_error(ErrorType.SERVICE_UNAVAILABLE,
+                             original_exception=e,
+                             error_details="Connection pool exhausted. Please retry later.",
+                             request_id=request_id,
+                             provider_name=self.provider_name) from e
+        except httpx.RequestError as e:
+            raise create_error(ErrorType.PROVIDER_NETWORK_ERROR,
+                             original_exception=e,
+                             error_details=str(e),
+                             request_id=request_id,
+                             provider_name=self.provider_name) from e
         except Exception as e:
             logger.error(f"Stream request failed after {time.time() - start_time:.2f}s: {str(e)}", extra={
                 "error_type": type(e).__name__,
