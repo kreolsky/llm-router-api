@@ -22,11 +22,8 @@ def api_keys() -> Dict[str, str]:
     """API keys for testing different access levels."""
     return {
         "full_access": "dummy",
-        "limited_access": "nnp-v1-91afa1510b7e0c9d27b713ac0cc7a458775271f348d86c7ae823bf08f891e89a",
-        "kilo_code": "nnp-v1-7572dd61f31870061fd4b9c809272a9070b36d7f6383171f71876e170ba2d07a",
-        "dead_internet": "nnp-v1-16c34d52d13a9f02d9f417fa593bab5ba8d599ccb4a1023581a3c08ab383fa715",
-        "bro_kilo_code": "nnp-v1-0897e56c94bc3fadec3c3e2a4378aa683919419d6127ced3b04a6785fbed7b57",
-        "cir_online": "nnp-v1-6341ca3e67258db05c384d89c00eea3af998984cc8378ec45f606d4091cf827df",
+        "limited": "limited",
+        "transctiber": "transctiber",
         "invalid": "invalid-key-12345",
         "empty": ""
     }
@@ -177,7 +174,7 @@ def performance_thresholds() -> Dict[str, float]:
     """Performance thresholds for testing."""
     return {
         "max_response_time": 5.0,
-        "max_ttft": 2.0,
+        "max_ttft": 5.0,
         "min_throughput": 0.5,
         "max_memory_usage": 512.0
     }

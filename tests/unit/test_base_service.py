@@ -86,7 +86,7 @@ class TestValidateAndGetConfig:
         svc = _build_service()
         auth_data = _make_auth_data()
         with pytest.raises(HTTPException) as exc_info:
-            svc._validate_and_get_config("", auth_data)
+            svc._validate_and_get_config("", auth_data, model_id="")
         assert exc_info.value.status_code == 400
 
     def test_none_model_raises_400(self):
@@ -94,7 +94,7 @@ class TestValidateAndGetConfig:
         svc = _build_service()
         auth_data = _make_auth_data()
         with pytest.raises(HTTPException) as exc_info:
-            svc._validate_and_get_config(None, auth_data)
+            svc._validate_and_get_config(None, auth_data, model_id=None)
         assert exc_info.value.status_code == 400
 
     def test_model_not_in_allowed_raises_403(self):
@@ -105,7 +105,7 @@ class TestValidateAndGetConfig:
         )
         auth_data = _make_auth_data(allowed_models=["gpt-3.5-turbo"])
         with pytest.raises(HTTPException) as exc_info:
-            svc._validate_and_get_config("gpt-4", auth_data)
+            svc._validate_and_get_config("gpt-4", auth_data, model_id="gpt-4")
         assert exc_info.value.status_code == 403
 
     def test_model_not_in_config_raises_404(self):
@@ -113,7 +113,7 @@ class TestValidateAndGetConfig:
         svc = _build_service(models={})
         auth_data = _make_auth_data()  # empty allowed_models = unrestricted
         with pytest.raises(HTTPException) as exc_info:
-            svc._validate_and_get_config("nonexistent-model", auth_data)
+            svc._validate_and_get_config("nonexistent-model", auth_data, model_id="nonexistent-model")
         assert exc_info.value.status_code == 404
 
     def test_provider_not_in_config_raises_404(self):
@@ -124,7 +124,7 @@ class TestValidateAndGetConfig:
         )
         auth_data = _make_auth_data()
         with pytest.raises(HTTPException) as exc_info:
-            svc._validate_and_get_config("gpt-4", auth_data)
+            svc._validate_and_get_config("gpt-4", auth_data, model_id="gpt-4")
         assert exc_info.value.status_code == 404
 
     def test_happy_path_returns_tuple(self):
@@ -143,7 +143,7 @@ class TestValidateAndGetConfig:
         auth_data = _make_auth_data()
 
         model_config, provider_name, provider_model_name, provider_config = \
-            svc._validate_and_get_config("my-model", auth_data)
+            svc._validate_and_get_config("my-model", auth_data, model_id="my-model")
 
         assert model_config == models["my-model"]
         assert provider_name == "openai"
@@ -157,7 +157,7 @@ class TestValidateAndGetConfig:
         svc = _build_service(models=models, providers=providers)
         auth_data = _make_auth_data()
 
-        _, _, provider_model_name, _ = svc._validate_and_get_config("gpt-4", auth_data)
+        _, _, provider_model_name, _ = svc._validate_and_get_config("gpt-4", auth_data, model_id="gpt-4")
         assert provider_model_name == "gpt-4"
 
     def test_empty_allowed_models_unrestricted(self):
@@ -167,8 +167,22 @@ class TestValidateAndGetConfig:
         svc = _build_service(models=models, providers=providers)
         auth_data = _make_auth_data(allowed_models=[])
 
-        model_config, *_ = svc._validate_and_get_config("gpt-4", auth_data)
+        model_config, *_ = svc._validate_and_get_config("gpt-4", auth_data, model_id="gpt-4")
         assert model_config is not None
+
+    def test_model_in_allowed_models_succeeds(self):
+        """When allowed_models is non-empty and requested model IS in the list, validation passes."""
+        models = {"gpt-4": {"provider": "openai", "provider_model_name": "gpt-4-turbo"}}
+        providers = {"openai": {"type": "openai", "base_url": "https://api.openai.com"}}
+        svc = _build_service(models=models, providers=providers)
+        auth_data = _make_auth_data(allowed_models=["gpt-4"])
+
+        model_config, provider_name, provider_model_name, provider_config = \
+            svc._validate_and_get_config("gpt-4", auth_data, model_id="gpt-4")
+
+        assert model_config == models["gpt-4"]
+        assert provider_name == "openai"
+        assert provider_model_name == "gpt-4-turbo"
 
     def test_invariant_access_check_before_existence(self):
         """INVARIANT: access check runs before existence check.
@@ -180,7 +194,7 @@ class TestValidateAndGetConfig:
         auth_data = _make_auth_data(allowed_models=["only-this-model"])
 
         with pytest.raises(HTTPException) as exc_info:
-            svc._validate_and_get_config("secret-model", auth_data)
+            svc._validate_and_get_config("secret-model", auth_data, model_id="secret-model")
         # Must be 403 (access denied), not 404 (not found)
         assert exc_info.value.status_code == 403
 

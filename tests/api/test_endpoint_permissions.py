@@ -92,181 +92,6 @@ class TestEndpointPermissions:
         assert response.status_code == 200, "Full access should allow transcriptions without model"
     
     @pytest.mark.asyncio
-    async def test_bro_kilo_code_endpoint_permissions(
-        self, 
-        base_url: str, 
-        api_keys: dict, 
-        test_models: dict,
-        sample_messages: list,
-        sample_texts_for_embedding: list,
-        audio_file_path,
-        http_client: httpx.AsyncClient
-    ):
-        """Test that bro_kilo_code key has appropriate access to endpoints."""
-        bro_kilo_key = api_keys["bro_kilo_code"]
-        
-        # Test model listing endpoint
-        response = await http_client.get(
-            f"{base_url}/v1/models",
-            headers={"Authorization": f"Bearer {bro_kilo_key}"}
-        )
-        assert response.status_code == 200, "bro_kilo_code should allow model listing"
-        
-        # Test chat completion endpoint with accessible model
-        payload = {
-            "model": test_models["local_orange"]["id"],
-            "messages": sample_messages,
-            "stream": False,
-            "max_tokens": 50
-        }
-        response = await http_client.post(
-            f"{base_url}/v1/chat/completions",
-            headers={"Authorization": f"Bearer {bro_kilo_key}", "Content-Type": "application/json"},
-            json=payload
-        )
-        assert response.status_code == 200, "bro_kilo_code should allow chat completions with accessible models"
-        
-        # Test chat completion endpoint with restricted model
-        payload = {
-            "model": test_models["deepseek_chat"]["id"],
-            "messages": sample_messages,
-            "stream": False,
-            "max_tokens": 50
-        }
-        response = await http_client.post(
-            f"{base_url}/v1/chat/completions",
-            headers={"Authorization": f"Bearer {bro_kilo_key}", "Content-Type": "application/json"},
-            json=payload
-        )
-        # This might succeed or fail depending on configuration
-        assert response.status_code in [200, 403, 404], "bro_kilo_code might not have access to all models"
-        
-        # Test embedding endpoint
-        payload = {
-            "model": test_models["embeddings_dummy"]["id"],
-            "input": sample_texts_for_embedding,
-            "encoding_format": "float"
-        }
-        response = await http_client.post(
-            f"{base_url}/v1/embeddings",
-            headers={"Authorization": f"Bearer {bro_kilo_key}", "Content-Type": "application/json"},
-            json=payload
-        )
-        # This might succeed or fail depending on configuration
-        assert response.status_code in [200, 403, 404], "bro_kilo_code might not have access to embeddings"
-        
-        # Test transcription endpoint with model
-        with open(audio_file_path, "rb") as audio_file:
-            audio_data = audio_file.read()
-        
-        files = {
-            "file": (audio_file_path.name, audio_data, "audio/ogg")
-        }
-        data = {
-            "model": test_models["stt_dummy"]["id"]
-        }
-        response = await http_client.post(
-            f"{base_url}/v1/audio/transcriptions",
-            headers={"Authorization": f"Bearer {bro_kilo_key}"},
-            files=files,
-            data=data
-        )
-        # This might succeed or fail depending on configuration
-        assert response.status_code in [200, 403, 404], "bro_kilo_code might not have access to transcriptions with model"
-        
-        # Test transcription endpoint without model
-        files = {
-            "file": (audio_file_path.name, audio_data, "audio/ogg")
-        }
-        response = await http_client.post(
-            f"{base_url}/v1/audio/transcriptions",
-            headers={"Authorization": f"Bearer {bro_kilo_key}"},
-            files=files
-        )
-        # This might succeed or fail depending on configuration
-        assert response.status_code in [200, 403, 404], "bro_kilo_code might not have access to transcriptions without model"
-    
-    @pytest.mark.asyncio
-    async def test_cir_online_endpoint_permissions(
-        self, 
-        base_url: str, 
-        api_keys: dict, 
-        test_models: dict,
-        sample_messages: list,
-        sample_texts_for_embedding: list,
-        audio_file_path,
-        http_client: httpx.AsyncClient
-    ):
-        """Test that cir_online key has appropriate access to endpoints."""
-        cir_online_key = api_keys["cir_online"]
-        
-        # Test model listing endpoint
-        response = await http_client.get(
-            f"{base_url}/v1/models",
-            headers={"Authorization": f"Bearer {cir_online_key}"}
-        )
-        assert response.status_code == 200, "cir_online should allow model listing"
-        
-        # Test chat completion endpoint with accessible model
-        payload = {
-            "model": test_models["gemini_mini"]["id"],
-            "messages": sample_messages,
-            "stream": False,
-            "max_tokens": 50
-        }
-        response = await http_client.post(
-            f"{base_url}/v1/chat/completions",
-            headers={"Authorization": f"Bearer {cir_online_key}", "Content-Type": "application/json"},
-            json=payload
-        )
-        assert response.status_code == 200, "cir_online should allow chat completions with accessible models"
-        
-        # Test embedding endpoint
-        payload = {
-            "model": test_models["embeddings_dummy"]["id"],
-            "input": sample_texts_for_embedding,
-            "encoding_format": "float"
-        }
-        response = await http_client.post(
-            f"{base_url}/v1/embeddings",
-            headers={"Authorization": f"Bearer {cir_online_key}", "Content-Type": "application/json"},
-            json=payload
-        )
-        # This might succeed or fail depending on configuration
-        assert response.status_code in [200, 403, 404], "cir_online might have access to embeddings"
-        
-        # Test transcription endpoint with model
-        with open(audio_file_path, "rb") as audio_file:
-            audio_data = audio_file.read()
-        
-        files = {
-            "file": (audio_file_path.name, audio_data, "audio/ogg")
-        }
-        data = {
-            "model": test_models["stt_dummy"]["id"]
-        }
-        response = await http_client.post(
-            f"{base_url}/v1/audio/transcriptions",
-            headers={"Authorization": f"Bearer {cir_online_key}"},
-            files=files,
-            data=data
-        )
-        # This might succeed or fail depending on configuration
-        assert response.status_code in [200, 403, 404], "cir_online might have access to transcriptions with model"
-        
-        # Test transcription endpoint without model
-        files = {
-            "file": (audio_file_path.name, audio_data, "audio/ogg")
-        }
-        response = await http_client.post(
-            f"{base_url}/v1/audio/transcriptions",
-            headers={"Authorization": f"Bearer {cir_online_key}"},
-            files=files
-        )
-        # This might succeed or fail depending on configuration
-        assert response.status_code in [200, 403, 404], "cir_online might have access to transcriptions without model"
-    
-    @pytest.mark.asyncio
     async def test_invalid_key_endpoint_permissions(
         self, 
         base_url: str, 
@@ -395,30 +220,235 @@ class TestEndpointPermissions:
         )
         
         assert response.status_code == 200, "Transcription without model should succeed with full access"
-        
+
         transcription_data = response.json()
         assert "text" in transcription_data, "Response should contain transcription text"
         assert len(transcription_data["text"]) > 0, "Transcription should not be empty"
-        
-        # Test with other keys if they have transcription access
-        for key_name in ["bro_kilo_code", "cir_online"]:
-            if key_name in api_keys:
-                api_key = api_keys[key_name]
-                
-                response = await http_client.post(
-                    f"{base_url}/v1/audio/transcriptions",
-                    headers={"Authorization": f"Bearer {api_key}"},
-                    files=files
-                )
-                
-                # This might succeed or fail depending on configuration
-                if response.status_code == 200:
-                    transcription_data = response.json()
-                    assert "text" in transcription_data, "Response should contain transcription text"
-                    assert len(transcription_data["text"]) > 0, "Transcription should not be empty"
-                    logger.info(f"✓ {key_name} can access transcription without model")
-                elif response.status_code in [403, 404]:
-                    logger.warning(f"⚠ {key_name} cannot access transcription without model")
-                else:
-                    # Unexpected status code
-                    assert False, f"Unexpected status code {response.status_code} for {key_name}"
+
+
+class TestLimitedUserPermissions:
+    """Test permissions for user with allowed_models: [local/orange] only."""
+
+    @pytest.mark.asyncio
+    async def test_limited_chat_allowed_model(
+        self, base_url, api_keys, sample_messages, http_client
+    ):
+        """Chat completions with allowed model local/orange should succeed."""
+        response = await http_client.post(
+            f"{base_url}/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_keys['limited']}", "Content-Type": "application/json"},
+            json={"model": "local/orange", "messages": sample_messages, "stream": False, "max_tokens": 50}
+        )
+        assert response.status_code == 200, "limited user should access local/orange"
+
+    @pytest.mark.asyncio
+    async def test_limited_chat_denied_gemini(
+        self, base_url, api_keys, sample_messages, http_client
+    ):
+        """Chat completions with gemini/mini should be denied (not in allowed_models)."""
+        response = await http_client.post(
+            f"{base_url}/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_keys['limited']}", "Content-Type": "application/json"},
+            json={"model": "gemini/mini", "messages": sample_messages, "stream": False, "max_tokens": 50}
+        )
+        assert response.status_code == 403, "limited user should be denied gemini/mini"
+
+    @pytest.mark.asyncio
+    async def test_limited_chat_denied_deepseek(
+        self, base_url, api_keys, sample_messages, http_client
+    ):
+        """Chat completions with deepseek/chat should be denied (not in allowed_models)."""
+        response = await http_client.post(
+            f"{base_url}/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_keys['limited']}", "Content-Type": "application/json"},
+            json={"model": "deepseek/chat", "messages": sample_messages, "stream": False, "max_tokens": 50}
+        )
+        assert response.status_code == 403, "limited user should be denied deepseek/chat"
+
+    @pytest.mark.asyncio
+    async def test_limited_embeddings_denied(
+        self, base_url, api_keys, sample_texts_for_embedding, http_client
+    ):
+        """Embeddings with embeddings/dummy should be denied (not in allowed_models)."""
+        response = await http_client.post(
+            f"{base_url}/v1/embeddings",
+            headers={"Authorization": f"Bearer {api_keys['limited']}", "Content-Type": "application/json"},
+            json={"model": "embeddings/dummy", "input": sample_texts_for_embedding, "encoding_format": "float"}
+        )
+        assert response.status_code == 403, "limited user should be denied embeddings/dummy"
+
+    @pytest.mark.asyncio
+    async def test_limited_transcription_denied(
+        self, base_url, api_keys, audio_file_path, http_client
+    ):
+        """Transcription should be denied — stt/dummy (default model) not in allowed_models."""
+        with open(audio_file_path, "rb") as f:
+            audio_data = f.read()
+
+        # Without explicit model — defaults to stt/dummy, not in allowed_models
+        response = await http_client.post(
+            f"{base_url}/v1/audio/transcriptions",
+            headers={"Authorization": f"Bearer {api_keys['limited']}"},
+            files={"file": (audio_file_path.name, audio_data, "audio/ogg")}
+        )
+        assert response.status_code == 403, "limited user should be denied transcription (default model not allowed)"
+
+        # With explicit model — also not in allowed_models
+        response = await http_client.post(
+            f"{base_url}/v1/audio/transcriptions",
+            headers={"Authorization": f"Bearer {api_keys['limited']}"},
+            files={"file": (audio_file_path.name, audio_data, "audio/ogg")},
+            data={"model": "stt/dummy"}
+        )
+        assert response.status_code == 403, "limited user should be denied transcription (explicit stt/dummy)"
+
+    @pytest.mark.asyncio
+    async def test_limited_model_list_filtered(
+        self, base_url, api_keys, http_client
+    ):
+        """Model listing should return only local/orange for limited user."""
+        response = await http_client.get(
+            f"{base_url}/v1/models",
+            headers={"Authorization": f"Bearer {api_keys['limited']}"}
+        )
+        assert response.status_code == 200
+        model_ids = [m["id"] for m in response.json()["data"]]
+        assert model_ids == ["local/orange"], f"limited user should only see local/orange, got {model_ids}"
+
+    @pytest.mark.asyncio
+    async def test_limited_model_retrieve_allowed(
+        self, base_url, api_keys, http_client
+    ):
+        """Retrieving local/orange should succeed for limited user."""
+        response = await http_client.get(
+            f"{base_url}/v1/models/local/orange",
+            headers={"Authorization": f"Bearer {api_keys['limited']}"}
+        )
+        assert response.status_code == 200
+        assert response.json()["id"] == "local/orange"
+
+    @pytest.mark.asyncio
+    async def test_limited_model_retrieve_denied(
+        self, base_url, api_keys, http_client
+    ):
+        """Retrieving gemini/mini should return 403 for limited user."""
+        response = await http_client.get(
+            f"{base_url}/v1/models/gemini/mini",
+            headers={"Authorization": f"Bearer {api_keys['limited']}"}
+        )
+        assert response.status_code == 403, "limited user should be denied retrieving gemini/mini"
+
+    @pytest.mark.asyncio
+    async def test_limited_generate_key(
+        self, base_url, api_keys, http_client
+    ):
+        """Generate key should succeed — limited user has no endpoint restrictions."""
+        response = await http_client.get(
+            f"{base_url}/tools/generate_key",
+            headers={"Authorization": f"Bearer {api_keys['limited']}"}
+        )
+        assert response.status_code == 200
+        assert "key" in response.json()
+
+
+class TestTransctiberUserPermissions:
+    """Test permissions for user with allowed_endpoints: [/v1/audio/transcriptions, /v1/models]."""
+
+    @pytest.mark.asyncio
+    async def test_transctiber_transcription_allowed(
+        self, base_url, api_keys, audio_file_path, http_client
+    ):
+        """Transcription should succeed — endpoint is allowed, no model restrictions."""
+        with open(audio_file_path, "rb") as f:
+            audio_data = f.read()
+
+        response = await http_client.post(
+            f"{base_url}/v1/audio/transcriptions",
+            headers={"Authorization": f"Bearer {api_keys['transctiber']}"},
+            files={"file": (audio_file_path.name, audio_data, "audio/ogg")},
+            data={"model": "stt/dummy"}
+        )
+        assert response.status_code == 200
+        assert "text" in response.json()
+
+    @pytest.mark.asyncio
+    async def test_transctiber_transcription_without_model(
+        self, base_url, api_keys, audio_file_path, http_client
+    ):
+        """Transcription without explicit model should succeed (default model, no model restriction)."""
+        with open(audio_file_path, "rb") as f:
+            audio_data = f.read()
+
+        response = await http_client.post(
+            f"{base_url}/v1/audio/transcriptions",
+            headers={"Authorization": f"Bearer {api_keys['transctiber']}"},
+            files={"file": (audio_file_path.name, audio_data, "audio/ogg")}
+        )
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_transctiber_model_list_allowed(
+        self, base_url, api_keys, http_client
+    ):
+        """Model listing should succeed and show all visible models (no model restriction)."""
+        response = await http_client.get(
+            f"{base_url}/v1/models",
+            headers={"Authorization": f"Bearer {api_keys['transctiber']}"}
+        )
+        assert response.status_code == 200
+        model_ids = [m["id"] for m in response.json()["data"]]
+        for expected in ["local/orange", "gemini/mini", "deepseek/chat"]:
+            assert expected in model_ids, f"transctiber should see {expected}"
+        # Hidden models must not appear
+        assert "embeddings/dummy" not in model_ids
+        assert "stt/dummy" not in model_ids
+
+    @pytest.mark.asyncio
+    async def test_transctiber_model_retrieve_denied(
+        self, base_url, api_keys, http_client
+    ):
+        """Retrieve individual model should return 403.
+
+        By design: allowed_endpoints contains /v1/models but NOT /v1/models/{model_id:path}.
+        Only the model list is needed for service compatibility.
+        """
+        response = await http_client.get(
+            f"{base_url}/v1/models/local/orange",
+            headers={"Authorization": f"Bearer {api_keys['transctiber']}"}
+        )
+        assert response.status_code == 403, "transctiber should be denied model retrieval (endpoint not in allowed_endpoints)"
+
+    @pytest.mark.asyncio
+    async def test_transctiber_chat_denied(
+        self, base_url, api_keys, sample_messages, http_client
+    ):
+        """Chat completions should return 403 — endpoint not allowed."""
+        response = await http_client.post(
+            f"{base_url}/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_keys['transctiber']}", "Content-Type": "application/json"},
+            json={"model": "local/orange", "messages": sample_messages, "stream": False, "max_tokens": 50}
+        )
+        assert response.status_code == 403, "transctiber should be denied chat completions"
+
+    @pytest.mark.asyncio
+    async def test_transctiber_embeddings_denied(
+        self, base_url, api_keys, sample_texts_for_embedding, http_client
+    ):
+        """Embeddings should return 403 — endpoint not allowed."""
+        response = await http_client.post(
+            f"{base_url}/v1/embeddings",
+            headers={"Authorization": f"Bearer {api_keys['transctiber']}", "Content-Type": "application/json"},
+            json={"model": "embeddings/dummy", "input": sample_texts_for_embedding, "encoding_format": "float"}
+        )
+        assert response.status_code == 403, "transctiber should be denied embeddings"
+
+    @pytest.mark.asyncio
+    async def test_transctiber_generate_key_denied(
+        self, base_url, api_keys, http_client
+    ):
+        """Generate key should return 403 — endpoint not allowed."""
+        response = await http_client.get(
+            f"{base_url}/tools/generate_key",
+            headers={"Authorization": f"Bearer {api_keys['transctiber']}"}
+        )
+        assert response.status_code == 403, "transctiber should be denied generate_key"
