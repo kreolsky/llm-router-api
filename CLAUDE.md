@@ -1,6 +1,6 @@
 # NNP AI Router — Project Bible
 
-OpenAI-compatible API gateway for multiple LLM providers. Routes requests to OpenAI, DeepSeek, Anthropic, OpenRouter, Ollama, and any OpenAI-compatible API through a unified endpoint.
+OpenAI-compatible API gateway for multiple LLM providers. Routes requests to OpenAI, DeepSeek, OpenRouter, Ollama, and any OpenAI-compatible API through a unified endpoint.
 
 **Development rules, coding standards, and lessons: see `RULES.md`**
 
@@ -18,7 +18,7 @@ OpenAI-compatible API gateway for multiple LLM providers. Routes requests to Ope
 
 **Request Flow**: Middleware (request ID, logging) → Auth (Bearer token, HMAC) → Service (model access validation) → Provider (HTTP to backend) → Response (JSON or SSE stream).
 
-**Provider Abstraction**: Three provider types (`openai`, `anthropic`, `ollama`). Instances cached by `(type, base_url)`, cache cleared on config reload. Base class handles retry with exponential backoff on 429s.
+**Provider Abstraction**: Two provider types (`openai`, `ollama`). Instances cached by `(type, base_url)`, cache cleared on config reload. Base class handles retry with exponential backoff on 429s.
 
 **Configuration (YAML)**: Three files in `config/` — `providers.yaml` (connections), `models.yaml` (model registry), `user_keys.yaml` (API key access control). Hot-reloaded via background task.
 

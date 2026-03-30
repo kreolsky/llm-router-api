@@ -91,7 +91,7 @@ class StreamingResponseParser:
             # Extract content if present
             if 'choices' in chunk and chunk['choices']:
                 delta = chunk['choices'][0].get('delta', {})
-                content = delta.get('content', '')
+                content = delta.get('content') or ''
                 full_content += content
         
         end_time = time.time()

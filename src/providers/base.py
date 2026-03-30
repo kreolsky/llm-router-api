@@ -274,6 +274,10 @@ class BaseProvider:
             
             return response_json
             
+        except json.JSONDecodeError as e:
+            raise create_error(ErrorType.PROVIDER_INVALID_RESPONSE, original_exception=e,
+                             error_details=f"Non-JSON response (status {response.status_code})",
+                             request_id=request_id, provider_name=self.provider_name)
         except httpx.HTTPStatusError as e:
             self._raise_provider_http_error(e, request_id)
         except httpx.RequestError as e:
@@ -302,7 +306,8 @@ class BaseProvider:
             data_flow="to_provider"
         )
 
-        stream_timeout = self._create_timeout()
+        stream_read_timeout = float(os.getenv("STREAM_READ_TIMEOUT", "300"))
+        stream_timeout = self._create_timeout(read=stream_read_timeout)
 
         logger.debug(f"Starting stream request to {url_path}", extra={
             "url": f"{self.base_url}{url_path}",
@@ -369,5 +374,6 @@ class BaseProvider:
     async def embeddings(self, request_body: Dict[str, Any], provider_model_name: str, model_config: Dict[str, Any]) -> Any:
         raise NotImplementedError
 
-    async def transcriptions(self, audio_file: Any, request_params: Dict[str, Any], model_config: Dict[str, Any]) -> Any:
+    async def transcriptions(self, audio_data: bytes, filename: str, content_type: str,
+                             model_id: str, api_key: str, base_url: str, **kwargs) -> Any:
         raise NotImplementedError

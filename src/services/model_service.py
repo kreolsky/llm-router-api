@@ -150,7 +150,7 @@ class ModelService:
             if model_data.get("is_hidden", False):
                 continue
 
-            if allowed_models is None or len(allowed_models) == 0 or model_id in allowed_models:
+            if not allowed_models or model_id in allowed_models:
                 models_list.append(self._build_model_response(model_id))
         return {"object": "list", "data": models_list}
 

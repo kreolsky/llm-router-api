@@ -115,7 +115,7 @@ class TestTranscriptions:
             data=data
         )
         
-        # This might not be supported by all models
+        # Provider-dependent: not all STT providers support this parameter
         assert response.status_code in [200, 400]
         
         if response.status_code == 200:
@@ -158,7 +158,7 @@ class TestTranscriptions:
             data=data
         )
         
-        # This might not be supported by all models
+        # Provider-dependent: not all STT providers support this parameter
         assert response.status_code in [200, 400]
         
         if response.status_code == 200:
@@ -201,7 +201,7 @@ class TestTranscriptions:
             data=data
         )
         
-        # This might not be supported by all models
+        # Provider-dependent: not all STT providers support this parameter
         assert response.status_code in [200, 400]
         
         if response.status_code == 200:
@@ -244,7 +244,7 @@ class TestTranscriptions:
             data=data
         )
         
-        # This might not be supported by all models
+        # Provider-dependent: not all STT providers support this parameter
         assert response.status_code in [200, 400]
         
         if response.status_code == 200:
@@ -287,7 +287,7 @@ class TestTranscriptions:
             data=data
         )
         
-        # This might not be supported by all models
+        # Provider-dependent: not all STT providers support this parameter
         assert response.status_code in [200, 400]
         
         if response.status_code == 200:
@@ -328,7 +328,7 @@ class TestTranscriptions:
             json=payload
         )
         
-        # This might not be supported by all models
+        # Provider-dependent: not all STT providers support this parameter
         assert response.status_code in [200, 400]
         
         if response.status_code == 200:
@@ -367,11 +367,13 @@ class TestTranscriptions:
             data=data
         )
         
-        assert response.status_code in [400, 404], "Should return error for invalid model"
-        
+        assert response.status_code == 404, "Should return 404 for non-existent model"
+
         error_data = response.json()
-        assert "error" in error_data or "detail" in error_data, "Should return error object"
-    
+        assert "error" in error_data, "Should return error object"
+        assert error_data["error"]["code"] == 404
+        assert "invalid/model/name" in error_data["error"]["message"]
+
     @pytest.mark.asyncio
     async def test_create_transcription_missing_required_fields(
         self,
@@ -506,7 +508,7 @@ class TestTranscriptions:
             data=data
         )
         
-        # This might be handled differently by different models
+        # Provider-dependent: unsupported format handling varies by provider
         assert response.status_code in [200, 400]
         
         if response.status_code == 200:

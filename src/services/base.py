@@ -48,21 +48,21 @@ class BaseService:
         # INVARIANT: check allowed_models BEFORE checking existence to prevent
         # information leakage about configured models
         if allowed_models and requested_model not in allowed_models:
-            raise create_error(ErrorType.MODEL_NOT_ALLOWED, model_id=requested_model, **error_context)
+            raise create_error(ErrorType.MODEL_NOT_ALLOWED, **error_context)
 
         current_config = self.config_manager.get_config()
         models = current_config.get("models", {})
         model_config = models.get(requested_model)
 
         if not model_config:
-            raise create_error(ErrorType.MODEL_NOT_FOUND, model_id=requested_model, **error_context)
+            raise create_error(ErrorType.MODEL_NOT_FOUND, **error_context)
 
         provider_name = model_config.get("provider")
         provider_model_name = model_config.get("provider_model_name", requested_model)
         provider_config = current_config.get("providers", {}).get(provider_name)
 
         if not provider_config:
-            raise create_error(ErrorType.PROVIDER_NOT_FOUND, provider_name=provider_name, model_id=requested_model, **error_context)
+            raise create_error(ErrorType.PROVIDER_NOT_FOUND, provider_name=provider_name, **error_context)
 
         return model_config, provider_name, provider_model_name, provider_config
 

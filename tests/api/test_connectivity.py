@@ -139,12 +139,11 @@ class TestConnectivity:
         
         # Test with different HTTP methods
         response = await http_client.post(f"{base_url}/health")
-        # Should either succeed or return method not allowed
-        assert response.status_code in [200, 405]
-        
+        # /health is GET-only; FastAPI returns 405 for other methods
+        assert response.status_code == 405
+
         response = await http_client.put(f"{base_url}/health")
-        # Should either succeed or return method not allowed
-        assert response.status_code in [200, 405]
+        assert response.status_code == 405
     
     @pytest.mark.asyncio
     async def test_service_startup_time(self, base_url: str):

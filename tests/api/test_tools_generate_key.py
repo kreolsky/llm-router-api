@@ -56,7 +56,8 @@ class TestToolsGenerateKey:
         # Make request without Authorization header
         response = await http_client.get(f"{base_url}/tools/generate_key")
 
-        assert response.status_code in [401, 403], "Should fail without authentication"
+        # No Authorization header → missing credentials → 401
+        assert response.status_code == 401
 
     @pytest.mark.asyncio
     async def test_generate_key_rejects_invalid_auth(
@@ -173,20 +174,15 @@ class TestToolsGenerateKey:
         """Test that only GET method is supported for the generate_key endpoint."""
         headers = {"Authorization": f"Bearer {api_keys['full_access']}"}
 
-        # Test POST method
+        # /tools/generate_key is GET-only; FastAPI returns 405 for other methods
         response = await http_client.post(f"{base_url}/tools/generate_key", headers=headers)
-        # Should either succeed or return method not allowed
-        assert response.status_code in [200, 405]
+        assert response.status_code == 405
 
-        # Test PUT method
         response = await http_client.put(f"{base_url}/tools/generate_key", headers=headers)
-        # Should either succeed or return method not allowed
-        assert response.status_code in [200, 405]
+        assert response.status_code == 405
 
-        # Test DELETE method
         response = await http_client.delete(f"{base_url}/tools/generate_key", headers=headers)
-        # Should either succeed or return method not allowed
-        assert response.status_code in [200, 405]
+        assert response.status_code == 405
 
     @pytest.mark.asyncio
     async def test_generate_key_performance(

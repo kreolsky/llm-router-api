@@ -1,23 +1,8 @@
 providers:
-  openai:
-    type: openai
-    base_url: https://nnp.space/api/openai/NbHbDxz-RaEcv+Wa7vPH4bx/v1
-    api_key_env: OPENAI_API_KEY
-    stream_format: sse
   deepseek:
     type: openai # Совместим с OpenAI API
     base_url: https://api.deepseek.com/v1
     api_key_env: DEEPSEEK_API_KEY
-    stream_format: sse
-  zai:
-    type: openai
-    base_url: https://api.z.ai/api/paas/v4
-    api_key_env: ZAI_API_KEY
-    stream_format: sse
-  kimi:
-    type: openai
-    base_url: https://api.moonshot.ai/v1
-    api_key_env: KIMI_API_KEY
     stream_format: sse
   openrouter:
     type: openai
@@ -35,11 +20,6 @@ providers:
   embedding:
     type: openai
     base_url: http://10.10.1.20:5020/v1
-    api_key_env: ORANGE_API_KEY
-    stream_format: sse
-  box:
-    type: openai
-    base_url: http://10.10.7.20:5010/v1
     api_key_env: ORANGE_API_KEY
     stream_format: sse
   transcriber:

@@ -28,6 +28,7 @@ class ErrorType(Enum):
     PROVIDER_CONFIG_ERROR = ("provider_config_error", status.HTTP_500_INTERNAL_SERVER_ERROR, "Provider configuration error: {error_details}")
     INTERNAL_SERVER_ERROR = ("internal_server_error", status.HTTP_500_INTERNAL_SERVER_ERROR, "Internal server error: {error_details}")
     PROVIDER_NETWORK_ERROR = ("provider_network_error", status.HTTP_500_INTERNAL_SERVER_ERROR, "Network error communicating with provider: {error_details}")
+    PROVIDER_INVALID_RESPONSE = ("provider_invalid_response", status.HTTP_502_BAD_GATEWAY, "Provider returned invalid response: {error_details}")
 
     # Service Unavailable (503)
     SERVICE_UNAVAILABLE = ("service_unavailable", status.HTTP_503_SERVICE_UNAVAILABLE, "Could not connect to service: {error_details}")

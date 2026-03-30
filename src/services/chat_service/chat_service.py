@@ -2,6 +2,7 @@
 
 import httpx
 import inspect
+import json
 from typing import Dict, Any, Tuple
 from fastapi import HTTPException, status, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -29,7 +30,12 @@ class ChatService(BaseService):
         request_id = context_dict["request_id"]
         user_id = context_dict["user_id"]
 
-        request_body = await request.json()
+        try:
+            request_body = await request.json()
+        except json.JSONDecodeError:
+            raise create_error(ErrorType.MISSING_REQUIRED_FIELD, field_name="valid JSON body",
+                             request_id=request_id, user_id=user_id)
+
         requested_model = request_body.get("model")
 
         self._log_service_data(

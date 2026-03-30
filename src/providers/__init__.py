@@ -4,7 +4,6 @@ import httpx
 
 from .base import BaseProvider
 from .openai import OpenAICompatibleProvider
-from .anthropic import AnthropicProvider
 from .ollama import OllamaProvider
 from ..core.error_handling import ErrorType, create_error
 
@@ -23,8 +22,6 @@ def get_provider_instance(provider_type: str, provider_config: Dict[str, Any], c
 
     if provider_type == "openai":
         instance = OpenAICompatibleProvider(provider_config, client, config_manager)
-    elif provider_type == "anthropic":
-        instance = AnthropicProvider(provider_config, client, config_manager)
     elif provider_type == "ollama":
         instance = OllamaProvider(provider_config, client, config_manager)
     else:

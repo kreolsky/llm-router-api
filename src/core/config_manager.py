@@ -112,10 +112,6 @@ class ConfigManager:
         return float(os.getenv("OPENAI_EMBEDDINGS_READ_TIMEOUT", "30.0"))
 
     @property
-    def anthropic_timeout(self) -> int:
-        return int(os.getenv("ANTHROPIC_TIMEOUT", "600"))
-
-    @property
     def ollama_connect_timeout(self) -> float:
         return float(os.getenv("OLLAMA_CONNECT_TIMEOUT", "60.0"))
 
@@ -142,7 +138,10 @@ class ConfigManager:
                 }
             })
             for cb in self._on_reload_callbacks:
-                cb()
+                try:
+                    cb()
+                except Exception as e:
+                    logger.error(f"Config reload callback failed: {e}", exc_info=True)
         else:
             logger.warning("Partial config reload rejected, keeping previous config")
 
