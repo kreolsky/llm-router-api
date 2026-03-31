@@ -20,6 +20,7 @@ logs/
 .env
 
 # Other
+.DS_Store
 *.sqlite3
 *.db
 _help

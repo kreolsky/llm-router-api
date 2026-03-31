@@ -1,103 +1,71 @@
+"""Ollama provider mapping OpenAI-format requests to Ollama's API."""
 import httpx
-import json
 from typing import Dict, Any
-from fastapi.responses import JSONResponse, StreamingResponse
-from fastapi import HTTPException, status
 
 from .base import BaseProvider
-from ..utils.deep_merge import deep_merge
 
 class OllamaProvider(BaseProvider):
-    def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient):
-        super().__init__(config, client)
-        self.headers["Content-Type"] = "application/json"
+    def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient, config_manager=None):
+        super().__init__(config, client, config_manager)
 
     async def chat_completions(self, request_body: Dict[str, Any], provider_model_name: str, model_config: Dict[str, Any]) -> Any:
+        """Map OpenAI-format chat request to Ollama's /chat endpoint."""
         ollama_request_body = {
             "model": provider_model_name,
             "messages": request_body.get("messages", []),
             "stream": request_body.get("stream", False)
         }
 
-        # Map OpenAI-like parameters to Ollama's 'options'
-        ollama_options = {}
-        if "temperature" in request_body:
-            ollama_options["temperature"] = request_body["temperature"]
-        if "top_p" in request_body:
-            ollama_options["top_p"] = request_body["top_p"]
-        if "max_tokens" in request_body:
-            ollama_options["num_predict"] = request_body["max_tokens"]
-        if "stop" in request_body:
-            ollama_options["stop"] = request_body["stop"]
-        if "presence_penalty" in request_body:
-            ollama_options["presence_penalty"] = request_body["presence_penalty"]
-        if "frequency_penalty" in request_body:
-            ollama_options["frequency_penalty"] = request_body["frequency_penalty"]
+        # Map OpenAI-like parameters to Ollama's 'options' structure
+        param_mapping = {
+            "temperature": "temperature",
+            "top_p": "top_p",
+            "max_tokens": "num_predict",
+            "stop": "stop",
+            "presence_penalty": "presence_penalty",
+            "frequency_penalty": "frequency_penalty"
+        }
+        
+        ollama_options = {
+            ollama_key: request_body[openai_key]
+            for openai_key, ollama_key in param_mapping.items()
+            if openai_key in request_body
+        }
         
         if ollama_options:
             ollama_request_body["options"] = ollama_options
 
-        try:
-            if ollama_request_body["stream"]:
-                return await self._stream_request(self.client, "/chat", ollama_request_body)
-            else:
-                # Ollama can be slower than cloud providers (especially for large models)
-                # Optimized timeout for non-streaming
-                ollama_timeout = httpx.Timeout(
-                    connect=15.0,  # Slightly longer for local/slow connections
-                    read=120.0,    # 2 minutes for large model responses
-                    write=10.0,
-                    pool=10.0
-                )
-                response = await self.client.post(f"{self.base_url}/chat",
-                                             headers=self.headers,
-                                             json=ollama_request_body,
-                                             timeout=ollama_timeout)
-                response.raise_for_status()
-                return response.json()
-        except httpx.HTTPStatusError as e:
-            raise HTTPException(
-                status_code=e.response.status_code,
-                detail={"error": {"message": f"Provider error: {e.response.text}", "code": f"provider_http_error_{e.response.status_code}"}},
-            )
-        except httpx.RequestError as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": {"message": f"Network error communicating with provider: {e}", "code": "provider_network_error"}},
-            )
+        if ollama_request_body["stream"]:
+            return self._stream_request(self.client, "/chat", ollama_request_body)
+
+        connect_timeout = self._get_timeout("ollama_connect_timeout", 60.0)
+        ollama_timeout = self._create_timeout(connect=connect_timeout)
+
+        return await self._make_request(
+            method="POST",
+            path="/chat",
+            request_body=ollama_request_body,
+            timeout=ollama_timeout,
+            request_id=request_body.get("request_id", "unknown")
+        )
 
     async def embeddings(self, request_body: Dict[str, Any], provider_model_name: str, model_config: Dict[str, Any]) -> Any:
-        # Ollama embeddings API expects 'model' and 'prompt'
-        # The incoming request_body is OpenAI-compatible, with 'input'
+        """Map OpenAI 'input' field to Ollama 'prompt' for /embeddings."""
         ollama_request_body = {
             "model": provider_model_name,
-            "prompt": request_body.get("input") # Map OpenAI 'input' to Ollama 'prompt'
+            "prompt": request_body.get("input")
         }
 
-        try:
-            # Ollama embeddings timeout
-            embeddings_timeout = httpx.Timeout(
-                connect=15.0,
-                read=60.0,   # Embeddings can take time for large texts
-                write=10.0,
-                pool=10.0
-            )
-            response = await self.client.post(f"{self.base_url}/embeddings",
-                                             headers=self.headers,
-                                             json=ollama_request_body,
-                                             timeout=embeddings_timeout)
-            response.raise_for_status()
-            return response.json()
-        except httpx.HTTPStatusError as e:
-            raise HTTPException(
-                status_code=e.response.status_code,
-                detail={"error": {"message": f"Provider error: {e.response.text}", "code": f"provider_http_error_{e.response.status_code}"}},
-            )
-        except httpx.RequestError as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": {"message": f"Network error communicating with provider: {e}", "code": "provider_network_error"}},
-            )
+        embeddings_timeout = self._create_timeout(connect=15.0, read=60.0, write=10.0, pool=10.0)
 
-    async def transcriptions(self, audio_file: Any, request_params: Dict[str, Any], model_config: Dict[str, Any]) -> Any:
-        raise NotImplementedError("OllamaProvider does not support transcriptions.")
+        return await self._make_request(
+            method="POST",
+            path="/embeddings",
+            request_body=ollama_request_body,
+            timeout=embeddings_timeout,
+            request_id=request_body.get("request_id", "unknown")
+        )
+
+    async def transcriptions(self, audio_data: bytes, filename: str, content_type: str,
+                             model_id: str, api_key: str, base_url: str, **kwargs) -> Any:
+        raise NotImplementedError("OllamaProvider does not support transcriptions")

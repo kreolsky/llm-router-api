@@ -6,7 +6,10 @@ import pytest
 import httpx
 import time
 import asyncio
+import logging
 from tests.test_utils import TestTimer, check_service_health
+
+logger = logging.getLogger(__name__)
 
 
 class TestConnectivity:
@@ -136,12 +139,11 @@ class TestConnectivity:
         
         # Test with different HTTP methods
         response = await http_client.post(f"{base_url}/health")
-        # Should either succeed or return method not allowed
-        assert response.status_code in [200, 405]
-        
+        # /health is GET-only; FastAPI returns 405 for other methods
+        assert response.status_code == 405
+
         response = await http_client.put(f"{base_url}/health")
-        # Should either succeed or return method not allowed
-        assert response.status_code in [200, 405]
+        assert response.status_code == 405
     
     @pytest.mark.asyncio
     async def test_service_startup_time(self, base_url: str):
@@ -167,9 +169,9 @@ class TestConnectivity:
         first_request_duration = first_request_time - startup_time
         second_request_duration = second_request_time - first_request_time
         
-        # Log timing for monitoring (in real scenario, you'd log this)
-        print(f"First request time: {first_request_duration:.3f}s")
-        print(f"Second request time: {second_request_duration:.3f}s")
+        # Log timing for monitoring
+        logger.info(f"First request time: {first_request_duration:.3f}s")
+        logger.info(f"Second request time: {second_request_duration:.3f}s")
         
         # Second request should be faster (warm cache)
         if first_request_duration > 0.1:  # Only check if first request was slow

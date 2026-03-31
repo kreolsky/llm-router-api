@@ -4,7 +4,10 @@ Model enumeration and access control tests for NNP LLM Router API.
 
 import pytest
 import httpx
+import logging
 from tests.test_utils import TestTimer, ResponseValidator
+
+logger = logging.getLogger(__name__)
 
 
 class TestModelsEndpoints:
@@ -54,76 +57,6 @@ class TestModelsEndpoints:
             assert "created" in model
             assert isinstance(model["id"], str)
             assert len(model["id"]) > 0
-    
-    @pytest.mark.asyncio
-    async def test_list_models_restricted_access(
-        self, 
-        base_url: str, 
-        api_keys: dict, 
-        http_client: httpx.AsyncClient,
-        expected_model_response_structure: list
-    ):
-        """Test model listing with restricted access key."""
-        response = await http_client.get(
-            f"{base_url}/v1/models",
-            headers={"Authorization": f"Bearer {api_keys['bro_kilo_code']}"}
-        )
-        
-        assert response.status_code == 200
-        
-        data = response.json()
-        # Use the assertion function directly
-        assert_valid_response_structure(data, expected_model_response_structure)
-        
-        model_ids = [model["id"] for model in data["data"]]
-        
-        # Should only have access to specific models based on config
-        assert "glm/air" in model_ids, "Should have access to glm/air"
-        assert "local/orange" in model_ids, "Should have access to local/orange"
-        
-        # Should not have access to all models
-        assert len(model_ids) < 10, "Restricted user should have limited model access"
-        
-        # Should not have access to some models
-        restricted_models = ["gemini/mini", "deepseek/chat"]
-        for model_id in restricted_models:
-            if model_id in model_ids:
-                # This might be expected based on configuration, just log it
-                print(f"Note: Restricted user has access to {model_id}")
-    
-    @pytest.mark.asyncio
-    async def test_list_models_cir_online_access(
-        self, 
-        base_url: str, 
-        api_keys: dict, 
-        http_client: httpx.AsyncClient,
-        expected_model_response_structure: list
-    ):
-        """Test model listing with cir_online access key."""
-        response = await http_client.get(
-            f"{base_url}/v1/models",
-            headers={"Authorization": f"Bearer {api_keys['cir_online']}"}
-        )
-        
-        assert response.status_code == 200
-        
-        data = response.json()
-        # Use the assertion function directly
-        assert_valid_response_structure(data, expected_model_response_structure)
-        
-        model_ids = [model["id"] for model in data["data"]]
-        
-        # Should have access to specific models based on config
-        expected_models = [
-            "gemini/mini", "gemini/chat", "deepseek/chat", 
-            "deepseek/reasoner", "local/orange", "embeddings/dummy", "stt/dummy"
-        ]
-        
-        for model_id in expected_models:
-            if model_id in model_ids:
-                print(f"✓ Found expected model: {model_id}")
-            else:
-                print(f"⚠ Expected model not found: {model_id}")
     
     @pytest.mark.asyncio
     async def test_retrieve_visible_model(
@@ -335,8 +268,8 @@ class TestModelsEndpoints:
             headers={"Authorization": f"Bearer {api_keys['full_access']}"}
         )
         
-        # The API might not support pagination, so we just check it doesn't error
-        assert response.status_code in [200, 400]
+        # FastAPI ignores unknown query params; endpoint returns all models
+        assert response.status_code == 200
         
         if response.status_code == 200:
             paginated_data = response.json()
@@ -359,8 +292,8 @@ class TestModelsEndpoints:
             headers={"Authorization": f"Bearer {api_keys['full_access']}"}
         )
         
-        # The API might not support search, so we just check it doesn't error
-        assert response.status_code in [200, 400]
+        # FastAPI ignores unknown query params; endpoint returns all models
+        assert response.status_code == 200
         
         if response.status_code == 200:
             data = response.json()
@@ -458,31 +391,7 @@ class TestModelsEndpoints:
 
 class TestModelPermissions:
     """Test model-specific permissions and access control."""
-    
-    @pytest.mark.asyncio
-    async def test_cross_user_model_access(
-        self, 
-        base_url: str, 
-        api_keys: dict, 
-        http_client: httpx.AsyncClient
-    ):
-        """Test that users cannot access models they don't have permission for."""
-        # Try to access a model that restricted user shouldn't have access to
-        restricted_models = ["gemini/mini", "deepseek/chat"]
-        
-        for model_id in restricted_models:
-            response = await http_client.get(
-                f"{base_url}/v1/models/{model_id}",
-                headers={"Authorization": f"Bearer {api_keys['bro_kilo_code']}"}
-            )
-            
-            # Should either succeed (if configuration allows) or fail with 403/404
-            assert response.status_code in [200, 403, 404], \
-                f"Unexpected status code {response.status_code} for {model_id}"
-            
-            if response.status_code != 200:
-                print(f"✓ Restricted user correctly denied access to {model_id}")
-    
+
     @pytest.mark.asyncio
     async def test_hidden_model_visibility(
         self, 
@@ -518,29 +427,106 @@ class TestModelPermissions:
     
     @pytest.mark.asyncio
     async def test_model_access_consistency(
-        self, 
-        base_url: str, 
-        api_keys: dict, 
+        self,
+        base_url: str,
+        api_keys: dict,
         http_client: httpx.AsyncClient
     ):
         """Test that model access is consistent across endpoints."""
-        # Get models list for cir_online user
         response = await http_client.get(
             f"{base_url}/v1/models",
-            headers={"Authorization": f"Bearer {api_keys['cir_online']}"}
+            headers={"Authorization": f"Bearer {api_keys['full_access']}"}
         )
-        
+
         assert response.status_code == 200
         visible_models = [model["id"] for model in response.json()["data"]]
-        
+
         # Try to access each visible model directly
         for model_id in visible_models:
             response = await http_client.get(
                 f"{base_url}/v1/models/{model_id}",
-                headers={"Authorization": f"Bearer {api_keys['cir_online']}"}
+                headers={"Authorization": f"Bearer {api_keys['full_access']}"}
             )
             assert response.status_code == 200, \
                 f"User should be able to access visible model {model_id}"
+
+
+class TestRestrictedUserModelAccess:
+    """Test model listing and retrieval with restricted API keys."""
+
+    @pytest.mark.asyncio
+    async def test_limited_user_sees_only_allowed_models(
+        self, base_url, api_keys, http_client
+    ):
+        """Limited user (allowed_models: [local/orange]) sees only that model in list."""
+        response = await http_client.get(
+            f"{base_url}/v1/models",
+            headers={"Authorization": f"Bearer {api_keys['limited']}"}
+        )
+        assert response.status_code == 200
+        model_ids = [m["id"] for m in response.json()["data"]]
+        assert model_ids == ["local/orange"], f"Expected only local/orange, got {model_ids}"
+
+    @pytest.mark.asyncio
+    async def test_limited_user_retrieve_allowed(
+        self, base_url, api_keys, http_client
+    ):
+        """Limited user can retrieve their allowed model."""
+        response = await http_client.get(
+            f"{base_url}/v1/models/local/orange",
+            headers={"Authorization": f"Bearer {api_keys['limited']}"}
+        )
+        assert response.status_code == 200
+        assert response.json()["id"] == "local/orange"
+
+    @pytest.mark.asyncio
+    async def test_limited_user_retrieve_disallowed(
+        self, base_url, api_keys, http_client
+    ):
+        """Limited user gets 403 for a model not in allowed_models."""
+        response = await http_client.get(
+            f"{base_url}/v1/models/gemini/mini",
+            headers={"Authorization": f"Bearer {api_keys['limited']}"}
+        )
+        assert response.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_limited_user_retrieve_hidden_denied(
+        self, base_url, api_keys, http_client
+    ):
+        """Limited user gets 403 for hidden model not in allowed_models (access check before existence)."""
+        response = await http_client.get(
+            f"{base_url}/v1/models/embeddings/dummy",
+            headers={"Authorization": f"Bearer {api_keys['limited']}"}
+        )
+        assert response.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_transctiber_user_sees_all_visible(
+        self, base_url, api_keys, http_client
+    ):
+        """Transctiber user (no model restriction) sees all visible models, no hidden."""
+        response = await http_client.get(
+            f"{base_url}/v1/models",
+            headers={"Authorization": f"Bearer {api_keys['transctiber']}"}
+        )
+        assert response.status_code == 200
+        model_ids = [m["id"] for m in response.json()["data"]]
+        for expected in ["local/orange", "gemini/mini", "deepseek/chat"]:
+            assert expected in model_ids, f"transctiber should see {expected}"
+        assert "embeddings/dummy" not in model_ids, "Hidden model should not appear"
+        assert "stt/dummy" not in model_ids, "Hidden model should not appear"
+
+    @pytest.mark.asyncio
+    async def test_transctiber_user_retrieve_denied(
+        self, base_url, api_keys, http_client
+    ):
+        """Transctiber gets 403 on model retrieval — endpoint /v1/models/{model_id:path} not allowed."""
+        response = await http_client.get(
+            f"{base_url}/v1/models/local/orange",
+            headers={"Authorization": f"Bearer {api_keys['transctiber']}"}
+        )
+        assert response.status_code == 403
 
 
 # Helper function for response validation

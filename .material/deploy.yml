@@ -1,0 +1,52 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    container:
+      image: node:22-alpine
+
+    steps:
+      - name: Install tools
+        run: apk add --no-cache docker-cli docker-compose git
+
+      - name: Checkout
+        run: git clone --depth=1 "https://oauth2:${{ github.token }}@git.box.nnp.space/${{ github.repository }}.git" .
+
+      - name: Write .env
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          LLM_URL: ${{ vars.LLM_URL }}
+          MODEL_NAME: ${{ vars.MODEL_NAME }}
+          SEARXNG_URL: ${{ vars.SEARXNG_URL }}
+          PORT: ${{ vars.PORT }}
+          PLANNING_MODEL: ${{ vars.PLANNING_MODEL }}
+          FAST_MODEL: ${{ vars.FAST_MODEL }}
+          SYNTHESIS_MODEL: ${{ vars.SYNTHESIS_MODEL }}
+          EMBEDDING_MODEL: ${{ vars.EMBEDDING_MODEL }}
+          SEARCH_PROVIDER: ${{ vars.SEARCH_PROVIDER }}
+          BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          RESPONSE_LANGUAGE: ${{ vars.RESPONSE_LANGUAGE }}
+        run: |
+          echo "OPENROUTER_API_KEY=$OPENROUTER_API_KEY" > .env
+          echo "LLM_URL=$LLM_URL" >> .env
+          echo "MODEL_NAME=$MODEL_NAME" >> .env
+          echo "SEARXNG_URL=$SEARXNG_URL" >> .env
+          echo "PORT=${PORT:-7002}" >> .env
+          [ -n "$PLANNING_MODEL" ]   && echo "PLANNING_MODEL=$PLANNING_MODEL" >> .env
+          [ -n "$FAST_MODEL" ]       && echo "FAST_MODEL=$FAST_MODEL" >> .env
+          [ -n "$SYNTHESIS_MODEL" ]  && echo "SYNTHESIS_MODEL=$SYNTHESIS_MODEL" >> .env
+          [ -n "$EMBEDDING_MODEL" ]  && echo "EMBEDDING_MODEL=$EMBEDDING_MODEL" >> .env
+          [ -n "$SEARCH_PROVIDER" ]  && echo "SEARCH_PROVIDER=$SEARCH_PROVIDER" >> .env
+          [ -n "$BRAVE_API_KEY" ]    && echo "BRAVE_API_KEY=$BRAVE_API_KEY" >> .env
+          [ -n "$TAVILY_API_KEY" ]   && echo "TAVILY_API_KEY=$TAVILY_API_KEY" >> .env
+          echo "RESPONSE_LANGUAGE=${RESPONSE_LANGUAGE:-Russian}" >> .env
+
+      - name: Deploy
+        run: docker compose -p deep-research up -d --build

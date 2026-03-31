@@ -1,3 +1,4 @@
+"""Model listing and detail retrieval with dynamic provider enrichment."""
 import httpx
 import os
 import time
@@ -6,7 +7,8 @@ from typing import Dict, Any, Tuple
 from fastapi import HTTPException, status
 
 from ..core.config_manager import ConfigManager
-from ..logging.config import logger
+from ..core.logging import logger
+from ..core.error_handling import ErrorType, create_error
 
 class ModelService:
     def __init__(self, config_manager: ConfigManager, httpx_client: httpx.AsyncClient):
@@ -14,13 +16,20 @@ class ModelService:
         self.httpx_client = httpx_client
 
     async def _get_provider_api_details(self, provider_config: Dict[str, Any]) -> Tuple[str, str, Dict[str, str]]:
-        """Extracts base URL, API key, and headers for a given provider."""
+        """Return (base_url, api_key, headers) for a provider.
+
+        Returns (None, None, {}) when base_url is missing — callers must check.
+        """
         provider_base_url = provider_config.get("base_url")
         provider_api_key_env = provider_config.get("api_key_env")
         provider_api_key = os.getenv(provider_api_key_env) if provider_api_key_env else None
 
         if not provider_base_url:
-            logger.warning(f"Missing base_url for provider {provider_config.get('name', 'unknown')}")
+            provider_name = provider_config.get('name', 'unknown')
+            logger.warning(f"Missing base_url for provider {provider_name}", extra={
+                "provider_name": provider_name,
+                "error_type": "missing_base_url"
+            })
             return None, None, {}
 
         headers = {
@@ -40,6 +49,10 @@ class ModelService:
         return response.json()
 
     async def _get_model_details_from_provider(self, model_id: str, current_config: Dict[str, Any], client: httpx.AsyncClient) -> Dict[str, Any]:
+        """Fetch live model metadata from provider, returning {} on any error.
+
+        # WHY: provider detail errors are non-fatal; the model response is valid without enrichment.
+        """
         model_data = current_config.get("models", {}).get(model_id)
         if not model_data:
             return {}
@@ -71,18 +84,62 @@ class ModelService:
                 additional_model_details["architecture"] = found_provider_model.get("architecture")
                 additional_model_details["pricing"] = found_provider_model.get("pricing")
             else:
-                logger.warning(f"Provider model '{provider_model_name}' not found in provider's model list for {provider_name}")
+                logger.warning(f"Provider model '{provider_model_name}' not found in provider's model list for {provider_name}", extra={
+                    "provider_name": provider_name,
+                    "provider_model_name": provider_model_name,
+                    "error_type": "model_not_found_in_provider_list"
+                })
 
         except httpx.HTTPStatusError as e:
-            logger.error(f"HTTP error fetching model details from provider {provider_name}: {e.response.status_code} - {e.response.text}", extra={"error_message": e.response.text, "error_code": f"provider_http_error_{e.response.status_code}"}, exc_info=True)
+            logger.error(f"HTTP error fetching model details from provider {provider_name}: {e.response.status_code} - {e.response.text}", extra={
+                "provider_name": provider_name,
+                "error_message": e.response.text,
+                "error_code": f"provider_http_error_{e.response.status_code}",
+                "status_code": e.response.status_code
+            }, exc_info=True)
         except httpx.RequestError as e:
-            logger.error(f"Network error fetching model details from provider {provider_name}: {e}", extra={"error_message": str(e), "error_code": "provider_network_error"}, exc_info=True)
+            logger.error(f"Network error fetching model details from provider {provider_name}: {e}", extra={
+                "provider_name": provider_name,
+                "error_message": str(e),
+                "error_code": "provider_network_error"
+            }, exc_info=True)
         except Exception as e:
-            logger.error(f"Unexpected error fetching model details from provider {provider_name}: {e}", extra={"error_message": str(e), "error_code": "unexpected_error"}, exc_info=True)
+            logger.error(f"Unexpected error fetching model details from provider {provider_name}: {e}", extra={
+                "provider_name": provider_name,
+                "error_message": str(e),
+                "error_code": "unexpected_error"
+            }, exc_info=True)
         
         return additional_model_details
 
+    def _build_model_response(self, model_id: str, **extra_fields) -> Dict[str, Any]:
+        """Build a standardized model response object."""
+        return {
+            "id": model_id,
+            "object": "model",
+            "created": int(time.time()),
+            "owned_by": "nnp-llm-router",
+            "parent": None,
+            "permission": [{
+                "id": f"model-perm-{model_id}",
+                "object": "model_permission",
+                "created": int(time.time()),
+                "allow_create_engine": False,
+                "allow_sampling": True,
+                "allow_logprobs": False,
+                "allow_search_indices": False,
+                "allow_view": True,
+                "allow_fine_tuning": False,
+                "organization": "*",
+                "group": None,
+                "is_blocking": False
+            }],
+            "root": model_id,
+            **extra_fields
+        }
+
     async def list_models(self, auth_data: Tuple[str, str, list, list]) -> Dict[str, Any]:
+        """Return OpenAI-compatible model list filtered by allowed_models and is_hidden."""
         _, _, allowed_models, _ = auth_data
         current_config = self.config_manager.get_config()
         models_config = current_config.get("models", {})
@@ -93,93 +150,37 @@ class ModelService:
             if model_data.get("is_hidden", False):
                 continue
 
-            if allowed_models is None or len(allowed_models) == 0 or model_id in allowed_models:
-                models_list.append({
-                    "id": model_id,
-                    "object": "model",
-                    "created": int(time.time()), # Placeholder
-                    "owned_by": "nnp-llm-router", # Custom owner
-                    "parent": None,
-                    "permission": [
-                        {
-                            "id": f"model-perm-{model_id}",
-                            "object": "model_permission",
-                            "created": int(time.time()),
-                            "allow_create_engine": False,
-                            "allow_sampling": True,
-                            "allow_logprobs": False,
-                            "allow_search_indices": False,
-                            "allow_view": True,
-                            "allow_fine_tuning": False,
-                            "organization": "*",
-                            "group": None,
-                            "is_blocking": False
-                        }
-                    ],
-                    "root": model_id
-                })
+            if not allowed_models or model_id in allowed_models:
+                models_list.append(self._build_model_response(model_id))
         return {"object": "list", "data": models_list}
 
     async def retrieve_model(self, model_id: str, auth_data: Tuple[str, str, list, list]) -> Dict[str, Any]:
+        """Return model details enriched with live provider metadata."""
         _, _, allowed_models, _ = auth_data
-
-        # Check if the model is allowed for this user
         if allowed_models and model_id not in allowed_models:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={"error": {"message": f"Model '{model_id}' is not available for your account", "code": "model_not_allowed"}},
-            )
+            raise create_error(ErrorType.MODEL_NOT_ALLOWED, model_id=model_id)
 
         current_config = self.config_manager.get_config()
         models_config = current_config.get("models", {})
 
         model_data = models_config.get(model_id)
         if not model_data:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": {"message": f"Model '{model_id}' not found", "code": "model_not_found"}},
-            )
+            raise create_error(ErrorType.MODEL_NOT_FOUND, model_id=model_id)
 
         provider_name = model_data.get("provider")
         provider_model_name = model_data.get("provider_model_name")
 
         provider_config = current_config.get("providers", {}).get(provider_name)
         if not provider_config:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": {"message": f"Provider '{provider_name}' not found for model '{model_id}'", "code": "provider_not_found"}},
-            )
+            raise create_error(ErrorType.PROVIDER_NOT_FOUND, model_id=model_id, provider_name=provider_name)
 
-        # Dynamically fetch additional model details from the provider
         additional_model_details = await self._get_model_details_from_provider(model_id, current_config, self.httpx_client)
 
-        response_data = {
-            "id": model_id,
-            "object": "model",
-            "created": int(time.time()), # Placeholder
-            "owned_by": "nnp-llm-router", # Custom owner
-            "parent": None,
-            "permission": [
-                {
-                    "id": f"model-perm-{model_id}",
-                    "object": "model_permission",
-                    "created": int(time.time()),
-                    "allow_create_engine": False,
-                    "allow_sampling": True,
-                    "allow_logprobs": False,
-                    "allow_search_indices": False,
-                    "allow_view": True,
-                    "allow_fine_tuning": False,
-                    "organization": "*",
-                    "group": None,
-                    "is_blocking": False
-                }
-            ],
-            "root": model_id,
-            "provider": provider_name,
-            "provider_model_name": provider_model_name,
-            "params": model_data.get("params"),
-            "options": model_data.get("options"),
-            **additional_model_details # Merge dynamically fetched details
-        }
-        return response_data
+        return self._build_model_response(
+            model_id,
+            provider=provider_name,
+            provider_model_name=provider_model_name,
+            params=model_data.get("params"),
+            options=model_data.get("options"),
+            **additional_model_details
+        )

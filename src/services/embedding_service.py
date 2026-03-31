@@ -1,154 +1,83 @@
+"""Embedding creation service proxying requests to configured providers."""
 import httpx
-import logging
+import json
 from typing import Dict, Any, Tuple
 
 from fastapi import HTTPException, status, Request
 from fastapi.responses import JSONResponse
 
 from ..core.config_manager import ConfigManager
-from ..providers import get_provider_instance
-from ..logging.config import logger
+from ..core.logging import logger
+from ..core.error_handling import ErrorType, create_error
+from .base import BaseService
 
-class EmbeddingService:
+
+class EmbeddingService(BaseService):
+    """Proxies embedding requests to the configured provider."""
+
     def __init__(self, config_manager: ConfigManager, httpx_client: httpx.AsyncClient):
-        self.config_manager = config_manager
-        self.httpx_client = httpx_client
+        super().__init__(config_manager, httpx_client)
 
     async def create_embeddings(self, request: Request, auth_data: Tuple[str, str, list, list]) -> Any:
-        project_name, api_key, allowed_models, _ = auth_data
-        request_id = request.state.request_id
-        user_id = project_name # Using project_name as user_id
-
-        current_config = self.config_manager.get_config()
+        """Validate, dispatch, and return an embedding creation request."""
+        context_dict = self._get_request_context(request, auth_data)
+        request_id = context_dict["request_id"]
+        user_id = context_dict["user_id"]
         
-        request_body = await request.json()
+        try:
+            request_body = await request.json()
+        except json.JSONDecodeError:
+            raise create_error(ErrorType.MISSING_REQUIRED_FIELD, field_name="valid JSON body",
+                             request_id=request_id, user_id=user_id)
+
         requested_model = request_body.get("model")
 
-        # DEBUG логирование полного запроса
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(
-                "DEBUG: Embedding Request JSON",
-                extra={
-                    "debug_json_data": request_body,
-                    "debug_data_flow": "incoming",
-                    "debug_component": "embedding_service",
-                    "request_id": request_id
-                }
-            )
+        error_ctx = dict(request_id=request_id, user_id=user_id, model_id=requested_model)
 
-        logger.info(
-            "Embedding Creation Request",
-            extra={
-                "log_type": "request",
-                "request_id": request_id,
-                "user_id": user_id,
-                "model_id": requested_model,
-                "request_body_summary": {
-                    "model": requested_model,
-                    "input_type": type(request_body.get("input")).__name__,
-                    "input_length": len(request_body.get("input")) if isinstance(request_body.get("input"), (list, str)) else None,
-                    "input_content": request_body.get("input") # Add full input content for debugging
-                }
-            }
+        self._log_service_data(
+            title="Embedding Request JSON",
+            data=request_body,
+            request_id=request_id,
+            component="embedding_service",
+            data_flow="incoming"
         )
 
-        if not requested_model:
-            error_detail = {"error": {"message": "Model not specified in request", "code": "model_not_specified"}}
-            logger.error("Model not specified in request", extra={"detail": error_detail, "request_id": request_id, "user_id": user_id, "log_type": "error"})
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error_detail,
-            )
+        logger.info(
+            f"Request: Embedding Creation | model={requested_model}",
+            request_id=request_id,
+            user_id=user_id,
+            model_id=requested_model
+        )
 
-        # For embeddings, we assume a single provider will handle all requests
-        # The model specified in the request will be used to find the provider configuration
-        # and the provider_model_name will be passed to the provider's embeddings method.
-        
-        # Check if the model is allowed for this user
-        if allowed_models and requested_model not in allowed_models:
-            error_detail = {"error": {"message": f"Model '{requested_model}' is not available for your account", "code": "model_not_allowed"}}
-            logger.error(f"Model '{requested_model}' is not available for user {user_id}", extra={"detail": error_detail, "request_id": request_id, "user_id": user_id, "log_type": "error"})
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=error_detail,
-            )
-        
-        # Find the model configuration
-        model_config = current_config.get("models", {}).get(requested_model)
-        if not model_config:
-            error_detail = {"error": {"message": f"Model '{requested_model}' not found in configuration", "code": "model_not_found"}}
-            logger.error(f"Model '{requested_model}' not found in configuration", extra={"detail": error_detail, "request_id": request_id, "user_id": user_id, "log_type": "error"})
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=error_detail,
-            )
+        model_config, provider_name, provider_model_name, provider_config = \
+            self._validate_and_get_config(requested_model, auth_data, **error_ctx)
 
-        provider_name = model_config.get("provider")
-        provider_model_name = model_config.get("provider_model_name", requested_model)
-
-        provider_config = current_config.get("providers", {}).get(provider_name)
-        if not provider_config:
-            error_detail = {"error": {"message": f"Provider '{provider_name}' for model '{requested_model}' not found in configuration", "code": "provider_not_found"}}
-            logger.error(f"Provider '{provider_name}' for model '{requested_model}' not found", extra={"detail": error_detail, "request_id": request_id, "user_id": user_id, "log_type": "error"})
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=error_detail,
-            )
-
-        try:
-            provider_instance = get_provider_instance(provider_config.get("type"), provider_config, self.httpx_client)
-        except ValueError as e:
-            error_detail = {"error": {"message": f"Provider configuration error: {e}", "code": "provider_config_error"}}
-            logger.error(f"Provider configuration error: {e}", extra={"detail": error_detail, "request_id": request_id, "user_id": user_id, "log_type": "error"})
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=error_detail,
-            )
+        provider_instance = self._get_provider(provider_config, **error_ctx)
         
         try:
             response_data = await provider_instance.embeddings(request_body, provider_model_name, model_config)
             
-            # DEBUG логирование ответа от провайдера
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "DEBUG: Embedding Response JSON",
-                    extra={
-                        "debug_json_data": response_data,
-                        "debug_data_flow": "from_provider",
-                        "debug_component": "embedding_service",
-                        "request_id": request_id
-                    }
-                )
+            self._log_service_data(
+                title="Embedding Response JSON",
+                data=response_data,
+                request_id=request_id,
+                component="embedding_service",
+                data_flow="from_provider"
+            )
             
-            # Log the response
-            usage = response_data.get("usage", {})
-            prompt_tokens = usage.get("prompt_tokens", 0)
-            total_tokens = usage.get("total_tokens", 0)
-
             logger.info(
-                "Embedding Creation Response",
-                extra={
-                    "log_type": "response",
-                    "request_id": request_id,
-                    "user_id": user_id,
-                    "model_id": requested_model,
-                    "http_status_code": status.HTTP_200_OK,
-                    "prompt_tokens": prompt_tokens,
-                    "total_tokens": total_tokens,
-                    "response_body_summary": {
-                        "data_length": len(response_data.get("data", []))
-                    }
+                f"Response: Embedding Creation | model={requested_model}",
+                request_id=request_id,
+                user_id=user_id,
+                model_id=requested_model,
+                token_usage={
+                    "prompt_tokens": response_data.get("usage", {}).get("prompt_tokens", 0),
+                    "total_tokens": response_data.get("usage", {}).get("total_tokens", 0)
                 }
             )
             return JSONResponse(content=response_data)
             
         except HTTPException as e:
-            logger.error(f"HTTPException from provider: {e.detail.get('error', {}).get('message', str(e))}", extra={"status_code": e.status_code, "detail": e.detail, "request_id": request_id, "user_id": user_id, "model_id": requested_model, "log_type": "error"})
             raise e
         except Exception as e:
-            error_detail = {"error": {"message": f"An unexpected error occurred: {e}", "code": "unexpected_error"}}
-            logger.error(f"An unexpected error occurred: {e}", extra={"detail": error_detail, "request_id": request_id, "user_id": user_id, "model_id": requested_model, "log_type": "error"}, exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=error_detail,
-            )
+            raise create_error(ErrorType.INTERNAL_SERVER_ERROR, original_exception=e, error_details=str(e), **error_ctx)
