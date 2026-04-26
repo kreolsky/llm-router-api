@@ -72,7 +72,9 @@ def retry_on_rate_limit(max_retries: Optional[int] = None, base_delay: Optional[
                         continue
                     else:
                         raise e
-            raise last_exception
+            if last_exception:
+                raise last_exception
+            raise RuntimeError("retry_on_rate_limit: exhausted without exception")
         return wrapper
     return decorator
 
@@ -93,7 +95,7 @@ class BaseProvider:
         """
         self.base_url = config.get("base_url")
         self.api_key_env = config.get("api_key_env")
-        self.headers = config.get("headers", {})
+        self.headers = dict(config.get("headers") or {})
         self.api_key = os.environ.get(self.api_key_env) if self.api_key_env else None
         self.client = client
         self.config_manager = config_manager

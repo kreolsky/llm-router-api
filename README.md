@@ -31,7 +31,7 @@ curl http://localhost:8777/v1/chat/completions \
 1. **Request arrives** at a FastAPI endpoint. Middleware generates a `request_id` and logs the lifecycle.
 2. **Auth** extracts the Bearer token, looks it up in `user_keys.yaml` (constant-time comparison), sets `project_name` on request state.
 3. **Service layer** validates the model: checks `allowed_models` *before* checking existence (prevents information leakage about configured models). Resolves `provider_name` and `provider_model_name` from `models.yaml`.
-4. **Provider layer** gets a cached provider instance (keyed by `(type, base_url)`). The provider translates the request to the backend's format (OpenAI pass-through, Anthropic Messages API, Ollama options mapping) and sends it via a shared `httpx.AsyncClient` connection pool.
+4. **Provider layer** gets a cached provider instance (keyed by `(type, base_url)`). The provider translates the request to the backend's format (OpenAI pass-through, Ollama options mapping) and sends it via a shared `httpx.AsyncClient` connection pool.
 5. **Streaming**: `_stream_request` yields raw bytes → `StreamProcessor` either passes them through transparently or buffers UTF-8, splits on SSE `\n\n` boundaries, and sanitizes each `data:` frame.
 6. **Errors**: Provider HTTP errors are extracted from the JSON response body, logged, and returned in OpenRouter-compatible format `{"error": {"code", "message", "metadata": {"provider_name", "raw"}}}`.
 7. **Rate limits**: 429 responses trigger exponential backoff retry (`min(base * 2^attempt, max)`), configurable via env vars.
@@ -45,7 +45,7 @@ Three YAML files in `config/`, hot-reloaded without restart (polled every `CONFI
 ```yaml
 providers:
   deepseek:
-    type: openai                          # openai | ollama | anthropic
+    type: openai                          # openai | ollama
     base_url: https://api.deepseek.com/v1
     api_key_env: DEEPSEEK_API_KEY         # env var name for the API key
     stream_format: sse                    # sse | ndjson
@@ -56,7 +56,7 @@ providers:
     base_url: http://localhost:11434/api
 ```
 
-`type` determines the provider class: `openai` (pass-through), `anthropic` (translates to Messages API), `ollama` (maps parameters to Ollama format). Any OpenAI-compatible API works with `type: openai`.
+`type` determines the provider class: `openai` (pass-through), `ollama` (maps parameters to Ollama format). Any OpenAI-compatible API works with `type: openai`.
 
 ### models.yaml — model registry
 
@@ -118,7 +118,6 @@ src/
 │   ├── __init__.py        # Provider registry with instance caching
 │   ├── base.py            # Retry decorator, _make_request, _stream_request, error extraction
 │   ├── openai.py          # OpenAI-compatible: chat, embeddings, transcriptions
-│   ├── anthropic.py       # Translates OpenAI format → Anthropic Messages API
 │   └── ollama.py          # Maps OpenAI params → Ollama options structure
 ├── services/
 │   ├── base.py            # Model validation (access → existence → provider), provider instantiation
@@ -147,8 +146,8 @@ src/
 ## Tests
 
 ```bash
-python -m pytest tests/unit/ -v   # 158 unit tests (fast, no service needed)
-python -m pytest tests/api/ -v    # 114 integration tests (service on :8777)
+python -m pytest tests/unit/ -v   # full unit test suite (fast, no service needed)
+python -m pytest tests/api/ -v    # integration tests (service on :8777)
 ```
 
 See [tests/README.md](tests/README.md) for details on what each test file covers.

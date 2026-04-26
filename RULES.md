@@ -95,7 +95,7 @@ If `plan_lines / implementation_lines > 2`, the plan is bloated. Cut it.
 
 * Write tests before business logic when feasible (TDD Cycle above).
 * Never modify existing tests to make failing code pass.
-* Unit tests: `python -m pytest tests/unit/ -v` (158 tests, no external deps).
+* Unit tests: `python -m pytest tests/unit/ -v` (no external deps).
 * Integration tests: `python -m pytest tests/api/ -v` (requires running service on :8777).
 * All tests: `python -m pytest tests/ -v`.
 * Docker: `docker compose up -d --build`. Always rebuild after code changes — the container copies source at build time.

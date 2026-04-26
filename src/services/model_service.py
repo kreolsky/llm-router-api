@@ -67,7 +67,7 @@ class ModelService:
         additional_model_details = {}
         try:
             base_url, api_key, headers = await self._get_provider_api_details(provider_config)
-            if not base_url or not api_key:
+            if not base_url:
                 return {}
 
             provider_models_data = await self._fetch_provider_models(base_url, headers, client)

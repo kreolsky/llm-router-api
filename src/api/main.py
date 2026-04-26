@@ -20,6 +20,10 @@ from ..providers import clear_provider_cache
 from .middleware import RequestLoggerMiddleware
 
 
+def _client_host(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize ConfigManager, httpx pool, and all services; tear down on shutdown."""
@@ -126,7 +130,7 @@ async def create_transcription(
         user_id=user_id,
         method=request.method,
         url=str(request.url),
-        client_host=request.client.host,
+        client_host=_client_host(request),
         model=model,
         response_format=response_format,
         temperature=temperature,
@@ -190,7 +194,7 @@ async def generate_key_endpoint(
             "user_id": user_id,
             "method": request.method,
             "url": str(request.url),
-            "client_host": request.client.host
+            "client_host": _client_host(request)
         }
     )
 
