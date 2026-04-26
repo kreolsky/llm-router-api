@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 
 from ..utils.deep_merge import deep_merge
+from ..utils.mask import mask_headers
 from ..core.error_handling import ErrorType, create_error, log_provider_error
 from ..core.logging import logger
 
@@ -75,6 +76,9 @@ def retry_on_rate_limit(max_retries: Optional[int] = None, base_delay: Optional[
         return wrapper
     return decorator
 
+# INVARIANT: self.headers["Authorization"] is set once in __init__ from
+# os.environ[api_key_env]. It is never replaced per-request. Client API keys
+# stay in auth.py and are not propagated to providers.
 class BaseProvider:
     def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient, config_manager=None):
         """Initialize provider from config dict.
@@ -203,31 +207,32 @@ class BaseProvider:
         method: str,
         path: str,
         request_body: Dict[str, Any] = None,
-        headers: Dict[str, str] = None,
+        extra_headers: Dict[str, str] = None,
         timeout: httpx.Timeout = None,
         files: Dict[str, Any] = None,
         data: Dict[str, Any] = None,
-        request_id: str = "unknown",
-        base_url: str = None
+        request_id: str = "unknown"
     ) -> Dict[str, Any]:
         """Unified non-streaming HTTP request to provider APIs.
 
         Decorated with @retry_on_rate_limit, so 429 responses are retried automatically.
         HTTPStatusError: extracts error message from provider JSON response.
-        RequestError: maps to a network error. base_url param allows per-request
-        override (used by transcription service).
+        RequestError: maps to a network error. extra_headers may add non-credential
+        headers (e.g. Accept) but cannot overwrite Authorization — see INVARIANT
+        above the class.
         """
-        effective_base_url = base_url or self.base_url
-
         merged_headers = {**self.headers}
-        if headers:
-            merged_headers.update(headers)
+        if extra_headers:
+            for k, v in extra_headers.items():
+                if k.lower() == "authorization":
+                    continue
+                merged_headers[k] = v
 
         self._log_provider_data(
             title=f"{self.__class__.__name__} Request",
             data={
-                "url": f"{effective_base_url}{path}",
-                "headers": merged_headers,
+                "url": f"{self.base_url}{path}",
+                "headers": mask_headers(merged_headers),
                 "request_body": request_body,
                 "has_files": files is not None,
                 "has_data": data is not None
@@ -244,7 +249,7 @@ class BaseProvider:
                     merged_headers.pop("Content-Type", None)
 
                 response = await self.client.post(
-                    f"{effective_base_url}{path}",
+                    f"{self.base_url}{path}",
                     headers=merged_headers,
                     json=request_body if not files else None,
                     files=files,
@@ -253,7 +258,7 @@ class BaseProvider:
                 )
             elif method.upper() == "GET":
                 response = await self.client.get(
-                    f"{effective_base_url}{path}",
+                    f"{self.base_url}{path}",
                     headers=merged_headers,
                     params=request_body,
                     timeout=timeout
@@ -283,7 +288,8 @@ class BaseProvider:
             raise create_error(ErrorType.PROVIDER_NETWORK_ERROR, original_exception=e,
                              error_details=str(e), request_id=request_id, provider_name=self.provider_name)
 
-    async def _stream_request(self, client: httpx.AsyncClient, url_path: str, request_body: Dict[str, Any]) -> AsyncGenerator[bytes, None]:
+    async def _stream_request(self, client: httpx.AsyncClient, url_path: str,
+                              request_body: Dict[str, Any], request_id: str = "unknown") -> AsyncGenerator[bytes, None]:
         """Async generator streaming raw bytes from a provider API.
 
         Uses client.stream() context manager for memory-efficient chunk iteration.
@@ -292,13 +298,11 @@ class BaseProvider:
         - PoolTimeout → 503 (connection pool exhausted)
         - RequestError → generic network error
         """
-        request_id = request_body.get("request_id", "unknown")
-
         self._log_provider_data(
             title="Base Provider Request",
             data={
                 "url": f"{self.base_url}{url_path}",
-                "headers": self.headers,
+                "headers": mask_headers(self.headers),
                 "request_body": request_body
             },
             request_id=request_id,
@@ -367,12 +371,20 @@ class BaseProvider:
             }, exc_info=True)
             raise
 
-    async def chat_completions(self, request_body: Dict[str, Any], provider_model_name: str, model_config: Dict[str, Any]) -> Any:
+    async def chat_completions(self, request_body: Dict[str, Any], provider_model_name: str,
+                               model_config: Dict[str, Any], request_id: str = "unknown") -> Any:
         raise NotImplementedError
 
-    async def embeddings(self, request_body: Dict[str, Any], provider_model_name: str, model_config: Dict[str, Any]) -> Any:
+    async def embeddings(self, request_body: Dict[str, Any], provider_model_name: str,
+                         model_config: Dict[str, Any], request_id: str = "unknown") -> Any:
         raise NotImplementedError
 
-    async def transcriptions(self, audio_data: bytes, filename: str, content_type: str,
-                             model_id: str, api_key: str, base_url: str, **kwargs) -> Any:
+    async def transcriptions(self, request_body: Dict[str, Any], provider_model_name: str,
+                             model_config: Dict[str, Any], request_id: str = "unknown") -> Any:
+        """Transcribe audio. request_body shape:
+
+            {"audio": {"filename": str, "content_type": str, "data": bytes},
+             "params": {"language"?, "temperature"?, "response_format"?,
+                        "return_timestamps"?, "prompt"?}}
+        """
         raise NotImplementedError

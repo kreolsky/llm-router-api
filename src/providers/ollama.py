@@ -8,7 +8,8 @@ class OllamaProvider(BaseProvider):
     def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient, config_manager=None):
         super().__init__(config, client, config_manager)
 
-    async def chat_completions(self, request_body: Dict[str, Any], provider_model_name: str, model_config: Dict[str, Any]) -> Any:
+    async def chat_completions(self, request_body: Dict[str, Any], provider_model_name: str,
+                               model_config: Dict[str, Any], request_id: str = "unknown") -> Any:
         """Map OpenAI-format chat request to Ollama's /chat endpoint."""
         ollama_request_body = {
             "model": provider_model_name,
@@ -25,18 +26,18 @@ class OllamaProvider(BaseProvider):
             "presence_penalty": "presence_penalty",
             "frequency_penalty": "frequency_penalty"
         }
-        
+
         ollama_options = {
             ollama_key: request_body[openai_key]
             for openai_key, ollama_key in param_mapping.items()
             if openai_key in request_body
         }
-        
+
         if ollama_options:
             ollama_request_body["options"] = ollama_options
 
         if ollama_request_body["stream"]:
-            return self._stream_request(self.client, "/chat", ollama_request_body)
+            return self._stream_request(self.client, "/chat", ollama_request_body, request_id=request_id)
 
         connect_timeout = self._get_timeout("ollama_connect_timeout", 60.0)
         ollama_timeout = self._create_timeout(connect=connect_timeout)
@@ -46,10 +47,11 @@ class OllamaProvider(BaseProvider):
             path="/chat",
             request_body=ollama_request_body,
             timeout=ollama_timeout,
-            request_id=request_body.get("request_id", "unknown")
+            request_id=request_id
         )
 
-    async def embeddings(self, request_body: Dict[str, Any], provider_model_name: str, model_config: Dict[str, Any]) -> Any:
+    async def embeddings(self, request_body: Dict[str, Any], provider_model_name: str,
+                         model_config: Dict[str, Any], request_id: str = "unknown") -> Any:
         """Map OpenAI 'input' field to Ollama 'prompt' for /embeddings."""
         ollama_request_body = {
             "model": provider_model_name,
@@ -63,9 +65,9 @@ class OllamaProvider(BaseProvider):
             path="/embeddings",
             request_body=ollama_request_body,
             timeout=embeddings_timeout,
-            request_id=request_body.get("request_id", "unknown")
+            request_id=request_id
         )
 
-    async def transcriptions(self, audio_data: bytes, filename: str, content_type: str,
-                             model_id: str, api_key: str, base_url: str, **kwargs) -> Any:
+    async def transcriptions(self, request_body: Dict[str, Any], provider_model_name: str,
+                             model_config: Dict[str, Any], request_id: str = "unknown") -> Any:
         raise NotImplementedError("OllamaProvider does not support transcriptions")

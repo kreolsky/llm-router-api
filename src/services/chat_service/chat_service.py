@@ -82,7 +82,9 @@ class ChatService(BaseService):
                                 user_id=user_id
                             )
                 
-                response_data = await provider_instance.chat_completions(request_body, provider_model_name, model_config)
+                response_data = await provider_instance.chat_completions(
+                    request_body, provider_model_name, model_config, request_id=request_id
+                )
                 
                 if inspect.isasyncgen(response_data):
                     self._log_service_data(

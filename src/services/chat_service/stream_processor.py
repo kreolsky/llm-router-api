@@ -268,4 +268,6 @@ class StreamProcessor:
                 }
             }
 
-        return f"data: {json.dumps(error_payload)}\n\n".encode('utf-8')
+        # WHY: many OpenAI-compatible clients block until they see [DONE]; an
+        # error frame alone leaves them waiting until the read timeout fires
+        return f"data: {json.dumps(error_payload)}\n\ndata: [DONE]\n\n".encode('utf-8')

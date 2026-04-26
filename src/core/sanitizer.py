@@ -1,5 +1,6 @@
 """Message sanitization to strip non-standard fields that break strict providers."""
 
+import copy
 from typing import Dict, Any, List, Tuple
 
 from .logging import logger
@@ -48,21 +49,23 @@ class MessageSanitizer:
             logger.debug("Stream chunk sanitization is disabled")
             return chunk
         
-        clean_chunk = chunk.copy()
+        # WHY: deep copy — sanitize_dict returns new dicts, but choices/delta are
+        # shared with the caller's chunk and would otherwise be mutated in place
+        clean_chunk = copy.deepcopy(chunk)
         removed_fields = []
-        
+
         if "choices" in clean_chunk and clean_chunk["choices"]:
             for i, choice in enumerate(clean_chunk["choices"]):
                 choice_removed = []
-                
+
                 if "delta" in choice:
                     sanitized_delta, delta_removed = cls._sanitize_dict(choice["delta"])
                     choice["delta"] = sanitized_delta
                     choice_removed.extend(delta_removed)
-                
+
                 sanitized_choice, choice_removed_extra = cls._sanitize_dict(choice)
-                choice.clear()
-                choice.update(sanitized_choice)
+                clean_chunk["choices"][i] = sanitized_choice
+                choice = sanitized_choice
                 choice_removed.extend(choice_removed_extra)
                 
                 if choice_removed:

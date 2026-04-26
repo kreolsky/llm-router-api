@@ -196,12 +196,19 @@ class TestSseCommentLines:
 # 6. _format_error
 # ---------------------------------------------------------------------------
 
+def _parse_error_frame(result: bytes):
+    """Parse the first SSE data frame from _format_error output."""
+    text = result.decode("utf-8")
+    first_frame = text.split("\n\n", 1)[0]
+    return json.loads(first_frame[len("data: "):])
+
+
 class TestFormatError:
 
     def test_generic_exception(self):
         sp = StreamProcessor(config_manager=None)
         result = sp._format_error(ValueError("oops"))
-        decoded = json.loads(result.decode("utf-8").replace("data: ", "").strip())
+        decoded = _parse_error_frame(result)
         assert decoded["error"]["code"] == 500
         assert "oops" in decoded["error"]["message"]
 
@@ -209,7 +216,7 @@ class TestFormatError:
         sp = StreamProcessor(config_manager=None)
         exc = HTTPException(status_code=403, detail="forbidden")
         result = sp._format_error(exc)
-        decoded = json.loads(result.decode("utf-8").replace("data: ", "").strip())
+        decoded = _parse_error_frame(result)
         assert decoded["error"]["code"] == 403
         assert "forbidden" in decoded["error"]["message"]
 
@@ -218,7 +225,7 @@ class TestFormatError:
         detail = {"error": {"code": 429, "message": "rate limited"}}
         exc = HTTPException(status_code=429, detail=detail)
         result = sp._format_error(exc)
-        decoded = json.loads(result.decode("utf-8").replace("data: ", "").strip())
+        decoded = _parse_error_frame(result)
         assert decoded["error"]["code"] == 429
         assert decoded["error"]["message"] == "rate limited"
 
@@ -228,6 +235,11 @@ class TestFormatError:
         assert isinstance(result, bytes)
         assert result.startswith(b"data: ")
         assert result.endswith(b"\n\n")
+
+    def test_ends_with_done_sentinel(self):
+        sp = StreamProcessor(config_manager=None)
+        result = sp._format_error(RuntimeError("x"))
+        assert result.endswith(b"data: [DONE]\n\n")
 
 
 # ---------------------------------------------------------------------------

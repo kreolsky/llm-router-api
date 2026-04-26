@@ -164,7 +164,14 @@ async def create_transcription(
     )
 
     return await app.state.transcription_service.create_transcription(
-        uploaded_file, model, auth_data, response_format, temperature, language, return_timestamps
+        request=request,
+        audio_file=uploaded_file,
+        auth_data=auth_data,
+        model_id=model,
+        response_format=response_format,
+        temperature=temperature,
+        language=language,
+        return_timestamps=return_timestamps,
     )
 
 @app.get("/tools/generate_key")

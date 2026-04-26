@@ -1,8 +1,8 @@
 """Audio transcription service with default model fallback."""
 import httpx
 import os
-from typing import Dict, Any, Tuple, Optional
-from fastapi import HTTPException, UploadFile
+from typing import Any, Tuple, Optional
+from fastapi import HTTPException, Request, UploadFile
 
 from ..core.config_manager import ConfigManager
 from ..services.model_service import ModelService
@@ -25,19 +25,21 @@ class TranscriptionService(BaseService):
 
     async def create_transcription(
         self,
+        request: Request,
         audio_file: UploadFile,
+        auth_data: Tuple[str, str, Any, Any],
         model_id: Optional[str] = None,
-        auth_data: Tuple[str, str, Any, Any] = None,
         response_format: str = "json",
         temperature: float = 0.0,
-        language: str = None,
-        return_timestamps: bool = False
+        language: Optional[str] = None,
+        return_timestamps: bool = False,
     ) -> Any:
-        """
-        Create a transcription from an audio file using the specified or default model.
-        """
+        """Create a transcription from an audio file using the specified or default model."""
+        context_dict = self._get_request_context(request, auth_data)
+        request_id = context_dict["request_id"]
+        user_id = context_dict["user_id"]
+
         audio_data = await audio_file.read()
-        user_id, api_key, allowed_models, _ = auth_data
 
         self._log_service_data(
             title="Transcription Request Parameters",
@@ -51,7 +53,7 @@ class TranscriptionService(BaseService):
                 "content_type": audio_file.content_type,
                 "file_size": len(audio_data) if audio_data else 0
             },
-            request_id="unknown",
+            request_id=request_id,
             component="transcription_service",
             data_flow="incoming"
         )
@@ -64,7 +66,7 @@ class TranscriptionService(BaseService):
                 "default_model": model_id
             })
 
-        error_ctx = dict(user_id=user_id, model_id=model_id)
+        error_ctx = dict(request_id=request_id, user_id=user_id, model_id=model_id)
 
         try:
             model_config, provider_name, provider_model_name, provider_config = \
@@ -72,30 +74,38 @@ class TranscriptionService(BaseService):
 
             provider_instance = self._get_provider(provider_config, **error_ctx)
 
+            provider_request_body = {
+                "audio": {
+                    "filename": audio_file.filename,
+                    "content_type": audio_file.content_type,
+                    "data": audio_data,
+                },
+                "params": {
+                    "language": language,
+                    "temperature": temperature,
+                    "response_format": response_format,
+                    "return_timestamps": return_timestamps,
+                },
+            }
+
             response = await provider_instance.transcriptions(
-                audio_data=audio_data,
-                filename=audio_file.filename,
-                content_type=audio_file.content_type,
-                model_id=provider_model_name,
-                api_key=api_key,
-                base_url=provider_config.get("base_url"),
-                response_format=response_format,
-                temperature=temperature,
-                return_timestamps=return_timestamps,
-                language=language
+                provider_request_body,
+                provider_model_name,
+                model_config,
+                request_id=request_id,
             )
 
             self._log_service_data(
                 title="Transcription Response JSON",
                 data=response,
-                request_id="unknown",
+                request_id=request_id,
                 component="transcription_service",
                 data_flow="from_provider"
             )
 
             return response
 
-        except HTTPException as e:
-            raise e
+        except HTTPException:
+            raise
         except Exception as e:
             raise create_error(ErrorType.INTERNAL_SERVER_ERROR, original_exception=e, error_details=str(e), **error_ctx)

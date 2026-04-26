@@ -55,7 +55,9 @@ class EmbeddingService(BaseService):
         provider_instance = self._get_provider(provider_config, **error_ctx)
         
         try:
-            response_data = await provider_instance.embeddings(request_body, provider_model_name, model_config)
+            response_data = await provider_instance.embeddings(
+                request_body, provider_model_name, model_config, request_id=request_id
+            )
             
             self._log_service_data(
                 title="Embedding Response JSON",
