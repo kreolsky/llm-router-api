@@ -60,6 +60,39 @@ def _build_provider(base_url="https://api.example.com", api_key_env="TEST_API_KE
     return provider
 
 
+def _make_cm(**overrides):
+    """Build a SimpleNamespace config_manager with real values (no MagicMock magic)."""
+    cm = SimpleNamespace()
+    cm.queue_wait_timeout = overrides.get("queue_wait_timeout", 30.0)
+    cm.provider_max_retries = overrides.get("provider_max_retries", 3)
+    cm.provider_retry_base_delay = overrides.get("provider_retry_base_delay", 1.0)
+    cm.provider_retry_max_delay = overrides.get("provider_retry_max_delay", 30.0)
+    cm.httpx_max_connections = overrides.get("httpx_max_connections", 100)
+    cm.httpx_max_keepalive_connections = overrides.get("httpx_max_keepalive_connections", 20)
+    cm.httpx_connect_timeout = overrides.get("httpx_connect_timeout", 60.0)
+    cm.httpx_read_timeout = overrides.get("httpx_read_timeout", 60.0)
+    cm.httpx_pool_timeout = overrides.get("httpx_pool_timeout", 5.0)
+    return cm
+
+
+def _build_limited_provider(max_concurrent, config_manager=None):
+    """Build a ProviderStub with max_concurrent set."""
+    config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
+              "max_concurrent": max_concurrent}
+    with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
+        return ProviderStub(config, config_manager=config_manager)
+
+
+def _mock_response(json_body=None):
+    """Build a mock httpx Response usable by _make_request_inner."""
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.raise_for_status = MagicMock(return_value=None)
+    resp.json.return_value = json_body if json_body is not None else {"ok": True}
+    resp.text = ""
+    return resp
+
+
 # ===================================================================
 # retry_on_rate_limit decorator
 # ===================================================================
@@ -481,3 +514,228 @@ class TestGetModel:
         provider.list_models = AsyncMock(side_effect=httpx.ConnectError("boom"))
         with pytest.raises(httpx.ConnectError):
             await provider.get_model("gpt-4", request_id="req-1")
+
+
+# ===================================================================
+# Per-provider concurrency limit (_acquire_slot / semaphore)
+# ===================================================================
+
+class TestConcurrencyLimit:
+    """Tests for the per-provider max_concurrent semaphore gate."""
+
+    def test_no_semaphore_when_max_concurrent_unset(self):
+        """Provider without max_concurrent has _semaphore is None."""
+        provider = _build_provider()
+        assert provider._semaphore is None
+        assert provider._max_concurrent is None
+
+    def test_semaphore_created_when_max_concurrent_set(self):
+        """Provider with max_concurrent creates an asyncio.Semaphore."""
+        provider = _build_limited_provider(2)
+        assert provider._max_concurrent == 2
+        assert provider._semaphore is not None
+
+    def test_max_concurrent_non_positive_disables_limit(self):
+        """Non-positive / non-int max_concurrent disables the limit."""
+        provider = _build_limited_provider(0)
+        assert provider._semaphore is None
+        assert provider._max_concurrent is None
+
+    @pytest.mark.asyncio
+    async def test_no_limit_requests_run_concurrently(self):
+        """Without max_concurrent, two requests run concurrently."""
+        provider = _build_provider()
+        started = [asyncio.Event(), asyncio.Event()]
+        release = asyncio.Event()
+        idx = [0]
+
+        async def post(*a, **k):
+            i = idx[0]
+            idx[0] += 1
+            started[i].set()
+            await release.wait()
+            return _mock_response()
+
+        provider.client.post = post
+        t1 = asyncio.create_task(provider._make_request("POST", "/x", request_id="r1"))
+        t2 = asyncio.create_task(provider._make_request("POST", "/x", request_id="r2"))
+        await asyncio.wait_for(asyncio.gather(started[0].wait(), started[1].wait()), timeout=2)
+        release.set()
+        r1, r2 = await asyncio.gather(t1, t2)
+        assert r1 == {"ok": True}
+        assert r2 == {"ok": True}
+
+    @pytest.mark.asyncio
+    async def test_limit_queues_second_request(self):
+        """max_concurrent=1: second request waits until the first releases its slot."""
+        provider = _build_limited_provider(1, config_manager=_make_cm())
+        started = [asyncio.Event(), asyncio.Event()]
+        release = [asyncio.Event(), asyncio.Event()]
+        idx = [0]
+
+        async def post(*a, **k):
+            i = idx[0]
+            idx[0] += 1
+            started[i].set()
+            await release[i].wait()
+            return _mock_response()
+
+        provider.client.post = post
+        t1 = asyncio.create_task(provider._make_request("POST", "/x", request_id="r1"))
+        await asyncio.wait_for(started[0].wait(), timeout=2)
+
+        t2 = asyncio.create_task(provider._make_request("POST", "/x", request_id="r2"))
+        await asyncio.sleep(0.05)
+        assert not started[1].is_set()  # queued, not running
+
+        release[0].set()  # first finishes → slot freed
+        await asyncio.wait_for(started[1].wait(), timeout=2)
+        release[1].set()
+        await asyncio.gather(t1, t2)
+
+    @pytest.mark.asyncio
+    async def test_queue_timeout_returns_503(self):
+        """Queued request exceeding queue_wait_timeout fails fast with 503."""
+        provider = _build_limited_provider(1, config_manager=_make_cm(queue_wait_timeout=0.05))
+        first_release = asyncio.Event()
+        started = [asyncio.Event(), asyncio.Event()]
+        idx = [0]
+
+        async def post(*a, **k):
+            i = idx[0]
+            idx[0] += 1
+            started[i].set()
+            if i == 0:
+                await first_release.wait()
+            return _mock_response()
+
+        provider.client.post = post
+        t1 = asyncio.create_task(provider._make_request("POST", "/x", request_id="r1"))
+        await asyncio.wait_for(started[0].wait(), timeout=2)
+
+        t2 = asyncio.create_task(provider._make_request("POST", "/x", request_id="r2"))
+        with pytest.raises(HTTPException) as exc_info:
+            await t2
+        assert exc_info.value.status_code == 503
+
+        first_release.set()
+        await t1
+
+    @pytest.mark.asyncio
+    async def test_queue_timeout_does_not_leak_slot(self):
+        """A 503 from queue timeout must not acquire/release a slot (no double-release)."""
+        provider = _build_limited_provider(1, config_manager=_make_cm(queue_wait_timeout=0.02))
+        blocker = asyncio.Event()
+        running = asyncio.Event()
+
+        async def post(*a, **k):
+            running.set()
+            await blocker.wait()
+            return _mock_response()
+
+        provider.client.post = post
+        t1 = asyncio.create_task(provider._make_request("POST", "/x", request_id="r1"))
+        await asyncio.wait_for(running.wait(), timeout=2)
+
+        with pytest.raises(HTTPException):
+            await provider._make_request("POST", "/x", request_id="r2")
+
+        # Semaphore value must still be 0 (first call holds it; the timed-out one never acquired).
+        assert provider._semaphore._value == 0
+        blocker.set()
+        await t1
+        assert provider._semaphore._value == 1
+
+    @pytest.mark.asyncio
+    async def test_stream_slot_released_on_completion(self):
+        """After a stream finishes, the slot is released; a second stream starts at once."""
+        provider = _build_limited_provider(1, config_manager=_make_cm())
+
+        async def inner(client, url, body, rid):
+            yield b"a"
+            yield b"b"
+
+        provider._stream_request_inner = inner
+        chunks = []
+        async for c in provider._stream_request(provider.client, "/x", {}, "r1"):
+            chunks.append(c)
+        assert chunks == [b"a", b"b"]
+        assert provider._semaphore._value == 1
+
+        # second stream must start immediately (slot was released)
+        second_started = asyncio.Event()
+
+        async def inner2(client, url, body, rid):
+            second_started.set()
+            yield b"c"
+
+        provider._stream_request_inner = inner2
+        out = []
+        async for c in provider._stream_request(provider.client, "/x", {}, "r2"):
+            out.append(c)
+        assert second_started.is_set()
+        assert out == [b"c"]
+
+    @pytest.mark.asyncio
+    async def test_stream_slot_released_on_early_close(self):
+        """aclose() mid-stream releases the slot."""
+        provider = _build_limited_provider(1, config_manager=_make_cm())
+        gate = asyncio.Event()
+
+        async def inner(client, url, body, rid):
+            yield b"a"
+            await gate.wait()
+            yield b"b"
+
+        provider._stream_request_inner = inner
+        gen = provider._stream_request(provider.client, "/x", {}, "r1")
+        first = await gen.__anext__()
+        assert first == b"a"
+        await gen.aclose()
+        assert provider._semaphore._value == 1  # released on close
+
+    @pytest.mark.asyncio
+    async def test_stream_slot_released_on_exception(self):
+        """An exception inside the stream releases the slot."""
+        provider = _build_limited_provider(1, config_manager=_make_cm())
+
+        async def inner(client, url, body, rid):
+            yield b"a"
+            raise RuntimeError("boom")
+
+        provider._stream_request_inner = inner
+        gen = provider._stream_request(provider.client, "/x", {}, "r1")
+        first = await gen.__anext__()
+        assert first == b"a"
+        with pytest.raises(RuntimeError):
+            await gen.__anext__()
+        assert provider._semaphore._value == 1
+
+    @pytest.mark.asyncio
+    async def test_retry_holds_slot_across_attempts(self):
+        """The slot is held across a 429 retry; released once after success."""
+        provider = _build_limited_provider(1, config_manager=None)  # None → hardcoded retry defaults
+        seen_values = []
+        calls = [0]
+
+        async def post(*a, **k):
+            calls[0] += 1
+            seen_values.append(provider._semaphore._value)
+            if calls[0] == 1:
+                resp = MagicMock()
+                resp.status_code = 429
+                resp.text = "rate limited"
+                resp.json.side_effect = json.JSONDecodeError("", "", 0)
+                raise httpx.HTTPStatusError("429", request=MagicMock(spec=httpx.Request), response=resp)
+            return _mock_response()
+
+        provider.client.post = post
+        with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock):
+            result = await provider._make_request("POST", "/x", request_id="r1")
+
+        assert result == {"ok": True}
+        assert calls[0] == 2
+        # Slot value was 0 during BOTH attempts (held across retry).
+        assert seen_values == [0, 0]
+        # Released exactly once after success.
+        assert provider._semaphore._value == 1

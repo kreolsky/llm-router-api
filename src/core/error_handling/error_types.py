@@ -32,6 +32,7 @@ class ErrorType(Enum):
 
     # Service Unavailable (503)
     SERVICE_UNAVAILABLE = ("service_unavailable", status.HTTP_503_SERVICE_UNAVAILABLE, "Could not connect to service: {error_details}")
+    PROVIDER_CONCURRENCY_LIMIT = ("provider_concurrency_limit", status.HTTP_503_SERVICE_UNAVAILABLE, "Concurrency limit reached for provider '{provider_name}'; retry later.")
 
     def __init__(self, code: str, status_code: Optional[int], message_template: str):
         self.code = code

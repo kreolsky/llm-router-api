@@ -4,6 +4,7 @@ import os
 import json
 import asyncio
 import time
+import contextlib
 from typing import Dict, Any, AsyncGenerator, Callable, Optional
 from functools import wraps
 from fastapi import HTTPException
@@ -119,6 +120,27 @@ class BaseProvider:
         # (HTTPX_MAX_CONNECTIONS, etc.) are applied per backend pool, not shared.
         self.client = self._build_client()
 
+        # ARCH: per-instance concurrency gate (asyncio.Semaphore). Only created when
+        # `max_concurrent` is a positive int; otherwise None (no limiting). The semaphore
+        # is owned per-instance, so a config reload that changes max_concurrent only takes
+        # effect after clear_provider_cache() rebuilds instances.
+        max_concurrent = config.get("max_concurrent")
+        if isinstance(max_concurrent, int) and max_concurrent > 0:
+            self._semaphore = asyncio.Semaphore(max_concurrent)
+            self._max_concurrent = max_concurrent
+            logger.info(
+                f"Provider '{self.provider_name}' concurrency limit enabled: {max_concurrent}",
+                extra={"component": "base_provider", "provider_name": self.provider_name,
+                       "max_concurrent": max_concurrent}
+            )
+        else:
+            self._semaphore = None
+            self._max_concurrent = None
+            logger.info(
+                f"Provider '{self.provider_name}' has no concurrency limit",
+                extra={"component": "base_provider", "provider_name": self.provider_name}
+            )
+
     def _build_client(self) -> httpx.AsyncClient:
         """Construct an httpx.AsyncClient using limits from config_manager."""
         if self.config_manager is not None:
@@ -141,6 +163,36 @@ class BaseProvider:
         """Close the owned httpx.AsyncClient. Safe to call multiple times."""
         if self.client is not None and not self.client.is_closed:
             await self.client.aclose()
+
+    @contextlib.asynccontextmanager
+    async def _acquire_slot(self, request_id: str = "unknown"):
+        """Acquire a per-provider concurrency slot for the duration of the request.
+
+        When no semaphore is configured (max_concurrent unset) this is a no-op.
+        Otherwise waits up to config_manager.queue_wait_timeout for a free slot;
+        on timeout raises 503 SERVICE_UNAVAILABLE. Acquired slots are always
+        released in the finally block (exception-safe).
+        """
+        if self._semaphore is None:
+            yield
+            return
+        acquired = False
+        wait = self.config_manager.queue_wait_timeout if self.config_manager is not None else 30.0
+        try:
+            try:
+                await asyncio.wait_for(self._semaphore.acquire(), timeout=wait)
+                acquired = True
+            except asyncio.TimeoutError:
+                raise create_error(
+                    ErrorType.PROVIDER_CONCURRENCY_LIMIT,
+                    error_details="Concurrency limit reached for provider; retry later.",
+                    request_id=request_id,
+                    provider_name=self.provider_name,
+                )
+            yield
+        finally:
+            if acquired:
+                self._semaphore.release()
 
     def _log_provider_data(self, title: str, data: Dict[str, Any], request_id: str, data_flow: str, component: str = None) -> None:
         """Log request/response data with standardized provider context."""
@@ -230,7 +282,6 @@ class BaseProvider:
             return getattr(self.config_manager, timeout_type)
         return default_value
 
-    @retry_on_rate_limit(config_manager=None)  # Will be set by self.config_manager in the wrapper
     async def _make_request(
         self,
         method: str,
@@ -244,12 +295,33 @@ class BaseProvider:
     ) -> Dict[str, Any]:
         """Unified non-streaming HTTP request to provider APIs.
 
-        Decorated with @retry_on_rate_limit, so 429 responses are retried automatically.
+        Holds a per-provider concurrency slot across the whole call. The retry
+        loop (on @retry_on_rate_limit on _make_request_inner) runs inside the
+        held slot, so retries reuse the same slot and it is released exactly once.
         HTTPStatusError: extracts error message from provider JSON response.
         RequestError: maps to a network error. extra_headers may add non-credential
         headers (e.g. Accept) but cannot overwrite Authorization — see INVARIANT
         above the class.
         """
+        async with self._acquire_slot(request_id):
+            return await self._make_request_inner(
+                method, path, request_body=request_body, extra_headers=extra_headers,
+                timeout=timeout, files=files, data=data, request_id=request_id,
+            )
+
+    @retry_on_rate_limit(config_manager=None)
+    async def _make_request_inner(
+        self,
+        method: str,
+        path: str,
+        request_body: Dict[str, Any] = None,
+        extra_headers: Dict[str, str] = None,
+        timeout: httpx.Timeout = None,
+        files: Dict[str, Any] = None,
+        data: Dict[str, Any] = None,
+        request_id: str = "unknown"
+    ) -> Dict[str, Any]:
+        """Actual HTTP request implementation. See _make_request for the slot wrapper."""
         merged_headers = {**self.headers}
         if extra_headers:
             for k, v in extra_headers.items():
@@ -320,6 +392,19 @@ class BaseProvider:
     async def _stream_request(self, client: httpx.AsyncClient, url_path: str,
                               request_body: Dict[str, Any], request_id: str = "unknown") -> AsyncGenerator[bytes, None]:
         """Async generator streaming raw bytes from a provider API.
+
+        Holds a per-provider concurrency slot across the ENTIRE iteration by the
+        downstream consumer. `async with` releases on normal completion, on
+        exception, and on generator close (AClose) — so a client disconnect also
+        frees the slot.
+        """
+        async with self._acquire_slot(request_id):
+            async for chunk in self._stream_request_inner(client, url_path, request_body, request_id):
+                yield chunk
+
+    async def _stream_request_inner(self, client: httpx.AsyncClient, url_path: str,
+                              request_body: Dict[str, Any], request_id: str = "unknown") -> AsyncGenerator[bytes, None]:
+        """Actual streaming implementation. See _stream_request for the slot wrapper.
 
         Uses client.stream() context manager for memory-efficient chunk iteration.
         Error hierarchy inside stream context:

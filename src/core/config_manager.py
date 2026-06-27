@@ -20,6 +20,15 @@ class ConfigManager:
         self.debug = os.getenv("DEBUG", "false").lower() == "true"
         self.log_level = os.getenv("LOG_LEVEL", "INFO")
         self.sanitize_messages = os.getenv("SANITIZE_MESSAGES", "false").lower() == "true"
+
+        try:
+            self._queue_wait_timeout = float(os.getenv("QUEUE_WAIT_TIMEOUT", "30.0"))
+        except (ValueError, TypeError):
+            logger.warning(
+                "QUEUE_WAIT_TIMEOUT has invalid value, falling back to default 30.0",
+                extra={"config": {"raw_value": os.getenv("QUEUE_WAIT_TIMEOUT", "")}}
+            )
+            self._queue_wait_timeout = 30.0
         
         # Log configuration initialization
         logger.info("Configuration manager initialized", extra={
@@ -98,6 +107,11 @@ class ConfigManager:
     def stream_read_timeout(self) -> float:
         # WHY: streaming can be long-lived; separate read timeout keeps non-stream requests snappy
         return float(os.getenv("STREAM_READ_TIMEOUT", "300"))
+
+    @property
+    def queue_wait_timeout(self) -> float:
+        # WHY: cached at startup so a malformed env value doesn't crash per-request
+        return self._queue_wait_timeout
 
     @property
     def default_stt_model(self) -> str:

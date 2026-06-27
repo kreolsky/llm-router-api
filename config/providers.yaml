@@ -18,6 +18,7 @@ providers:
     type: openai
     base_url: http://10.10.1.20:5010/v1
     api_key_env: ORANGE_API_KEY
+    max_concurrent: 3
   embedding:
     type: openai
     base_url: http://10.10.1.20:5020/v1
