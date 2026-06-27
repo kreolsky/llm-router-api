@@ -12,6 +12,7 @@ class ConfigManager:
         self.models_path = os.path.join(config_dir, "models.yaml")
         self.user_keys_path = os.path.join(config_dir, "user_keys.yaml")
         self.config = self._load_config(fail_on_error=True)
+        self._assert_config_complete(self.config)
         self.last_mtimes = {} # Initialize last_mtimes as instance variable
         self._initialize_mtimes()
         self._on_reload_callbacks = []
@@ -57,6 +58,16 @@ class ConfigManager:
 
     def get_config(self) -> Dict[str, Any]:
         return self.config
+
+    @staticmethod
+    def _assert_config_complete(config: Dict[str, Any]) -> None:
+        """Fail-fast: every config section must be present and non-empty."""
+        for section in ("providers", "models", "user_keys"):
+            if not config.get(section):
+                raise RuntimeError(
+                    f"Configuration section '{section}' is missing or empty. "
+                    f"Refusing to start."
+                )
     
     @property
     def should_sanitize_messages(self) -> bool:
@@ -82,6 +93,15 @@ class ConfigManager:
     def httpx_read_timeout(self) -> float:
         # WHY: without a read timeout, requests hang indefinitely when providers are unreachable
         return float(os.getenv("HTTPX_READ_TIMEOUT", "60.0"))
+
+    @property
+    def stream_read_timeout(self) -> float:
+        # WHY: streaming can be long-lived; separate read timeout keeps non-stream requests snappy
+        return float(os.getenv("STREAM_READ_TIMEOUT", "300"))
+
+    @property
+    def default_stt_model(self) -> str:
+        return os.getenv("DEFAULT_STT_MODEL", "stt/dummy")
 
     @property
     def config_reload_interval(self) -> int:

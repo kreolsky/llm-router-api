@@ -1,10 +1,7 @@
 """Audio transcription service with default model fallback."""
-import httpx
-import os
 from typing import Any, Tuple, Optional
 from fastapi import HTTPException, Request, UploadFile
 
-from ..core.config_manager import ConfigManager
 from ..services.model_service import ModelService
 from ..core.error_handling import ErrorType, create_error
 from ..core.logging import logger
@@ -19,8 +16,8 @@ class TranscriptionService(BaseService):
     Uses BaseService for validation, provider instantiation, and logging.
     """
 
-    def __init__(self, config_manager: ConfigManager, client: httpx.AsyncClient, model_service: ModelService):
-        super().__init__(config_manager, client)
+    def __init__(self, config_manager, model_service: ModelService):
+        super().__init__(config_manager)
         self.model_service = model_service
 
     async def create_transcription(
@@ -35,7 +32,7 @@ class TranscriptionService(BaseService):
         return_timestamps: bool = False,
     ) -> Any:
         """Create a transcription from an audio file using the specified or default model."""
-        context_dict = self._get_request_context(request, auth_data)
+        context_dict = self._get_request_context(request)
         request_id = context_dict["request_id"]
         user_id = context_dict["user_id"]
 
@@ -60,11 +57,11 @@ class TranscriptionService(BaseService):
 
         # Use default model if not specified
         if not model_id:
-            model_id = os.getenv("DEFAULT_STT_MODEL", "stt/dummy")
-            logger.info(f"Using default transcription model: {model_id}", extra={
-                "user_id": user_id,
-                "default_model": model_id
-            })
+            model_id = self.config_manager.default_stt_model
+            logger.info(f"Using default transcription model: {model_id}",
+                user_id=user_id,
+                default_model=model_id
+            )
 
         error_ctx = dict(request_id=request_id, user_id=user_id, model_id=model_id)
 
@@ -72,7 +69,7 @@ class TranscriptionService(BaseService):
             model_config, provider_name, provider_model_name, provider_config = \
                 self._validate_and_get_config(model_id, auth_data, **error_ctx)
 
-            provider_instance = self._get_provider(provider_config, **error_ctx)
+            provider_instance = self._get_provider(provider_name, provider_config, **error_ctx)
 
             provider_request_body = {
                 "audio": {

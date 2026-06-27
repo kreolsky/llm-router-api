@@ -65,7 +65,8 @@ If `plan_lines / implementation_lines > 2`, the plan is bloated. Cut it.
 ## Provider Rules
 
 * Every provider must inherit from `BaseProvider` and implement the required interface.
-* Provider instances are cached by `(type, base_url)`. Never store request-specific state on instances.
+* Provider instances are cached by **provider name** (the dict key in `providers.yaml`). Never store request-specific state on instances.
+* Each provider instance owns its own `httpx.AsyncClient` (per-backend pool); the cache's `clear_provider_cache()` closes every pool before clearing.
 * Format translation happens in the provider, not in the service layer.
 * New provider types require: class in `providers/`, registration in `providers/__init__.py`, config entries in `providers.yaml` and `models.yaml`.
 * Retry logic lives in the base class. Providers must not implement their own retry.
@@ -74,8 +75,14 @@ If `plan_lines / implementation_lines > 2`, the plan is bloated. Cut it.
 
 * Services validate access BEFORE checking model existence (prevents info leakage).
 * Services orchestrate: validate → resolve provider → call provider → return response.
-* No direct HTTP calls from services — always go through providers.
+* No direct HTTP calls from services — always go through providers (ModelService enrichment uses `provider.list_models()`/`provider.get_model()`).
+* Request context is read from the typed `RequestContext` on `request.state.request_context`, never raw `request.state.request_id`/`project_name`.
 * Streaming responses must use `StreamingResponse` with the service's async generator.
+
+## Logging Convention
+
+* Prefer kwargs-style logging (`logger.info(msg, request_id=..., user_id=...)`); the `extra={...}` dict form is tolerated for backward compat but not for new call sites.
+* One service-level INFO entry per request; middleware handles Incoming/Outgoing. Avoid duplicate "Request:" lines between middleware and service.
 
 ## Configuration Rules
 

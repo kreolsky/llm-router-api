@@ -18,7 +18,11 @@ OpenAI-compatible API gateway for multiple LLM providers. Routes requests to Ope
 
 **Request Flow**: Middleware (request ID, logging) → Auth (Bearer token, HMAC) → Service (model access validation) → Provider (HTTP to backend) → Response (JSON or SSE stream).
 
-**Provider Abstraction**: Single provider type (`openai`). Instances cached by `(type, base_url)`, cache cleared on config reload. Base class handles retry with exponential backoff on 429s.
+**Provider Abstraction**: Single provider type (`openai`). Each provider instance owns its own `httpx.AsyncClient` (per-backend connection pool). Instances are cached by **provider name** (the dict key in `providers.yaml`); the cache is cleared on config reload, closing each cached client first (`aclose()`). Base class handles retry with exponential backoff on 429s.
+
+**Startup Validation**: Eager fail-fast — on startup every configured provider is instantiated (validating `base_url` + env API key). Any failure (collected, all reported) refuses to start.
+
+**Request Context**: A typed `RequestContext` (`request_id`, `project_name`) frozen dataclass is stored on `request.state.request_context` by middleware and rebuilt by auth (to attach `project_name`). Services read it via `BaseService._get_request_context(request)` — no raw `request.state.request_id`/`project_name` keys.
 
 **Configuration (YAML)**: Three files in `config/` — `providers.yaml` (connections), `models.yaml` (model registry), `user_keys.yaml` (API key access control). Hot-reloaded via background task.
 
@@ -29,6 +33,14 @@ OpenAI-compatible API gateway for multiple LLM providers. Routes requests to Ope
 **Error Format**: OpenRouter-compatible JSON with `error.code`, `error.message`, `error.metadata`.
 
 **Message Sanitization**: Optional stripping of non-standard fields (`done`, `__stream_end__`, `__internal__`) from messages and stream chunks. Controlled by `SANITIZE_MESSAGES` env var.
+
+## Configuration (env vars)
+
+All env-backed settings are read via `ConfigManager` properties (no direct `os.getenv` in providers/services except initial logger/debug setup).
+
+* **HTTPX pools**: `HTTPX_MAX_CONNECTIONS`, `HTTPX_MAX_KEEPALIVE_CONNECTIONS`, `HTTPX_CONNECT_TIMEOUT`, `HTTPX_READ_TIMEOUT`, `HTTPX_POOL_TIMEOUT` — applied **per provider pool** (each provider instance owns its own `httpx.AsyncClient`). Total connections ≈ providers × limit.
+* **Streaming**: `STREAM_READ_TIMEOUT` (default 300) — read timeout for SSE streams.
+* **Transcription**: `DEFAULT_STT_MODEL` (default `stt/dummy`) — fallback model when none is requested.
 
 ## Architecture Discovery
 

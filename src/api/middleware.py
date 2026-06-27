@@ -6,11 +6,12 @@ buffering that adds latency to SSE streaming responses.
 import time
 import os
 import json
+from ..core.context import RequestContext
 from ..core.logging import logger
 
 
 class RequestLoggerMiddleware:
-    """Injects request_id into scope state and logs request/response lifecycle.
+    """Injects RequestContext into scope state and logs request/response lifecycle.
 
     Pure ASGI middleware — does not buffer response body, so streaming
     responses (SSE) pass through with zero additional latency per chunk.
@@ -27,9 +28,9 @@ class RequestLoggerMiddleware:
         start_time = time.time()
         request_id = os.urandom(8).hex()
 
-        # Inject request_id into scope state so request.state.request_id works downstream
-        scope.setdefault("state", {})
-        scope["state"]["request_id"] = request_id
+        # Inject typed RequestContext into scope state for downstream handlers
+        state = scope.setdefault("state", {})
+        state["request_context"] = RequestContext(request_id=request_id)
 
         method = scope.get("method", "")
         path = scope.get("path", "")
@@ -95,7 +96,8 @@ class RequestLoggerMiddleware:
             raise
 
         process_time = time.time() - start_time
-        user_id = scope.get("state", {}).get("project_name", "unknown")
+        ctx: RequestContext = scope.get("state", {}).get("request_context")
+        user_id = ctx.user_id if ctx else "unknown"
 
         logger.info(
             f"Response: Outgoing Response | status={status_code} | time={round(process_time * 1000)}ms",

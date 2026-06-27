@@ -82,11 +82,12 @@ def retry_on_rate_limit(max_retries: Optional[int] = None, base_delay: Optional[
 # os.environ[api_key_env]. It is never replaced per-request. Client API keys
 # stay in auth.py and are not propagated to providers.
 class BaseProvider:
-    def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient, config_manager=None):
+    def __init__(self, config: Dict[str, Any], config_manager=None):
         """Initialize provider from config dict.
 
         Reads API key from the env var named by config['api_key_env'].
-        Stores the shared httpx.AsyncClient (lifecycle managed in main.py lifespan).
+        Owns its own httpx.AsyncClient (per-provider connection pool). Limits
+        come from config_manager (global env applied per pool).
         Auto-derives provider_name from class name for logging.
         Sets default Content-Type: application/json (subclasses may override before super().__init__).
 
@@ -97,7 +98,6 @@ class BaseProvider:
         self.api_key_env = config.get("api_key_env")
         self.headers = dict(config.get("headers") or {})
         self.api_key = os.environ.get(self.api_key_env) if self.api_key_env else None
-        self.client = client
         self.config_manager = config_manager
         self.provider_name = self.__class__.__name__.replace("Provider", "").lower()
         self.headers.setdefault("Content-Type", "application/json")
@@ -114,6 +114,33 @@ class BaseProvider:
                                  error_details=f"API key for {self.api_key_env} is not set in environment variables.",
                                  provider_name=self.provider_name)
             self.headers["Authorization"] = f"Bearer {self.api_key}"
+
+        # ARCH: each provider instance owns its own httpx pool. Global env limits
+        # (HTTPX_MAX_CONNECTIONS, etc.) are applied per backend pool, not shared.
+        self.client = self._build_client()
+
+    def _build_client(self) -> httpx.AsyncClient:
+        """Construct an httpx.AsyncClient using limits from config_manager."""
+        if self.config_manager is not None:
+            limits = httpx.Limits(
+                max_connections=self.config_manager.httpx_max_connections,
+                max_keepalive_connections=self.config_manager.httpx_max_keepalive_connections
+            )
+            timeout = httpx.Timeout(
+                connect=self.config_manager.httpx_connect_timeout,
+                read=self.config_manager.httpx_read_timeout,
+                write=None,
+                pool=self.config_manager.httpx_pool_timeout
+            )
+        else:
+            limits = httpx.Limits()
+            timeout = httpx.Timeout(connect=60.0, read=60.0, write=None, pool=5.0)
+        return httpx.AsyncClient(limits=limits, timeout=timeout)
+
+    async def aclose(self) -> None:
+        """Close the owned httpx.AsyncClient. Safe to call multiple times."""
+        if self.client is not None and not self.client.is_closed:
+            await self.client.aclose()
 
     def _log_provider_data(self, title: str, data: Dict[str, Any], request_id: str, data_flow: str, component: str = None) -> None:
         """Log request/response data with standardized provider context."""
@@ -311,7 +338,7 @@ class BaseProvider:
             data_flow="to_provider"
         )
 
-        stream_read_timeout = float(os.getenv("STREAM_READ_TIMEOUT", "300"))
+        stream_read_timeout = self._get_timeout("stream_read_timeout", 300.0)
         stream_timeout = self._create_timeout(read=stream_read_timeout)
 
         logger.debug(f"Starting stream request to {url_path}", extra={
@@ -379,6 +406,14 @@ class BaseProvider:
 
     async def embeddings(self, request_body: Dict[str, Any], provider_model_name: str,
                          model_config: Dict[str, Any], request_id: str = "unknown") -> Any:
+        raise NotImplementedError
+
+    async def list_models(self, request_id: str = "unknown") -> Dict[str, Any]:
+        """Return the provider's model list (raw /models response)."""
+        raise NotImplementedError
+
+    async def get_model(self, provider_model_name: str, request_id: str = "unknown") -> Dict[str, Any]:
+        """Return a single model's metadata, or {} if not found."""
         raise NotImplementedError
 
     async def transcriptions(self, request_body: Dict[str, Any], provider_model_name: str,

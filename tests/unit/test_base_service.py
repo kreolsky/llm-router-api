@@ -3,11 +3,11 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import httpx
 import pytest
 from fastapi import HTTPException
 
 from src.services.base import BaseService
+from src.core.context import RequestContext
 from src.core.error_handling import ErrorType, create_error
 
 
@@ -32,17 +32,18 @@ def _make_config_manager(models=None, providers=None):
     return cm
 
 
-def _make_request(request_id="req-abc"):
-    """Return a mock FastAPI Request with state.request_id."""
+def _make_request(request_id="req-abc", project_name=None):
+    """Return a mock FastAPI Request with a typed RequestContext."""
     request = MagicMock()
-    request.state = SimpleNamespace(request_id=request_id)
+    request.state = SimpleNamespace(
+        request_context=RequestContext(request_id=request_id, project_name=project_name)
+    )
     return request
 
 
 def _build_service(models=None, providers=None):
     cm = _make_config_manager(models, providers)
-    client = MagicMock(spec=httpx.AsyncClient)
-    return BaseService(cm, client)
+    return BaseService(cm)
 
 
 # ===================================================================
@@ -54,25 +55,31 @@ class TestGetRequestContext:
     def test_with_request_id(self):
         """Request with request_id returns it in context."""
         svc = _build_service()
-        request = _make_request("req-42")
-        auth_data = _make_auth_data(project_name="my-project")
-        ctx = svc._get_request_context(request, auth_data)
+        request = _make_request("req-42", project_name="my-project")
+        ctx = svc._get_request_context(request)
         assert ctx["request_id"] == "req-42"
         assert ctx["user_id"] == "my-project"
 
     def test_without_request_returns_unknown(self):
         """Without request, request_id is 'unknown'."""
         svc = _build_service()
-        auth_data = _make_auth_data(project_name="proj")
-        ctx = svc._get_request_context(None, auth_data)
+        ctx = svc._get_request_context(None)
         assert ctx["request_id"] == "unknown"
+        assert ctx["user_id"] == "unknown"
 
     def test_extracts_user_id_from_project_name(self):
-        """user_id matches the project_name from auth_data."""
+        """user_id matches the project_name from the typed context."""
         svc = _build_service()
-        auth_data = _make_auth_data(project_name="acme-corp")
-        ctx = svc._get_request_context(None, auth_data)
+        request = _make_request("req-1", project_name="acme-corp")
+        ctx = svc._get_request_context(request)
         assert ctx["user_id"] == "acme-corp"
+
+    def test_user_id_unknown_when_project_name_none(self):
+        """user_id is 'unknown' when project_name is not yet set."""
+        svc = _build_service()
+        request = _make_request("req-1", project_name=None)
+        ctx = svc._get_request_context(request)
+        assert ctx["user_id"] == "unknown"
 
 
 # ===================================================================
@@ -214,20 +221,20 @@ class TestGetProvider:
         svc = _build_service()
         provider_config = {"type": "openai", "base_url": "https://api.openai.com"}
 
-        result = svc._get_provider(provider_config)
+        result = svc._get_provider("openai", provider_config)
         assert result is mock_provider
         mock_get.assert_called_once_with(
-            "openai", provider_config, svc.httpx_client, svc.config_manager
+            "openai", provider_config, svc.config_manager
         )
 
     @patch("src.services.base.get_provider_instance")
     def test_invalid_type_raises(self, mock_get):
-        """Invalid provider type raises handle_provider_config_error."""
-        mock_get.side_effect = ValueError("Unknown provider type: bad")
+        """Invalid provider type raises (factory raises HTTPException via create_error)."""
+        mock_get.side_effect = HTTPException(status_code=404, detail="not found")
 
         svc = _build_service()
         provider_config = {"type": "bad"}
 
         with pytest.raises(HTTPException) as exc_info:
-            svc._get_provider(provider_config)
-        assert exc_info.value.status_code == 500
+            svc._get_provider("bad", provider_config)
+        assert exc_info.value.status_code == 404

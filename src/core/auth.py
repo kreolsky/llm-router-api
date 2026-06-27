@@ -3,6 +3,7 @@ import hmac
 from fastapi import Security, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Dict, Any, Tuple, List
+from .context import RequestContext
 from .error_handling import ErrorType, create_error
 from .logging import logger
 
@@ -69,8 +70,14 @@ async def get_api_key(
     allowed_models = config["user_keys"][found_project].get("allowed_models") or []
     allowed_endpoints = config["user_keys"][found_project].get("allowed_endpoints") or []
     
-    # SIDE EFFECT: sets project_name read by downstream handlers
-    request.state.project_name = found_project
+    # SIDE EFFECT: attach project_name to the typed RequestContext read by downstream handlers
+    ctx: RequestContext = getattr(request.state, "request_context", None)
+    if ctx is not None:
+        request.state.request_context = ctx.with_project_name(found_project)
+    else:
+        request.state.request_context = RequestContext(
+            request_id="unknown", project_name=found_project
+        )
 
     logger.info("Authentication successful", extra={
         "auth": {

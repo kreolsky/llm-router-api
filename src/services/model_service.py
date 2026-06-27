@@ -1,116 +1,14 @@
 """Model listing and detail retrieval with dynamic provider enrichment."""
-import httpx
-import os
 import time
 from typing import Dict, Any, Tuple
 
-from fastapi import HTTPException, status
-
-from ..core.config_manager import ConfigManager
 from ..core.logging import logger
 from ..core.error_handling import ErrorType, create_error
+from .base import BaseService
 
-class ModelService:
-    def __init__(self, config_manager: ConfigManager, httpx_client: httpx.AsyncClient):
-        self.config_manager = config_manager
-        self.httpx_client = httpx_client
 
-    async def _get_provider_api_details(self, provider_config: Dict[str, Any]) -> Tuple[str, str, Dict[str, str]]:
-        """Return (base_url, api_key, headers) for a provider.
-
-        Returns (None, None, {}) when base_url is missing — callers must check.
-        """
-        provider_base_url = provider_config.get("base_url")
-        provider_api_key_env = provider_config.get("api_key_env")
-        provider_api_key = os.getenv(provider_api_key_env) if provider_api_key_env else None
-
-        if not provider_base_url:
-            provider_name = provider_config.get('name', 'unknown')
-            logger.warning(f"Missing base_url for provider {provider_name}", extra={
-                "provider_name": provider_name,
-                "error_type": "missing_base_url"
-            })
-            return None, None, {}
-
-        headers = {
-            "Content-Type": "application/json"
-        }
-        if provider_api_key:
-            headers["Authorization"] = f"Bearer {provider_api_key}"
-        if "headers" in provider_config:
-            headers.update(provider_config["headers"])
-        return provider_base_url, provider_api_key, headers
-
-    async def _fetch_provider_models(self, base_url: str, headers: Dict[str, str], client: httpx.AsyncClient) -> Dict[str, Any]:
-        """Fetches models list from a provider's API."""
-        provider_models_list_url = f"{base_url}/models"
-        response = await client.get(provider_models_list_url, headers=headers)
-        response.raise_for_status()
-        return response.json()
-
-    async def _get_model_details_from_provider(self, model_id: str, current_config: Dict[str, Any], client: httpx.AsyncClient) -> Dict[str, Any]:
-        """Fetch live model metadata from provider, returning {} on any error.
-
-        # WHY: provider detail errors are non-fatal; the model response is valid without enrichment.
-        """
-        model_data = current_config.get("models", {}).get(model_id)
-        if not model_data:
-            return {}
-
-        provider_name = model_data.get("provider")
-        provider_model_name = model_data.get("provider_model_name")
-
-        provider_config = current_config.get("providers", {}).get(provider_name)
-        if not provider_config:
-            return {}
-
-        additional_model_details = {}
-        try:
-            base_url, api_key, headers = await self._get_provider_api_details(provider_config)
-            if not base_url:
-                return {}
-
-            provider_models_data = await self._fetch_provider_models(base_url, headers, client)
-                    
-            found_provider_model = None
-            for p_model in provider_models_data.get("data", []):
-                if p_model.get("id") == provider_model_name:
-                    found_provider_model = p_model
-                    break
-            
-            if found_provider_model:
-                additional_model_details["description"] = found_provider_model.get("description")
-                additional_model_details["context_length"] = found_provider_model.get("context_length")
-                additional_model_details["architecture"] = found_provider_model.get("architecture")
-                additional_model_details["pricing"] = found_provider_model.get("pricing")
-            else:
-                logger.warning(f"Provider model '{provider_model_name}' not found in provider's model list for {provider_name}", extra={
-                    "provider_name": provider_name,
-                    "provider_model_name": provider_model_name,
-                    "error_type": "model_not_found_in_provider_list"
-                })
-
-        except httpx.HTTPStatusError as e:
-            logger.error(f"HTTP error fetching model details from provider {provider_name}: {e.response.status_code} - {e.response.text}", extra={
-                "provider_name": provider_name,
-                "error_message": e.response.text,
-                "error_code": f"provider_http_error_{e.response.status_code}",
-                "status_code": e.response.status_code
-            }, exc_info=True)
-        except httpx.RequestError as e:
-            logger.error(f"Network error fetching model details from provider {provider_name}: {e}", extra={
-                "provider_name": provider_name,
-                "error_message": str(e),
-                "error_code": "provider_network_error"
-            }, exc_info=True)
-        except Exception as e:
-            logger.error(f"Unexpected error fetching model details from provider {provider_name}: {e}", extra={
-                "provider_name": provider_name,
-                "error_message": str(e),
-                "error_code": "unexpected_error"
-            }, exc_info=True)
-        
-        return additional_model_details
+class ModelService(BaseService):
+    """Lists models and retrieves single-model details enriched from the provider."""
 
     def _build_model_response(self, model_id: str, **extra_fields) -> Dict[str, Any]:
         """Build a standardized model response object."""
@@ -146,13 +44,52 @@ class ModelService:
         
         models_list = []
         for model_id, model_data in models_config.items():
-            # If is_hidden is true, skip this model
             if model_data.get("is_hidden", False):
                 continue
 
             if not allowed_models or model_id in allowed_models:
                 models_list.append(self._build_model_response(model_id))
         return {"object": "list", "data": models_list}
+
+    async def _get_model_details_from_provider(
+        self,
+        provider_name: str,
+        provider_config: Dict[str, Any],
+        provider_model_name: str,
+        request_id: str = "unknown"
+    ) -> Dict[str, Any]:
+        """Fetch live model metadata via the provider, returning {} on any error.
+
+        # WHY: provider detail errors are non-fatal; the model response is valid without enrichment.
+        """
+        additional_model_details = {}
+        try:
+            provider_instance = self._get_provider(provider_name, provider_config)
+            found_model = await provider_instance.get_model(
+                provider_model_name, request_id=request_id
+            )
+            if found_model:
+                additional_model_details["description"] = found_model.get("description")
+                additional_model_details["context_length"] = found_model.get("context_length")
+                additional_model_details["architecture"] = found_model.get("architecture")
+                additional_model_details["pricing"] = found_model.get("pricing")
+            else:
+                logger.warning(
+                    f"Provider model '{provider_model_name}' not found in provider's model list for {provider_name}",
+                    provider_name=provider_name,
+                    provider_model_name=provider_model_name,
+                    error_type="model_not_found_in_provider_list"
+                )
+        except Exception as e:
+            logger.error(
+                f"Error fetching model details from provider {provider_name}: {e}",
+                provider_name=provider_name,
+                error_message=str(e),
+                error_type="provider_model_detail_error",
+                request_id=request_id,
+                exc_info=True
+            )
+        return additional_model_details
 
     async def retrieve_model(self, model_id: str, auth_data: Tuple[str, str, list, list]) -> Dict[str, Any]:
         """Return model details enriched with live provider metadata."""
@@ -174,7 +111,9 @@ class ModelService:
         if not provider_config:
             raise create_error(ErrorType.PROVIDER_NOT_FOUND, model_id=model_id, provider_name=provider_name)
 
-        additional_model_details = await self._get_model_details_from_provider(model_id, current_config, self.httpx_client)
+        additional_model_details = await self._get_model_details_from_provider(
+            provider_name, provider_config, provider_model_name
+        )
 
         return self._build_model_response(
             model_id,

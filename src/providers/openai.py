@@ -1,5 +1,4 @@
 """OpenAI-compatible provider for chat, embeddings, and transcription."""
-import httpx
 from typing import Dict, Any
 import io
 
@@ -7,8 +6,8 @@ from .base import BaseProvider
 
 
 class OpenAICompatibleProvider(BaseProvider):
-    def __init__(self, config: Dict[str, Any], client: httpx.AsyncClient, config_manager=None):
-        super().__init__(config, client, config_manager)
+    def __init__(self, config: Dict[str, Any], config_manager=None):
+        super().__init__(config, config_manager)
 
     async def chat_completions(self, request_body: Dict[str, Any], provider_model_name: str,
                                model_config: Dict[str, Any], request_id: str = "unknown") -> Any:
@@ -78,3 +77,24 @@ class OpenAICompatibleProvider(BaseProvider):
             timeout=embeddings_timeout,
             request_id=request_id
         )
+
+    async def list_models(self, request_id: str = "unknown") -> Dict[str, Any]:
+        """Return the provider's /models list."""
+        return await self._make_request(
+            method="GET",
+            path="/models",
+            request_id=request_id
+        )
+
+    async def get_model(self, provider_model_name: str, request_id: str = "unknown") -> Dict[str, Any]:
+        """Return a single model's metadata from the provider's /models list.
+
+        Returns {} when the model is not present in the list. Provider errors
+        propagate to the caller (ModelService treats them as non-fatal).
+        """
+        models_data = await self.list_models(request_id=request_id)
+        for model in models_data.get("data", []):
+            if model.get("id") == provider_model_name:
+                return model
+        return {}
+

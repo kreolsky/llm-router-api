@@ -1,37 +1,27 @@
 """Base service with shared validation, provider instantiation, and logging."""
 
-import httpx
-from typing import Dict, Any, Tuple, Optional
+from typing import Dict, Any, Optional, Tuple
 from fastapi import Request
 
 from ..core.config_manager import ConfigManager
+from ..core.context import RequestContext
 from ..providers import get_provider_instance
 from ..core.logging import logger
 from ..core.error_handling import ErrorType, create_error
 
 
 class BaseService:
-    """Common base for ChatService, EmbeddingService, and TranscriptionService."""
+    """Common base for ChatService, EmbeddingService, ModelService, and TranscriptionService."""
 
-    def __init__(self, config_manager: ConfigManager, httpx_client: httpx.AsyncClient):
+    def __init__(self, config_manager: ConfigManager):
         self.config_manager = config_manager
-        self.httpx_client = httpx_client
 
-    def _get_request_context(self, request: Optional[Request], auth_data: Tuple[str, str, list, list]) -> Dict[str, str]:
-        """Extract request_id and user_id from request state and auth_data."""
-        project_name, api_key, allowed_models, _ = auth_data
-
-        if request and hasattr(request.state, 'request_id'):
-            request_id = request.state.request_id
-        else:
-            request_id = "unknown"
-
-        user_id = project_name
-
-        return {
-            "request_id": request_id,
-            "user_id": user_id
-        }
+    def _get_request_context(self, request: Optional[Request]) -> Dict[str, str]:
+        """Extract request_id and user_id from the typed RequestContext."""
+        ctx: Optional[RequestContext] = getattr(request.state, "request_context", None) if request else None
+        if ctx is not None:
+            return {"request_id": ctx.request_id, "user_id": ctx.user_id}
+        return {"request_id": "unknown", "user_id": "unknown"}
 
     def _validate_and_get_config(
         self,
@@ -68,20 +58,16 @@ class BaseService:
 
     def _get_provider(
         self,
+        provider_name: str,
         provider_config: Dict[str, Any],
         **error_context
     ) -> Any:
         """Instantiate a provider from config, raising on invalid type."""
-        try:
-            provider_instance = get_provider_instance(
-                provider_config.get("type"),
-                provider_config,
-                self.httpx_client,
-                self.config_manager
-            )
-            return provider_instance
-        except ValueError as e:
-            raise create_error(ErrorType.PROVIDER_CONFIG_ERROR, original_exception=e, error_details=str(e), **error_context)
+        return get_provider_instance(
+            provider_name,
+            provider_config,
+            self.config_manager
+        )
     
     def _log_service_data(
         self,

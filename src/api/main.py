@@ -4,11 +4,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException, status, Depends, File, Form, UploadFile
 from typing import Optional
 import uvicorn
-import httpx
 from typing import Dict, Any
 
 from ..core.config_manager import ConfigManager
 from ..core.auth import get_api_key, check_endpoint_access
+from ..core.context import RequestContext
 from ..core.error_handling import ErrorType, create_error
 from ..services.chat_service.chat_service import ChatService
 from ..services.model_service import ModelService
@@ -16,7 +16,7 @@ from ..services.embedding_service import EmbeddingService
 from ..services.transcription_service import TranscriptionService
 from ..core.logging import logger
 from ..utils.generate_key import generate_key
-from ..providers import clear_provider_cache
+from ..providers import clear_provider_cache, clear_provider_cache_async, get_provider_instance
 from .middleware import RequestLoggerMiddleware
 
 
@@ -24,32 +24,47 @@ def _client_host(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def _request_context(request: Request) -> RequestContext:
+    """Read the typed RequestContext set by middleware/auth."""
+    return getattr(request.state, "request_context", None) or RequestContext(request_id="unknown")
+
+
+def _validate_providers(config_manager: ConfigManager) -> None:
+    """Eager validation: instantiate every configured provider (fail-fast).
+
+    Collects all failures so operators can fix multiple issues at once.
+    """
+    config = config_manager.get_config()
+    providers = config.get("providers", {})
+    errors = []
+    for provider_name, provider_config in providers.items():
+        try:
+            get_provider_instance(provider_name, provider_config, config_manager)
+        except Exception as e:
+            errors.append(f"  - {provider_name}: {e}")
+    if errors:
+        joined = "\n".join(errors)
+        raise RuntimeError(
+            f"Provider validation failed; refusing to start:\n{joined}"
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize ConfigManager, httpx pool, and all services; tear down on shutdown."""
+    """Initialize ConfigManager, validate providers, and all services; tear down on shutdown."""
     config_manager = ConfigManager()
     app.state.config_manager = config_manager
+
+    # ARCH: eager validation — fail fast on bad provider config / missing env keys.
+    _validate_providers(config_manager)
+
     config_manager.add_reload_callback(clear_provider_cache)
     reload_task = config_manager.start_reloader_task()
 
-    limits = httpx.Limits(
-        max_connections=config_manager.httpx_max_connections,
-        max_keepalive_connections=config_manager.httpx_max_keepalive_connections
-    )
-    app.state.httpx_client = httpx.AsyncClient(
-        limits=limits,
-        timeout=httpx.Timeout(
-            connect=config_manager.httpx_connect_timeout,
-            read=config_manager.httpx_read_timeout,
-            write=None,
-            pool=config_manager.httpx_pool_timeout
-        )
-    )
-
-    app.state.model_service = ModelService(config_manager, app.state.httpx_client)
-    app.state.chat_service = ChatService(config_manager, app.state.httpx_client, app.state.model_service)
-    app.state.embedding_service = EmbeddingService(config_manager, app.state.httpx_client)
-    app.state.transcription_service = TranscriptionService(config_manager, app.state.httpx_client, app.state.model_service)
+    app.state.model_service = ModelService(config_manager)
+    app.state.chat_service = ChatService(config_manager, app.state.model_service)
+    app.state.embedding_service = EmbeddingService(config_manager)
+    app.state.transcription_service = TranscriptionService(config_manager, app.state.model_service)
 
     yield
 
@@ -58,7 +73,8 @@ async def lifespan(app: FastAPI):
         await reload_task
     except asyncio.CancelledError:
         pass
-    await app.state.httpx_client.aclose()
+    # Close every provider-owned pool on shutdown (awaited so pools drain).
+    await clear_provider_cache_async()
 
 app = FastAPI(lifespan=lifespan)
 
@@ -121,22 +137,9 @@ async def create_transcription(
     return_timestamps: Optional[bool] = Form(False),
     auth_data: tuple = Depends(check_endpoint_access("/v1/audio/transcriptions"))
 ):
-    request_id = getattr(request.state, 'request_id', 'unknown')
-    user_id = getattr(request.state, 'project_name', 'unknown')
-
-    logger.info(
-        f"Request: Transcription | model={model}",
-        request_id=request_id,
-        user_id=user_id,
-        method=request.method,
-        url=str(request.url),
-        client_host=_client_host(request),
-        model=model,
-        response_format=response_format,
-        temperature=temperature,
-        language=language,
-        return_timestamps=return_timestamps
-    )
+    ctx = _request_context(request)
+    request_id = ctx.request_id
+    user_id = ctx.user_id
 
     logger.debug_data(
         title="Transcription Request Headers",
@@ -155,15 +158,12 @@ async def create_transcription(
 
     logger.info(
         "Transcription file received",
-        extra={
-            "log_type": "request",
-            "request_id": request_id,
-            "user_id": user_id,
-            "file_details": {
-                "filename": uploaded_file.filename,
-                "content_type": uploaded_file.content_type,
-                "size": uploaded_file.size if hasattr(uploaded_file, 'size') else 'unknown'
-            }
+        request_id=request_id,
+        user_id=user_id,
+        file_details={
+            "filename": uploaded_file.filename,
+            "content_type": uploaded_file.content_type,
+            "size": uploaded_file.size if hasattr(uploaded_file, 'size') else 'unknown'
         }
     )
 
@@ -183,19 +183,17 @@ async def generate_key_endpoint(
     request: Request,
     auth_data: tuple = Depends(check_endpoint_access("/tools/generate_key"))
 ):
-    request_id = getattr(request.state, 'request_id', 'unknown')
-    user_id = getattr(request.state, 'project_name', 'unknown')
+    ctx = _request_context(request)
+    request_id = ctx.request_id
+    user_id = ctx.user_id
 
     logger.info(
         "Key generation request received",
-        extra={
-            "log_type": "request",
-            "request_id": request_id,
-            "user_id": user_id,
-            "method": request.method,
-            "url": str(request.url),
-            "client_host": _client_host(request)
-        }
+        request_id=request_id,
+        user_id=user_id,
+        method=request.method,
+        url=str(request.url),
+        client_host=_client_host(request)
     )
 
     key = generate_key()

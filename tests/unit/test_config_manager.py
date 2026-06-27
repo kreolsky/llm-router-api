@@ -221,10 +221,55 @@ class TestPropertyGetters:
         with patch.dict("os.environ", {"CONFIG_RELOAD_INTERVAL": "10"}, clear=True):
             assert cm.config_reload_interval == 10
 
+    def test_stream_read_timeout_default(self):
+        """stream_read_timeout defaults to 300.0."""
+        cm = _build_config_manager()
+        with patch.dict("os.environ", {}, clear=True):
+            assert cm.stream_read_timeout == 300.0
+
+    def test_stream_read_timeout_from_env(self):
+        """stream_read_timeout reads from env as float."""
+        cm = _build_config_manager()
+        with patch.dict("os.environ", {"STREAM_READ_TIMEOUT": "600"}, clear=True):
+            assert cm.stream_read_timeout == 600.0
+
+    def test_default_stt_model_default(self):
+        """default_stt_model defaults to stt/dummy."""
+        cm = _build_config_manager()
+        with patch.dict("os.environ", {}, clear=True):
+            assert cm.default_stt_model == "stt/dummy"
+
+    def test_default_stt_model_from_env(self):
+        """default_stt_model reads from env."""
+        cm = _build_config_manager()
+        with patch.dict("os.environ", {"DEFAULT_STT_MODEL": "stt/custom"}, clear=True):
+            assert cm.default_stt_model == "stt/custom"
+
 
 # ===================================================================
-# should_sanitize_messages
+# _assert_config_complete (fail-fast validation)
 # ===================================================================
+
+class TestAssertConfigComplete:
+
+    def test_empty_section_raises(self):
+        """Empty providers section raises RuntimeError (fail-fast)."""
+        from src.core.config_manager import ConfigManager
+        with pytest.raises(RuntimeError, match="missing or empty"):
+            ConfigManager._assert_config_complete({"providers": {}, "models": {"m": {}}, "user_keys": {"k": {}}})
+
+    def test_missing_section_raises(self):
+        """Missing user_keys section raises RuntimeError."""
+        from src.core.config_manager import ConfigManager
+        with pytest.raises(RuntimeError, match="user_keys"):
+            ConfigManager._assert_config_complete({"providers": {"p": {}}, "models": {"m": {}}})
+
+    def test_complete_config_passes(self):
+        """All three non-empty sections pass validation."""
+        from src.core.config_manager import ConfigManager
+        ConfigManager._assert_config_complete(
+            {"providers": {"p": {}}, "models": {"m": {}}, "user_keys": {"k": {}}}
+        )
 
 class TestShouldSanitizeMessages:
 

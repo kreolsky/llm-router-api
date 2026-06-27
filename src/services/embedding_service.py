@@ -1,5 +1,4 @@
 """Embedding creation service proxying requests to configured providers."""
-import httpx
 import json
 from typing import Dict, Any, Tuple
 
@@ -15,12 +14,12 @@ from .base import BaseService
 class EmbeddingService(BaseService):
     """Proxies embedding requests to the configured provider."""
 
-    def __init__(self, config_manager: ConfigManager, httpx_client: httpx.AsyncClient):
-        super().__init__(config_manager, httpx_client)
+    def __init__(self, config_manager: ConfigManager):
+        super().__init__(config_manager)
 
     async def create_embeddings(self, request: Request, auth_data: Tuple[str, str, list, list]) -> Any:
         """Validate, dispatch, and return an embedding creation request."""
-        context_dict = self._get_request_context(request, auth_data)
+        context_dict = self._get_request_context(request)
         request_id = context_dict["request_id"]
         user_id = context_dict["user_id"]
         
@@ -42,17 +41,10 @@ class EmbeddingService(BaseService):
             data_flow="incoming"
         )
 
-        logger.info(
-            f"Request: Embedding Creation | model={requested_model}",
-            request_id=request_id,
-            user_id=user_id,
-            model_id=requested_model
-        )
-
         model_config, provider_name, provider_model_name, provider_config = \
             self._validate_and_get_config(requested_model, auth_data, **error_ctx)
 
-        provider_instance = self._get_provider(provider_config, **error_ctx)
+        provider_instance = self._get_provider(provider_name, provider_config, **error_ctx)
         
         try:
             response_data = await provider_instance.embeddings(

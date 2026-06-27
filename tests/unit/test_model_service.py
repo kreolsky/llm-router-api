@@ -1,8 +1,7 @@
 """Unit tests for src/services/model_service.py — ModelService class."""
 
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import MagicMock, AsyncMock, patch
 
-import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -31,8 +30,7 @@ def _build_service(models=None, providers=None):
     """Build a ModelService with a mocked ConfigManager."""
     cm = MagicMock()
     cm.get_config.return_value = _make_config(models, providers)
-    client = MagicMock(spec=httpx.AsyncClient)
-    return ModelService(cm, client)
+    return ModelService(cm)
 
 
 # Sample model configs used across tests
@@ -222,3 +220,35 @@ class TestRetrieveModel:
         with pytest.raises(HTTPException) as exc_info:
             await svc.retrieve_model("orphan", auth_data)
         assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_enrichment_routed_through_provider(self):
+        """Enrichment resolves the provider via the cache and calls get_model."""
+        svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS)
+        mock_provider = MagicMock()
+        mock_provider.get_model = AsyncMock(return_value={
+            "id": "a-real", "context_length": 8192,
+            "description": "desc", "architecture": {}, "pricing": {}
+        })
+        with patch("src.services.base.get_provider_instance", return_value=mock_provider):
+            result = await svc.retrieve_model(
+                "model-a", _make_auth_data(allowed_models=[])
+            )
+        mock_provider.get_model.assert_awaited_once()
+        assert result["context_length"] == 8192
+        assert result["description"] == "desc"
+
+    @pytest.mark.asyncio
+    async def test_enrichment_best_effort_on_provider_error(self):
+        """Provider error during enrichment is non-fatal → empty enrichment, no 5xx."""
+        svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS)
+        mock_provider = MagicMock()
+        mock_provider.get_model = AsyncMock(side_effect=RuntimeError("provider down"))
+        with patch("src.services.base.get_provider_instance", return_value=mock_provider):
+            result = await svc.retrieve_model(
+                "model-a", _make_auth_data(allowed_models=[])
+            )
+        # Enrichment fields absent but response still valid
+        assert result["id"] == "model-a"
+        assert result["provider"] == "prov-a"
+        assert "context_length" not in result

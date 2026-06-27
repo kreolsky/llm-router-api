@@ -41,7 +41,10 @@ def _make_config(base_url="https://api.example.com", api_key_env="TEST_API_KEY",
 
 def _build_provider(base_url="https://api.example.com", api_key_env="TEST_API_KEY",
                      env_vars=None, config_manager=None, headers=None):
-    """Build a TestProvider with mocked env and client."""
+    """Build a TestProvider with mocked env.
+
+    The provider owns its own httpx.AsyncClient (built in __init__).
+    """
     config = {"base_url": base_url}
     if api_key_env is not None:
         config["api_key_env"] = api_key_env
@@ -52,11 +55,8 @@ def _build_provider(base_url="https://api.example.com", api_key_env="TEST_API_KE
     if env_vars is not None:
         env.update(env_vars)
 
-    client = MagicMock(spec=httpx.AsyncClient)
-    client.timeout = httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=10.0)
-
     with patch.dict("os.environ", env, clear=False):
-        provider = TestProvider(config, client, config_manager=config_manager)
+        provider = TestProvider(config, config_manager=config_manager)
     return provider
 
 
@@ -195,26 +195,23 @@ class TestBaseProviderInit:
     def test_missing_base_url_raises(self):
         """Missing base_url raises HTTPException."""
         config = {"api_key_env": "TEST_API_KEY"}
-        client = MagicMock(spec=httpx.AsyncClient)
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False):
             with pytest.raises(HTTPException) as exc_info:
-                TestProvider(config, client)
+                TestProvider(config)
         assert exc_info.value.status_code == 500
 
     def test_missing_api_key_env_var_raises(self):
         """Missing API key env var raises HTTPException."""
         config = {"base_url": "https://api.example.com", "api_key_env": "MISSING_KEY"}
-        client = MagicMock(spec=httpx.AsyncClient)
         with patch.dict("os.environ", {}, clear=True):
             with pytest.raises(HTTPException) as exc_info:
-                TestProvider(config, client)
+                TestProvider(config)
         assert exc_info.value.status_code == 500
 
     def test_no_api_key_env_no_error(self):
         """No api_key_env in config means no Authorization header, no error."""
         config = {"base_url": "https://api.example.com"}
-        client = MagicMock(spec=httpx.AsyncClient)
-        provider = TestProvider(config, client)
+        provider = TestProvider(config)
         assert "Authorization" not in provider.headers
         assert provider.api_key is None
 
@@ -271,7 +268,8 @@ class TestGetTimeout:
         """With config_manager having the attr, returns config value."""
         cm = MagicMock()
         cm.openai_connect_timeout = 42.0
-        provider = _build_provider(config_manager=cm)
+        provider = _build_provider(config_manager=None)
+        provider.config_manager = cm
         assert provider._get_timeout("openai_connect_timeout", 10.0) == 42.0
 
     def test_without_config_manager(self):
@@ -282,7 +280,8 @@ class TestGetTimeout:
     def test_config_manager_missing_attr(self):
         """config_manager exists but lacks the attribute, returns default."""
         cm = MagicMock(spec=[])  # empty spec, no attributes
-        provider = _build_provider(config_manager=cm)
+        provider = _build_provider(config_manager=None)
+        provider.config_manager = cm
         assert provider._get_timeout("nonexistent_timeout", 99.0) == 99.0
 
 
@@ -368,11 +367,117 @@ class TestCreateTimeout:
         assert timeout.pool == 4.0
 
     def test_inherits_connect_pool_from_client(self):
-        """Inherits connect/pool from client when not specified."""
+        """Inherits connect/pool from the owned client when not specified."""
         provider = _build_provider()
-        # Client timeout has connect=5.0, pool=10.0
+        client_timeout = provider.client.timeout
         timeout = provider._create_timeout(read=99.0)
-        assert timeout.connect == 5.0  # from client
-        assert timeout.pool == 10.0    # from client
+        assert timeout.connect == client_timeout.connect
+        assert timeout.pool == client_timeout.pool
         assert timeout.read == 99.0
         assert timeout.write is None   # default when not specified
+
+
+# ===================================================================
+# Client ownership & aclose
+# ===================================================================
+
+class TestClientOwnership:
+
+    def test_provider_owns_real_client(self):
+        """Provider constructs its own httpx.AsyncClient on init."""
+        provider = _build_provider()
+        assert isinstance(provider.client, httpx.AsyncClient)
+        assert not provider.client.is_closed
+
+    def test_client_limits_from_config_manager(self):
+        """Client timeout config is derived from config_manager env-backed properties."""
+        cm = MagicMock()
+        cm.httpx_max_connections = 42
+        cm.httpx_max_keepalive_connections = 7
+        cm.httpx_connect_timeout = 12.0
+        cm.httpx_read_timeout = 33.0
+        cm.httpx_pool_timeout = 4.0
+        provider = _build_provider(config_manager=cm)
+        assert provider.client.timeout.connect == 12.0
+        assert provider.client.timeout.read == 33.0
+        assert provider.client.timeout.pool == 4.0
+
+    @pytest.mark.asyncio
+    async def test_aclose_closes_client(self):
+        """aclose() closes the owned client."""
+        provider = _build_provider()
+        await provider.aclose()
+        assert provider.client.is_closed
+
+    @pytest.mark.asyncio
+    async def test_aclose_idempotent(self):
+        """aclose() is safe to call multiple times."""
+        provider = _build_provider()
+        await provider.aclose()
+        await provider.aclose()  # no error
+        assert provider.client.is_closed
+
+
+# ===================================================================
+# list_models / get_model
+# ===================================================================
+
+from src.providers.openai import OpenAICompatibleProvider
+
+
+def _build_openai_provider(config_manager=None):
+    config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY"}
+    with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
+        return OpenAICompatibleProvider(config, config_manager=config_manager)
+
+
+class TestListModels:
+
+    @pytest.mark.asyncio
+    async def test_list_models_happy_path(self):
+        """list_models calls GET /models and returns the JSON body."""
+        provider = _build_openai_provider()
+        provider._make_request = AsyncMock(return_value={"data": [{"id": "gpt-4"}]})
+        result = await provider.list_models(request_id="req-1")
+        provider._make_request.assert_called_once_with(
+            method="GET", path="/models", request_id="req-1"
+        )
+        assert result == {"data": [{"id": "gpt-4"}]}
+
+    @pytest.mark.asyncio
+    async def test_list_maps_provider_error(self):
+        """list_models propagates provider errors via _make_request."""
+        provider = _build_openai_provider()
+        provider._make_request = AsyncMock(side_effect=HTTPException(status_code=502, detail="bad"))
+        with pytest.raises(HTTPException) as exc_info:
+            await provider.list_models(request_id="req-1")
+        assert exc_info.value.status_code == 502
+
+
+class TestGetModel:
+
+    @pytest.mark.asyncio
+    async def test_get_model_found(self):
+        """get_model returns the matching model metadata."""
+        provider = _build_openai_provider()
+        provider.list_models = AsyncMock(return_value={
+            "data": [{"id": "gpt-4", "context_length": 8192}]
+        })
+        result = await provider.get_model("gpt-4", request_id="req-1")
+        assert result == {"id": "gpt-4", "context_length": 8192}
+
+    @pytest.mark.asyncio
+    async def test_get_model_not_found_returns_empty(self):
+        """get_model returns {} when the model is not in the provider list."""
+        provider = _build_openai_provider()
+        provider.list_models = AsyncMock(return_value={"data": [{"id": "other"}]})
+        result = await provider.get_model("gpt-4", request_id="req-1")
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_get_model_provider_error_propagates(self):
+        """get_model propagates errors from list_models."""
+        provider = _build_openai_provider()
+        provider.list_models = AsyncMock(side_effect=httpx.ConnectError("boom"))
+        with pytest.raises(httpx.ConnectError):
+            await provider.get_model("gpt-4", request_id="req-1")
