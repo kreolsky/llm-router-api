@@ -1,4 +1,5 @@
 """Embedding creation service proxying requests to configured providers."""
+import asyncio
 import json
 from typing import Dict, Any, Tuple
 
@@ -69,6 +70,22 @@ class EmbeddingService(BaseService):
                     "total_tokens": response_data.get("usage", {}).get("total_tokens", 0)
                 }
             )
+
+            usage = response_data.get("usage", {})
+            if usage:
+                from ..core.usage_db import record_usage
+                asyncio.create_task(record_usage(
+                    project_name=user_id,
+                    model_id=requested_model,
+                    endpoint="embeddings",
+                    prompt_tokens=usage.get("prompt_tokens", 0),
+                    completion_tokens=0,
+                    cached_tokens=0,
+                    total_tokens=usage.get("total_tokens", 0),
+                    request_id=request_id,
+                    provider_name=provider_name,
+                ))
+
             return JSONResponse(content=response_data)
             
         except HTTPException as e:

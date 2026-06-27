@@ -1,7 +1,9 @@
 """Chat completion orchestrator: validation, provider dispatch, streaming."""
 
+import asyncio
 import inspect
 import json
+import time
 from typing import Dict, Any, Tuple
 from fastapi import HTTPException, status, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -28,6 +30,8 @@ class ChatService(BaseService):
         context_dict = self._get_request_context(request)
         request_id = context_dict["request_id"]
         user_id = context_dict["user_id"]
+
+        start_time = time.time()
 
         try:
             request_body = await request.json()
@@ -99,7 +103,24 @@ class ChatService(BaseService):
                     component="chat_service",
                     data_flow="from_provider"
                 )
-                
+
+                usage = response_data.get("usage", {})
+                if usage:
+                    from ...core.usage_db import record_usage
+                    duration_ms = (time.time() - start_time) * 1000
+                    asyncio.create_task(record_usage(
+                        project_name=user_id,
+                        model_id=requested_model,
+                        endpoint="chat",
+                        prompt_tokens=usage.get("prompt_tokens", 0),
+                        completion_tokens=usage.get("completion_tokens", 0),
+                        cached_tokens=usage.get("prompt_tokens_details", {}).get("cached_tokens", 0),
+                        total_tokens=usage.get("total_tokens", 0),
+                        request_id=request_id,
+                        provider_name=provider_name,
+                        duration_ms=duration_ms,
+                    ))
+
                 return JSONResponse(content=response_data)
 
         except HTTPException as e:

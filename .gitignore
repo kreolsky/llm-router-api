@@ -23,6 +23,7 @@ logs/
 .DS_Store
 *.sqlite3
 *.db
+data/
 _help
 TODO.md
 

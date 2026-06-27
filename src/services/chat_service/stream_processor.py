@@ -15,6 +15,7 @@ class StreamProcessor:
     def __init__(self, config_manager=None):
         self.config_manager = config_manager
         self.should_sanitize = self._determine_sanitization_status()
+        self._captured_usage = None
         
         self._message_sanitizer = None
         if self.should_sanitize:
@@ -67,6 +68,7 @@ class StreamProcessor:
         UTF-8 split handling: if a multi-byte character is split at a chunk boundary,
         the partial bytes are buffered until the next chunk completes them.
         """
+        self._captured_usage = None
         start_time = time.time()
         chunk_count = 0
         sanitized_count = 0
@@ -95,12 +97,27 @@ class StreamProcessor:
 
                     yield chunk
 
+                    if b'"usage"' in chunk and b'"prompt_tokens"' in chunk:
+                        try:
+                            text = chunk.decode('utf-8')
+                            for line in text.split('\n'):
+                                if line.startswith('data: ') and line != 'data: [DONE]':
+                                    data = json.loads(line[6:])
+                                    if 'usage' in data:
+                                        self._captured_usage = data['usage']
+                        except Exception:
+                            pass
+
                 duration = time.time() - start_time
                 logger.info("Stream completed (transparent)", extra={
                     "request_id": request_id,
                     "duration": round(duration, 3),
                     "total_bytes": bytes_processed
                 })
+                if self._captured_usage:
+                    await _record_stream_usage(
+                        self._captured_usage, request_id, user_id, model_id, start_time
+                    )
                 return
 
             async for chunk in provider_stream:
@@ -188,6 +205,10 @@ class StreamProcessor:
                 "total_bytes": bytes_processed,
                 "sanitized_messages": sanitized_count
             })
+            if self._captured_usage:
+                await _record_stream_usage(
+                    self._captured_usage, request_id, user_id, model_id, start_time
+                )
 
         except Exception as e:
             end_time = time.time()
@@ -222,6 +243,8 @@ class StreamProcessor:
             
         try:
             chunk_data = json.loads(json_str)
+            if 'usage' in chunk_data:
+                self._captured_usage = chunk_data['usage']
             logger.debug(f"JSON parsed successfully", extra={
                 "request_id": request_id,
                 "keys": list(chunk_data.keys())
@@ -271,3 +294,22 @@ class StreamProcessor:
         # WHY: many OpenAI-compatible clients block until they see [DONE]; an
         # error frame alone leaves them waiting until the read timeout fires
         return f"data: {json.dumps(error_payload)}\n\ndata: [DONE]\n\n".encode('utf-8')
+
+
+async def _record_stream_usage(usage, request_id, user_id, model_id, start_time):
+    from ...core.usage_db import record_usage
+    prompt_tokens = usage.get("prompt_tokens", 0)
+    completion_tokens = usage.get("completion_tokens", 0)
+    cached_tokens = usage.get("prompt_tokens_details", {}).get("cached_tokens", 0)
+    duration_ms = (time.time() - start_time) * 1000
+    await record_usage(
+        project_name=user_id,
+        model_id=model_id,
+        endpoint="chat",
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        cached_tokens=cached_tokens,
+        total_tokens=usage.get("total_tokens", 0),
+        request_id=request_id,
+        duration_ms=duration_ms,
+    )

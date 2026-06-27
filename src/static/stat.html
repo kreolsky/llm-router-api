@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Token Usage Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<link rel="stylesheet" href="/stat/static/stat.css">
+</head>
+<body>
+<h1>Token Usage Dashboard</h1>
+<div class="grid">
+  <div class="sidebar">
+    <h2>Users</h2>
+    <div id="user-btns" style="margin-bottom:6px">
+      <button onclick="selectAll('user')">All</button>
+      <button onclick="deselectAll('user')">None</button>
+    </div>
+    <div id="user-list"></div>
+  </div>
+  <div class="sidebar">
+    <h2>Models</h2>
+    <div id="model-btns" style="margin-bottom:6px">
+      <button onclick="selectAll('model')">All</button>
+      <button onclick="deselectAll('model')">None</button>
+    </div>
+    <div id="model-list"></div>
+  </div>
+  <div class="main">
+    <div class="period-bar">
+      <button data-days="7">7d</button>
+      <button data-days="30" class="active">30d</button>
+      <button data-days="90">90d</button>
+      <button data-days="">All</button>
+    </div>
+    <div class="chart-wrap">
+      <div id="status" class="loader">Loading data...</div>
+      <canvas id="chart" style="display:none"></canvas>
+    </div>
+  </div>
+</div>
+<script src="/stat/static/stat.js"></script>
+</body>
+</html>

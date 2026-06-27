@@ -1,0 +1,18 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0d1117; color: #c9d1d9; padding: 20px; min-height: 100vh; }
+h1 { font-size: 1.4rem; margin-bottom: 16px; color: #f0f6fc; }
+.grid { display: grid; grid-template-columns: 200px 200px 1fr; gap: 16px; align-items: start; }
+.sidebar { background: #161b22; padding: 12px; border: 1px solid #30363d; border-radius: 0; }
+.sidebar h2 { font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px; color: #8b949e; margin-bottom: 8px; }
+.sidebar label { display: block; padding: 3px 0; cursor: pointer; font-size: 0.85rem; color: #c9d1d9; }
+.sidebar input[type="checkbox"] { margin-right: 6px; accent-color: #58a6ff; }
+.sidebar button { display: inline-block; background: #21262d; color: #c9d1d9; border: 1px solid #30363d; padding: 4px 10px; cursor: pointer; font-size: 0.75rem; margin: 2px; border-radius: 0; }
+.sidebar button:hover { background: #30363d; }
+.main { background: #161b22; padding: 16px; border: 1px solid #30363d; border-radius: 0; }
+.period-bar { margin-bottom: 12px; display: flex; gap: 4px; }
+.period-bar button { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; padding: 6px 16px; cursor: pointer; font-size: 0.8rem; border-radius: 0; }
+.period-bar button:hover { background: #30363d; }
+.period-bar button.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+.chart-wrap { position: relative; width: 100%; height: 500px; }
+.loader { text-align: center; padding: 40px; color: #8b949e; }
+.error { color: #f85149; padding: 10px; }

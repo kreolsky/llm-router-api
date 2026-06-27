@@ -2,6 +2,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException, status, Depends, File, Form, UploadFile
+from fastapi.staticfiles import StaticFiles
 from typing import Optional
 import uvicorn
 from typing import Dict, Any
@@ -66,6 +67,9 @@ async def lifespan(app: FastAPI):
     app.state.embedding_service = EmbeddingService(config_manager)
     app.state.transcription_service = TranscriptionService(config_manager, app.state.model_service)
 
+    from ..core.usage_db import init_db, close_db
+    await init_db()
+
     yield
 
     reload_task.cancel()
@@ -75,8 +79,10 @@ async def lifespan(app: FastAPI):
         pass
     # Close every provider-owned pool on shutdown (awaited so pools drain).
     await clear_provider_cache_async()
+    await close_db()
 
 app = FastAPI(lifespan=lifespan)
+app.mount("/stat/static", StaticFiles(directory="src/static"), name="stat_static")
 
 from fastapi.responses import JSONResponse
 
@@ -203,6 +209,33 @@ async def generate_key_endpoint(
         request_id=request_id
     )
     return {"key": key}
+
+
+@app.get("/stat/")
+async def stat_dashboard(request: Request):
+    from .stat_page import stat_page
+    return await stat_page(request)
+
+
+@app.get("/stat/api/users")
+async def stat_users():
+    from ..core.usage_db import get_distinct_users
+    return await get_distinct_users()
+
+
+@app.get("/stat/api/models")
+async def stat_models():
+    from ..core.usage_db import get_distinct_models
+    return await get_distinct_models()
+
+
+@app.get("/stat/api/usage")
+async def stat_usage(users: str = "", models: str = "", days: str = ""):
+    from ..core.usage_db import get_usage_data
+    user_list = [u.strip() for u in users.split(",") if u.strip()] if users else []
+    model_list = [m.strip() for m in models.split(",") if m.strip()] if models else []
+    days_int = int(days) if days else None
+    return await get_usage_data(user_list, model_list, days_int)
 
 
 if __name__ == "__main__":
