@@ -41,6 +41,7 @@ class ModelService(BaseService):
         _, _, allowed_models, _ = auth_data
         current_config = self.config_manager.get_config()
         models_config = current_config.get("models", {})
+        model_info_config = current_config.get("model_info", {})
         
         models_list = []
         for model_id, model_data in models_config.items():
@@ -48,7 +49,8 @@ class ModelService(BaseService):
                 continue
 
             if not allowed_models or model_id in allowed_models:
-                models_list.append(self._build_model_response(model_id))
+                model_info = model_info_config.get(model_id) or {}
+                models_list.append(self._build_model_response(model_id, **model_info))
         return {"object": "list", "data": models_list}
 
     async def _get_model_details_from_provider(
@@ -111,9 +113,14 @@ class ModelService(BaseService):
         if not provider_config:
             raise create_error(ErrorType.PROVIDER_NOT_FOUND, model_id=model_id, provider_name=provider_name)
 
+        model_info_config = current_config.get("model_info", {})
+        model_info = model_info_config.get(model_id) or {}
+
         additional_model_details = await self._get_model_details_from_provider(
             provider_name, provider_config, provider_model_name
         )
+
+        merged_details = {**additional_model_details, **model_info}
 
         return self._build_model_response(
             model_id,
@@ -121,5 +128,5 @@ class ModelService(BaseService):
             provider_model_name=provider_model_name,
             params=model_data.get("params"),
             options=model_data.get("options"),
-            **additional_model_details
+            **merged_details
         )

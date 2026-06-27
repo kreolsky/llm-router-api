@@ -11,6 +11,7 @@ class ConfigManager:
         self.providers_path = os.path.join(config_dir, "providers.yaml")
         self.models_path = os.path.join(config_dir, "models.yaml")
         self.user_keys_path = os.path.join(config_dir, "user_keys.yaml")
+        self.model_info_path = os.path.join(config_dir, "model_info.yaml")
         self.config = self._load_config(fail_on_error=True)
         self._assert_config_complete(self.config)
         self.last_mtimes = {} # Initialize last_mtimes as instance variable
@@ -39,7 +40,8 @@ class ConfigManager:
                 "sanitize_messages": self.sanitize_messages,
                 "providers_config_exists": os.path.exists(self.providers_path),
                 "models_config_exists": os.path.exists(self.models_path),
-                "user_keys_config_exists": os.path.exists(self.user_keys_path)
+                "user_keys_config_exists": os.path.exists(self.user_keys_path),
+                "model_info_config_exists": os.path.exists(self.model_info_path)
             }
         })
 
@@ -47,21 +49,22 @@ class ConfigManager:
         """Load and merge all YAML config files."""
         config = {}
         file_map = [
-            (self.providers_path, 'providers'),
-            (self.models_path, 'models'),
-            (self.user_keys_path, 'user_keys'),
+            (self.providers_path, 'providers', True),
+            (self.models_path, 'models', True),
+            (self.user_keys_path, 'user_keys', True),
+            (self.model_info_path, 'model_info', False),
         ]
-        for path, key in file_map:
+        for path, key, required in file_map:
             try:
                 with open(path, 'r') as f:
                     config[key] = (yaml.safe_load(f) or {}).get(key, {})
             except FileNotFoundError as e:
                 logger.error(f"Configuration file not found: {path}")
-                if fail_on_error:
+                if fail_on_error and required:
                     raise RuntimeError(f"Critical config file missing: {path}") from e
             except yaml.YAMLError as e:
                 logger.error(f"Error parsing YAML file {path}: {e}", exc_info=True)
-                if fail_on_error:
+                if fail_on_error and required:
                     raise RuntimeError(f"Failed to parse config: {path}") from e
         return config
 
@@ -180,6 +183,7 @@ class ConfigManager:
             self.providers_path,
             self.models_path,
             self.user_keys_path,
+            self.model_info_path,
         ]
         for fpath in config_files:
             try:
@@ -196,6 +200,7 @@ class ConfigManager:
                     self.providers_path,
                     self.models_path,
                     self.user_keys_path,
+                    self.model_info_path,
                 ]
                 for fpath in config_files:
                     try:

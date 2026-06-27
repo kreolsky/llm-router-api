@@ -18,18 +18,21 @@ def _make_auth_data(project_name="test-project", api_key="sk-123",
     return (project_name, api_key, allowed_models or [], allowed_endpoints or [])
 
 
-def _make_config(models=None, providers=None):
+def _make_config(models=None, providers=None, model_info=None):
     """Return a config dict suitable for ConfigManager.get_config()."""
-    return {
+    result = {
         "models": models or {},
         "providers": providers or {},
     }
+    if model_info:
+        result["model_info"] = model_info
+    return result
 
 
-def _build_service(models=None, providers=None):
+def _build_service(models=None, providers=None, model_info=None):
     """Build a ModelService with a mocked ConfigManager."""
     cm = MagicMock()
-    cm.get_config.return_value = _make_config(models, providers)
+    cm.get_config.return_value = _make_config(models, providers, model_info)
     return ModelService(cm)
 
 
@@ -151,6 +154,54 @@ class TestListModels:
         assert result["data"] == []
 
 
+    @pytest.mark.asyncio
+    async def test_model_info_passthrough_in_list(self):
+        """model_info fields from catalog are included in list response."""
+        model_info = {
+            "model-a": {"description": "desc-a", "context_length": 8192, "pricing": {"completion": 0.001}},
+        }
+        svc = _build_service(models=SAMPLE_MODELS, model_info=model_info)
+        auth_data = _make_auth_data(allowed_models=[])
+
+        result = await svc.list_models(auth_data)
+
+        model_a = next(m for m in result["data"] if m["id"] == "model-a")
+        assert model_a["description"] == "desc-a"
+        assert model_a["context_length"] == 8192
+        assert model_a["pricing"] == {"completion": 0.001}
+        # model-b has no info entry → no extra fields
+        model_b = next(m for m in result["data"] if m["id"] == "model-b")
+        assert "description" not in model_b
+
+    @pytest.mark.asyncio
+    async def test_model_info_reasoning_in_list(self):
+        """reasoning field from catalog is included in list response."""
+        model_info = {
+            "model-b": {
+                "reasoning": {"supported": True, "default_enabled": False, "supported_efforts": ["high"]}
+            },
+        }
+        svc = _build_service(models=SAMPLE_MODELS, model_info=model_info)
+        auth_data = _make_auth_data(allowed_models=[])
+
+        result = await svc.list_models(auth_data)
+
+        model_b = next(m for m in result["data"] if m["id"] == "model-b")
+        assert model_b["reasoning"] == {"supported": True, "default_enabled": False, "supported_efforts": ["high"]}
+
+    @pytest.mark.asyncio
+    async def test_model_info_empty_catalog_no_crash(self):
+        """No model_info in config → no extra fields, no crash."""
+        svc = _build_service(models=SAMPLE_MODELS)
+        auth_data = _make_auth_data(allowed_models=[])
+
+        result = await svc.list_models(auth_data)
+
+        for model in result["data"]:
+            assert "description" not in model
+            assert "context_length" not in model
+
+
 # ===================================================================
 # retrieve_model
 # ===================================================================
@@ -237,6 +288,23 @@ class TestRetrieveModel:
         mock_provider.get_model.assert_awaited_once()
         assert result["context_length"] == 8192
         assert result["description"] == "desc"
+
+    @pytest.mark.asyncio
+    async def test_model_info_overrides_provider_enrichment(self):
+        """Catalog model_info takes priority over provider enrichment fields."""
+        model_info = {"model-a": {"description": "catalog-desc", "context_length": 16384}}
+        svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS, model_info=model_info)
+        mock_provider = MagicMock()
+        mock_provider.get_model = AsyncMock(return_value={
+            "id": "a-real", "context_length": 4096,
+            "description": "provider-desc",
+        })
+        with patch("src.services.base.get_provider_instance", return_value=mock_provider):
+            result = await svc.retrieve_model(
+                "model-a", _make_auth_data(allowed_models=[])
+            )
+        assert result["description"] == "catalog-desc"
+        assert result["context_length"] == 16384
 
     @pytest.mark.asyncio
     async def test_enrichment_best_effort_on_provider_error(self):

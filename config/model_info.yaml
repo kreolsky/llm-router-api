@@ -1,0 +1,44 @@
+# Model information catalog — exposed to clients via /v1/models and /v1/models/{id}.
+# Keyed by model_id (matching models.yaml keys).
+# All fields optional; missing entries or fields simply don't appear in responses.
+model_info:
+  deepseek/pro:
+    description: "DeepSeek V4 Pro — high-performance MoE, thinking mode, tool calling"
+    context_length: 262144
+    max_completion_tokens: 32768
+    reasoning:
+      supported: true
+      default_enabled: true
+    pricing:
+      prompt: 0.000000435
+      completion: 0.00000087
+      input_cache_read: 0.000000003625
+  deepseek/flash:
+    description: "DeepSeek V4 Flash — efficiency-optimized MoE, 284B total / 13B active params, thinking mode, tool calling"
+    context_length: 262144
+    max_completion_tokens: 32768
+    reasoning:
+      supported: true
+      default_enabled: true
+    pricing:
+      prompt: 0.00000014
+      completion: 0.00000028
+      input_cache_read: 0.0000000028
+  kimi:
+    description: "Kimi K2.6 — Moonshot AI, tool calling, thinking mode"
+    context_length: 262144
+    max_completion_tokens: 4096
+    reasoning:
+      supported: true
+  gemini/mini:
+    description: "Google Gemini 2.0 Flash — fast, multimodal, tool calling"
+    context_length: 262144
+    max_completion_tokens: 8192
+    reasoning:
+      supported: false
+  local/orange:
+    description: "Local LLM via llama-server — GPU-accelerated inference"
+    context_length: 32768
+    max_completion_tokens: 4096
+    reasoning:
+      supported: false

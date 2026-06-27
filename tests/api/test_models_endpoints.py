@@ -46,7 +46,7 @@ class TestModelsEndpoints:
         assert "stt/dummy" not in model_ids, "Hidden transcription model should not be in list"
         
         # Check that visible models ARE in the list
-        expected_visible_models = ["local/orange", "gemini/mini", "deepseek/chat"]
+        expected_visible_models = ["local/orange", "gemini/mini", "deepseek/flash", "kimi"]
         for model_id in expected_visible_models:
             assert model_id in model_ids, f"Visible model {model_id} should be in list"
         
@@ -237,7 +237,7 @@ class TestModelsEndpoints:
             return response.status_code == 200
         
         # Make concurrent requests for different models
-        model_ids = ["local/orange", "gemini/mini", "deepseek/chat"]
+        model_ids = ["local/orange", "gemini/mini", "deepseek/flash"]
         tasks = [get_model(model_id) for model_id in model_ids]
         results = await asyncio.gather(*tasks)
         
@@ -512,7 +512,7 @@ class TestRestrictedUserModelAccess:
         )
         assert response.status_code == 200
         model_ids = [m["id"] for m in response.json()["data"]]
-        for expected in ["local/orange", "gemini/mini", "deepseek/chat"]:
+        for expected in ["local/orange", "gemini/mini", "deepseek/flash", "kimi"]:
             assert expected in model_ids, f"transctiber should see {expected}"
         assert "embeddings/dummy" not in model_ids, "Hidden model should not appear"
         assert "stt/dummy" not in model_ids, "Hidden model should not appear"

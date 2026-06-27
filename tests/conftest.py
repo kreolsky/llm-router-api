@@ -47,12 +47,12 @@ def test_models() -> Dict[str, Dict[str, Any]]:
             "streaming": True,
             "description": "OpenRouter Gemini Mini model"
         },
-        "deepseek_chat": {
-            "id": "deepseek/chat",
+        "deepseek_flash": {
+            "id": "deepseek/flash",
             "provider": "deepseek",
             "type": "chat",
             "streaming": True,
-            "description": "Deepseek Chat model"
+            "description": "DeepSeek V4 Flash model"
         },
         "embeddings_dummy": {
             "id": "embeddings/dummy",

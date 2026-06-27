@@ -21,7 +21,7 @@ class TestChatCompletions:
     """Test chat completion functionality."""
     
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("model_key", ["local_orange", "gemini_mini", "deepseek_chat"])
+    @pytest.mark.parametrize("model_key", ["local_orange", "gemini_mini", "deepseek_flash"])
     async def test_non_streaming_chat_completion(
         self, 
         base_url: str, 
@@ -91,7 +91,7 @@ class TestChatCompletions:
         assert data["object"] == "chat.completion"
     
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("model_key", ["local_orange", "gemini_mini", "deepseek_chat"])
+    @pytest.mark.parametrize("model_key", ["local_orange", "gemini_mini", "deepseek_flash"])
     async def test_streaming_chat_completion(
         self, 
         base_url: str, 
@@ -156,7 +156,7 @@ class TestChatCompletions:
             assert isinstance(chunk["model"], str), "Model should be a string"
     
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("model_key", ["local_orange", "gemini_mini", "deepseek_chat"])
+    @pytest.mark.parametrize("model_key", ["local_orange", "gemini_mini", "deepseek_flash"])
     async def test_chat_completion_with_unicode(
         self, 
         base_url: str, 
@@ -193,7 +193,7 @@ class TestChatCompletions:
         assert has_unicode, "Response should contain Unicode characters"
     
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("model_key", ["local_orange", "gemini_mini", "deepseek_chat"])
+    @pytest.mark.parametrize("model_key", ["local_orange", "gemini_mini", "deepseek_flash"])
     async def test_chat_completion_with_long_message(
         self, 
         base_url: str, 
@@ -230,7 +230,7 @@ class TestChatCompletions:
         assert usage["prompt_tokens"] > 100, "Long message should use many tokens"
     
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("model_key", ["local_orange", "gemini_mini", "deepseek_chat"])
+    @pytest.mark.parametrize("model_key", ["local_orange", "gemini_mini", "deepseek_flash"])
     async def test_chat_completion_with_multiple_messages(
         self, 
         base_url: str, 
@@ -273,7 +273,7 @@ class TestChatCompletions:
             "Should respond in context of conversation"
     
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("model_key", ["local_orange", "gemini_mini", "deepseek_chat"])
+    @pytest.mark.parametrize("model_key", ["local_orange", "gemini_mini", "deepseek_flash"])
     async def test_chat_completion_parameters(
         self, 
         base_url: str, 
@@ -604,7 +604,7 @@ class TestChatCompletions:
         http_client: httpx.AsyncClient
     ):
         """Test that chat completion responses are consistent."""
-        model_id = test_models["deepseek_chat"]["id"]
+        model_id = test_models["deepseek_flash"]["id"]
         
         payload = {
             "model": model_id,
@@ -639,7 +639,7 @@ class TestChatCompletionStreamingSpecific:
     """Tests specific to streaming functionality."""
     
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("model_key", ["local_orange", "gemini_mini", "deepseek_chat"])
+    @pytest.mark.parametrize("model_key", ["local_orange", "gemini_mini", "deepseek_flash"])
     async def test_streaming_chunk_structure(
         self, 
         base_url: str, 

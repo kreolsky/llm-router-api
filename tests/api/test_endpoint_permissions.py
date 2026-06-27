@@ -257,13 +257,13 @@ class TestLimitedUserPermissions:
     async def test_limited_chat_denied_deepseek(
         self, base_url, api_keys, sample_messages, http_client
     ):
-        """Chat completions with deepseek/chat should be denied (not in allowed_models)."""
+        """Chat completions with deepseek/flash should be denied (not in allowed_models)."""
         response = await http_client.post(
             f"{base_url}/v1/chat/completions",
             headers={"Authorization": f"Bearer {api_keys['limited']}", "Content-Type": "application/json"},
-            json={"model": "deepseek/chat", "messages": sample_messages, "stream": False, "max_tokens": 50}
+            json={"model": "deepseek/flash", "messages": sample_messages, "stream": False, "max_tokens": 50}
         )
-        assert response.status_code == 403, "limited user should be denied deepseek/chat"
+        assert response.status_code == 403, "limited user should be denied deepseek/flash"
 
     @pytest.mark.asyncio
     async def test_limited_embeddings_denied(
@@ -397,7 +397,7 @@ class TestTransctiberUserPermissions:
         )
         assert response.status_code == 200
         model_ids = [m["id"] for m in response.json()["data"]]
-        for expected in ["local/orange", "gemini/mini", "deepseek/chat"]:
+        for expected in ["local/orange", "gemini/mini", "deepseek/flash", "kimi"]:
             assert expected in model_ids, f"transctiber should see {expected}"
         # Hidden models must not appear
         assert "embeddings/dummy" not in model_ids
