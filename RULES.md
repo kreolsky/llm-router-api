@@ -82,7 +82,9 @@ If `plan_lines / implementation_lines > 2`, the plan is bloated. Cut it.
 ## Logging Convention
 
 * Prefer kwargs-style logging (`logger.info(msg, request_id=..., user_id=...)`); the `extra={...}` dict form is tolerated for backward compat but not for new call sites.
-* One service-level INFO entry per request; middleware handles Incoming/Outgoing. Avoid duplicate "Request:" lines between middleware and service.
+* Middleware Incoming/Outgoing INFO lines are the canonical per-request bookend (Outgoing carries `time=…ms`); do not duplicate them in services.
+* A service MAY emit at most one optional success-INFO (see `embedding_service`, which logs token usage). `chat_service` emits none and relies solely on the middleware bookends, because a streaming handler returns before the stream completes — a service-level "Completed" line would fire prematurely.
+* Request errors are surfaced via `create_error`, which logs them at error level; services need not add their own error INFO lines.
 
 ## Configuration Rules
 

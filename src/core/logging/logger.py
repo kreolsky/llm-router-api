@@ -6,10 +6,8 @@ effective debugging capabilities when LOG_LEVEL=DEBUG.
 """
 
 import logging
-import time
 import json
 from typing import Dict, Any, Optional, Tuple
-from contextlib import contextmanager
 from .config import setup_logging
 
 
@@ -114,26 +112,3 @@ class Logger:
             message += f" | flow={kwargs['data_flow']}"
         
         self.debug(f"{message}\n{data_str}", request_id=request_id, **kwargs)
-    
-    @contextmanager
-    def request_context(self, operation: str, request_id: str, **kwargs):
-        """Context manager that logs request start, completion, and errors."""
-        start_time = time.time()
-        self.info(f"Started: {operation}", request_id=request_id, **kwargs)
-
-        try:
-            yield
-        except Exception as e:
-            self.error(
-                f"{operation} failed: {str(e)}",
-                request_id=request_id,
-                **kwargs
-            )
-            raise
-        finally:
-            duration_ms = int((time.time() - start_time) * 1000)
-            self.info(
-                f"Completed: {operation} | duration={duration_ms}ms",
-                request_id=request_id,
-                **kwargs
-            )

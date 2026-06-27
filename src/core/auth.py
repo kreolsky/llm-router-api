@@ -17,7 +17,8 @@ async def get_api_key(
 
     Uses HTTPBearer scheme to extract token from Authorization header.
     Uses constant-time comparison to prevent timing attacks.
-    Sets request.state.project_name as a side effect for downstream handlers.
+    Rebuilds the typed RequestContext on request.state.request_context with
+    project_name attached (via ctx.with_project_name(...)) for downstream handlers.
     """
     config_manager = request.app.state.config_manager
     config = config_manager.get_config()

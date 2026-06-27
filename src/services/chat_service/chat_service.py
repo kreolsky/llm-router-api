@@ -53,62 +53,55 @@ class ChatService(BaseService):
         provider_instance = self._get_provider(provider_name, provider_config, **error_ctx)
         
         try:
-            with logger.request_context(
-                operation="Chat Completion",
-                request_id=request_id,
-                user_id=user_id,
-                model_id=requested_model,
-                provider_name=provider_name
-            ):
-                if self.config_manager.should_sanitize_messages:
-                    messages = request_body.get("messages", [])
-                    if messages:
-                        original_count = len(messages)
-                        sanitized_messages = MessageSanitizer.sanitize_messages(messages, enabled=True)
-                        request_body["messages"] = sanitized_messages
-                        
-                        if len(sanitized_messages) != original_count:
-                            logger.info(
-                                f"Sanitized {original_count} messages to {len(sanitized_messages)}",
-                                request_id=request_id,
-                                user_id=user_id
-                            )
-                
-                response_data = await provider_instance.chat_completions(
-                    request_body, provider_model_name, model_config, request_id=request_id
+            if self.config_manager.should_sanitize_messages:
+                messages = request_body.get("messages", [])
+                if messages:
+                    original_count = len(messages)
+                    sanitized_messages = MessageSanitizer.sanitize_messages(messages, enabled=True)
+                    request_body["messages"] = sanitized_messages
+                    
+                    if len(sanitized_messages) != original_count:
+                        logger.info(
+                            f"Sanitized {original_count} messages to {len(sanitized_messages)}",
+                            request_id=request_id,
+                            user_id=user_id
+                        )
+            
+            response_data = await provider_instance.chat_completions(
+                request_body, provider_model_name, model_config, request_id=request_id
+            )
+            
+            if inspect.isasyncgen(response_data):
+                self._log_service_data(
+                    title="Streaming Response Started",
+                    data={
+                        "streaming": True,
+                        "model": requested_model,
+                        "request_id": request_id
+                    },
+                    request_id=request_id,
+                    component="chat_service",
+                    data_flow="from_provider"
+                )
+
+                return StreamingResponse(
+                    self.stream_processor.process_stream(
+                        response_data, requested_model, request_id, user_id
+                    ),
+                    media_type="text/event-stream",
+                    headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"}
+                )
+            else:
+                self._log_service_data(
+                    title="Chat Completion Response JSON",
+                    data=response_data,
+                    request_id=request_id,
+                    component="chat_service",
+                    data_flow="from_provider"
                 )
                 
-                if inspect.isasyncgen(response_data):
-                    self._log_service_data(
-                        title="Streaming Response Started",
-                        data={
-                            "streaming": True,
-                            "model": requested_model,
-                            "request_id": request_id
-                        },
-                        request_id=request_id,
-                        component="chat_service",
-                        data_flow="from_provider"
-                    )
+                return JSONResponse(content=response_data)
 
-                    return StreamingResponse(
-                        self.stream_processor.process_stream(
-                            response_data, requested_model, request_id, user_id
-                        ),
-                        media_type="text/event-stream",
-                        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"}
-                    )
-                else:
-                    self._log_service_data(
-                        title="Chat Completion Response JSON",
-                        data=response_data,
-                        request_id=request_id,
-                        component="chat_service",
-                        data_flow="from_provider"
-                    )
-                    
-                    return JSONResponse(content=response_data)
-            
         except HTTPException as e:
             raise e
         except Exception as e:

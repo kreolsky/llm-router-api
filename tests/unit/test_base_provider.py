@@ -17,7 +17,7 @@ from src.core.error_handling import ErrorType, create_error
 # Concrete subclass so we can instantiate the (otherwise abstract-ish) base
 # ---------------------------------------------------------------------------
 
-class TestProvider(BaseProvider):
+class ProviderStub(BaseProvider):
     """Minimal concrete provider for testing."""
 
     async def chat_completions(self, request_body, provider_model_name, model_config):
@@ -41,7 +41,7 @@ def _make_config(base_url="https://api.example.com", api_key_env="TEST_API_KEY",
 
 def _build_provider(base_url="https://api.example.com", api_key_env="TEST_API_KEY",
                      env_vars=None, config_manager=None, headers=None):
-    """Build a TestProvider with mocked env.
+    """Build a ProviderStub with mocked env.
 
     The provider owns its own httpx.AsyncClient (built in __init__).
     """
@@ -56,7 +56,7 @@ def _build_provider(base_url="https://api.example.com", api_key_env="TEST_API_KE
         env.update(env_vars)
 
     with patch.dict("os.environ", env, clear=False):
-        provider = TestProvider(config, config_manager=config_manager)
+        provider = ProviderStub(config, config_manager=config_manager)
     return provider
 
 
@@ -197,7 +197,7 @@ class TestBaseProviderInit:
         config = {"api_key_env": "TEST_API_KEY"}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False):
             with pytest.raises(HTTPException) as exc_info:
-                TestProvider(config)
+                ProviderStub(config)
         assert exc_info.value.status_code == 500
 
     def test_missing_api_key_env_var_raises(self):
@@ -205,13 +205,13 @@ class TestBaseProviderInit:
         config = {"base_url": "https://api.example.com", "api_key_env": "MISSING_KEY"}
         with patch.dict("os.environ", {}, clear=True):
             with pytest.raises(HTTPException) as exc_info:
-                TestProvider(config)
+                ProviderStub(config)
         assert exc_info.value.status_code == 500
 
     def test_no_api_key_env_no_error(self):
         """No api_key_env in config means no Authorization header, no error."""
         config = {"base_url": "https://api.example.com"}
-        provider = TestProvider(config)
+        provider = ProviderStub(config)
         assert "Authorization" not in provider.headers
         assert provider.api_key is None
 
@@ -221,7 +221,7 @@ class TestBaseProviderInit:
         assert provider.base_url == "https://api.example.com"
         assert provider.headers["Authorization"] == "Bearer sk-test-123"
         assert provider.headers["Content-Type"] == "application/json"
-        assert provider.provider_name == "test"
+        assert provider.provider_name == "stub"
 
 
 # ===================================================================
@@ -347,7 +347,7 @@ class TestRaiseProviderHttpError:
             provider._raise_provider_http_error(err, "req-1")
         detail = exc_info.value.detail
         assert detail["error"]["code"] == 503
-        assert detail["error"]["metadata"]["provider_name"] == "test"
+        assert detail["error"]["metadata"]["provider_name"] == "stub"
         assert "raw" in detail["error"]["metadata"]
 
 
