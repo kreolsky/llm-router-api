@@ -111,10 +111,6 @@ class ConfigManager:
     def openai_embeddings_read_timeout(self) -> float:
         return float(os.getenv("OPENAI_EMBEDDINGS_READ_TIMEOUT", "30.0"))
 
-    @property
-    def ollama_connect_timeout(self) -> float:
-        return float(os.getenv("OLLAMA_CONNECT_TIMEOUT", "60.0"))
-
     def add_reload_callback(self, callback):
         self._on_reload_callbacks.append(callback)
 

@@ -4,7 +4,6 @@ import httpx
 
 from .base import BaseProvider
 from .openai import OpenAICompatibleProvider
-from .ollama import OllamaProvider
 from ..core.error_handling import ErrorType, create_error
 
 _provider_cache: Dict[Tuple[str, str], BaseProvider] = {}
@@ -22,8 +21,6 @@ def get_provider_instance(provider_type: str, provider_config: Dict[str, Any], c
 
     if provider_type == "openai":
         instance = OpenAICompatibleProvider(provider_config, client, config_manager)
-    elif provider_type == "ollama":
-        instance = OllamaProvider(provider_config, client, config_manager)
     else:
         raise create_error(ErrorType.PROVIDER_NOT_FOUND, provider_name=provider_type, model_id="unknown")
 

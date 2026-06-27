@@ -1,7 +1,10 @@
 models:
-  deepseek/chat:
+  deepseek/flash:
     provider: deepseek
-    provider_model_name: deepseek-chat
+    provider_model_name: deepseek-v4-flash
+    options:
+      thinking:
+        type: enabled
   gemini/mini:
     provider: openrouter
     provider_model_name: google/gemini-2.0-flash-001
@@ -11,6 +14,11 @@ models:
     options:
       chat_template_kwargs:
         enable_thinking: false
+  kimi:
+    provider: kimi
+    provider_model_name: kimi-k2.6
+    options:
+      stream: true
   embeddings/dummy:
     provider: embedding
     provider_model_name: dummy

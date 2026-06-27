@@ -56,20 +56,8 @@ class StreamingResponseParser:
                     continue
     
     @staticmethod
-    async def parse_ndjson_stream(response: httpx.Response) -> AsyncGenerator[Dict[str, Any], None]:
-        """Parse Newline Delimited JSON (NDJSON) stream."""
-        async for line in response.aiter_lines():
-            if line.strip():
-                try:
-                    data = json.loads(line)
-                    yield data
-                except json.JSONDecodeError:
-                    continue
-    
-    @staticmethod
     async def collect_stream_content(
-        response: httpx.Response, 
-        stream_format: str = "sse"
+        response: httpx.Response
     ) -> Dict[str, Any]:
         """Collect all content from a streaming response."""
         chunks = []
@@ -77,12 +65,7 @@ class StreamingResponseParser:
         first_chunk_time = None
         start_time = time.time()
         
-        if stream_format == "sse":
-            parser = StreamingResponseParser.parse_sse_stream
-        else:
-            parser = StreamingResponseParser.parse_ndjson_stream
-        
-        async for chunk in parser(response):
+        async for chunk in StreamingResponseParser.parse_sse_stream(response):
             if first_chunk_time is None:
                 first_chunk_time = time.time()
             
