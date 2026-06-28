@@ -1,6 +1,6 @@
 """Unit tests for src/core/config_manager.py — ConfigManager class."""
 
-from unittest.mock import patch, mock_open, MagicMock, call
+from unittest.mock import patch, mock_open, MagicMock, AsyncMock, call
 import yaml
 
 import pytest
@@ -189,36 +189,54 @@ class TestTopLevelKeyValidation:
 
 class TestReloadConfig:
 
-    def test_invokes_callbacks_on_change(self):
+    @pytest.mark.asyncio
+    async def test_invokes_callbacks_on_change(self):
         """reload_config invokes registered callbacks when config changes."""
         cm = _build_config_manager()
-        callback = MagicMock()
-        cm.add_reload_callback(callback)
+        callback = AsyncMock()
+        cm.add_reload_callback(callback, name="test_cb")
 
         # Reload with full config
         with patch("builtins.open", side_effect=_multi_open(ALL_YAMLS)), \
              patch("src.core.config_manager.logger"):
-            cm.reload_config()
+            await cm.reload_config()
 
-        callback.assert_called_once()
+        cm_full_config = cm.get_config()
+        callback.assert_awaited_once_with(cm_full_config)
 
-    def test_rejects_partial_config_keeps_previous(self):
+    @pytest.mark.asyncio
+    async def test_rejects_partial_config_keeps_previous(self):
         """Partial config is rejected; previous config is kept."""
         cm = _build_config_manager()
         original_config = cm.get_config().copy()
-        callback = MagicMock()
-        cm.add_reload_callback(callback)
+        callback = AsyncMock()
+        cm.add_reload_callback(callback, name="test_cb")
 
         # Reload with only providers (missing models and user_keys)
         partial_map = {"providers.yaml": PROVIDERS_YAML}
         with patch("builtins.open", side_effect=_multi_open(partial_map)), \
              patch("src.core.config_manager.logger"):
-            cm.reload_config()
+            await cm.reload_config()
 
         # Callback should NOT be invoked
         callback.assert_not_called()
         # Config should remain unchanged
         assert cm.get_config() == original_config
+
+    @pytest.mark.asyncio
+    async def test_callback_failure_keeps_previous_config(self):
+        """When a callback raises, self.config is NOT swapped (old config retained)."""
+        cm = _build_config_manager()
+        original_config = cm.get_config().copy()
+        failing_cb = AsyncMock(side_effect=RuntimeError("boom"))
+        cm.add_reload_callback(failing_cb, name="failing")
+
+        with patch("builtins.open", side_effect=_multi_open(ALL_YAMLS)), \
+             patch("src.core.config_manager.logger"):
+            await cm.reload_config()
+
+        failing_cb.assert_awaited_once()
+        assert cm.get_config() == original_config  # old config retained
 
 
 # ===================================================================
@@ -337,29 +355,31 @@ class TestShouldSanitizeMessages:
 
 class TestAddReloadCallback:
 
-    def test_callback_called_on_reload(self):
+    @pytest.mark.asyncio
+    async def test_callback_called_on_reload(self):
         """Registered callback is called on successful reload."""
         cm = _build_config_manager()
-        cb = MagicMock()
-        cm.add_reload_callback(cb)
+        cb = AsyncMock()
+        cm.add_reload_callback(cb, name="cb")
 
         with patch("builtins.open", side_effect=_multi_open(ALL_YAMLS)), \
              patch("src.core.config_manager.logger"):
-            cm.reload_config()
+            await cm.reload_config()
 
-        cb.assert_called_once()
+        cb.assert_awaited_once()
 
-    def test_multiple_callbacks(self):
+    @pytest.mark.asyncio
+    async def test_multiple_callbacks(self):
         """Multiple registered callbacks are all called."""
         cm = _build_config_manager()
-        cb1 = MagicMock()
-        cb2 = MagicMock()
-        cm.add_reload_callback(cb1)
-        cm.add_reload_callback(cb2)
+        cb1 = AsyncMock()
+        cb2 = AsyncMock()
+        cm.add_reload_callback(cb1, name="cb1")
+        cm.add_reload_callback(cb2, name="cb2")
 
         with patch("builtins.open", side_effect=_multi_open(ALL_YAMLS)), \
              patch("src.core.config_manager.logger"):
-            cm.reload_config()
+            await cm.reload_config()
 
-        cb1.assert_called_once()
-        cb2.assert_called_once()
+        cb1.assert_awaited_once()
+        cb2.assert_awaited_once()

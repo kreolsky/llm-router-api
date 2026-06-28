@@ -48,6 +48,16 @@ class TestDeepMerge:
         result = deep_merge(dict1, dict2)
         assert result == {"l1": {"l2": {"l3": "replaced", "keep": True, "new": 42}}}
 
+    def test_deep_merge_concatenates_lists(self):
+        """Lists are concatenated (left then right), no deduplication."""
+        merged = deep_merge({"tags": [1, 2]}, {"tags": [3, 2]})
+        assert merged == {"tags": [1, 2, 3, 2]}
+
+    def test_deep_merge_list_replaces_non_list(self):
+        """A list overwrites a non-list value of the same key."""
+        merged = deep_merge({"tags": "old"}, {"tags": [1]})
+        assert merged == {"tags": [1]}
+
 
 # ---------------------------------------------------------------------------
 # decode_unicode_escapes

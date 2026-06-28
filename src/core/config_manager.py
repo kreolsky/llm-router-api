@@ -158,11 +158,22 @@ class ConfigManager:
     def openai_embeddings_read_timeout(self) -> float:
         return float(os.getenv("OPENAI_EMBEDDINGS_READ_TIMEOUT", "30.0"))
 
-    def add_reload_callback(self, callback):
-        self._on_reload_callbacks.append(callback)
+    def add_reload_callback(self, callback, name: str = ""):
+        """Register an async callback invoked after a successful config load.
 
-    def reload_config(self):
-        """Reload config from disk and invoke registered callbacks."""
+        callback signature: ``async def cb(new_config: dict) -> None``.
+        On callback failure reload is aborted and self.config is NOT swapped
+        (the previous config stays in place). Callbacks run sequentially.
+        """
+        self._on_reload_callbacks.append((name, callback))
+
+    async def reload_config(self):
+        """Reload config from disk and invoke registered async callbacks.
+
+        Atomicity: self.config is swapped only AFTER every callback succeeds.
+        If any callback raises, the previous config is retained (return, no swap).
+        Each callback receives the freshly loaded new_config dict.
+        """
         logger.info("Reloading configuration", extra={
             "config": {
                 "operation": "reload_config",
@@ -171,6 +182,16 @@ class ConfigManager:
         })
         new_config = self._load_config(fail_on_error=False)
         if new_config.get('providers') and new_config.get('models') and new_config.get('user_keys'):
+            for name, cb in self._on_reload_callbacks:
+                try:
+                    await cb(new_config)
+                except Exception as e:
+                    logger.error(
+                        f"Config reload callback failed: {name or '(unnamed)'}",
+                        extra={"config": {"operation": "reload_callback_error", "callback_name": name}},
+                        exc_info=True,
+                    )
+                    return
             self.config = new_config
             logger.info("Configuration reloaded", extra={
                 "config": {
@@ -180,11 +201,6 @@ class ConfigManager:
                     "user_keys_count": len(self.config.get('user_keys', {}))
                 }
             })
-            for cb in self._on_reload_callbacks:
-                try:
-                    cb()
-                except Exception as e:
-                    logger.error(f"Config reload callback failed: {e}", exc_info=True)
         else:
             logger.warning("Partial config reload rejected, keeping previous config")
 
@@ -228,7 +244,7 @@ class ConfigManager:
                             "changed_files": [fpath for fpath in config_files if fpath in self.last_mtimes]
                         }
                     })
-                    self.reload_config()
+                    await self.reload_config()
             except asyncio.CancelledError:
                 logger.info("Config reload task cancelled")
                 return

@@ -27,7 +27,6 @@ def _client_host(request: Request) -> str:
 
 
 # Strong references for in-flight reload-rebuild tasks (prevents GC before completion).
-_reload_tasks: set[asyncio.Task] = set()
 
 
 def _request_context(request: Request) -> RequestContext:
@@ -44,44 +43,6 @@ async def _validate_providers(config_manager: ConfigManager) -> None:
     await rebuild_provider_cache(config_manager.get_config(), config_manager)
 
 
-def _make_reload_callback(config_manager: ConfigManager):
-    """Build a reload callback that atomically rebuilds the provider cache.
-
-    Exceptions are caught + logged so a single bad reload never crashes the
-    background reload task; the previous cache is retained on failure. The
-    scheduled rebuild task is kept alive in a module-level set so it is not
-    garbage-collected before completion.
-    """
-    def _on_reload_done(task: asyncio.Task) -> None:
-        _reload_tasks.discard(task)
-
-    def _rebuild_on_reload() -> None:
-        async def _do_rebuild():
-            try:
-                await rebuild_provider_cache(config_manager.get_config(), config_manager)
-            except Exception as e:
-                logger.error(
-                    f"Provider cache rebuild failed on config reload; previous cache retained: {e}",
-                    extra={
-                        "log_type": "error",
-                        "error_type": "provider_cache_rebuild_error",
-                        "error_message": str(e),
-                    },
-                    exc_info=True,
-                )
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-        if loop is not None:
-            task = loop.create_task(_do_rebuild())
-            _reload_tasks.add(task)
-            task.add_done_callback(_on_reload_done)
-        else:
-            asyncio.run(_do_rebuild())
-    return _rebuild_on_reload
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize ConfigManager, validate providers, and all services; tear down on shutdown."""
@@ -91,7 +52,11 @@ async def lifespan(app: FastAPI):
     # ARCH: eager validation — fail fast on bad provider config / missing env keys.
     await _validate_providers(config_manager)
 
-    config_manager.add_reload_callback(_make_reload_callback(config_manager))
+    async def _rebuild_on_reload(new_config: dict) -> None:
+        """Reload callback: rebuild the provider cache for the freshly loaded config."""
+        await rebuild_provider_cache(new_config, config_manager)
+
+    config_manager.add_reload_callback(_rebuild_on_reload, name="rebuild_provider_cache")
     reload_task = config_manager.start_reloader_task()
 
     app.state.model_service = ModelService(config_manager)

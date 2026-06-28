@@ -153,6 +153,7 @@ class StreamProcessor:
                         # Find the end of the comment line
                         if "\n" in normalized_buffer:
                             comment_line, buffer = buffer.split("\n", 1)
+                            comment_line = comment_line.rstrip("\r")
                             normalized_buffer = buffer.replace("\r\n", "\n")
                             logger.debug(f"Passing through SSE comment", extra={"request_id": request_id})
                             yield (comment_line + "\n").encode('utf-8')

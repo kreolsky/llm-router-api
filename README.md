@@ -35,6 +35,7 @@ curl http://localhost:8777/v1/chat/completions \
 5. **Streaming**: `_stream_request` yields raw bytes → `StreamProcessor` either passes them through transparently or buffers UTF-8, splits on SSE `\n\n` boundaries, and sanitizes each `data:` frame.
 6. **Errors**: Provider HTTP errors are extracted from the JSON response body, logged, and returned in OpenRouter-compatible format `{"error": {"code", "message", "metadata": {"provider_name", "raw"}}}`.
 7. **Rate limits**: 429 responses trigger exponential backoff retry (`min(base * 2^attempt, max)`), configurable via env vars.
+8. **Concurrency limits**: Providers can have a `max_concurrent` cap (e.g. `3`). Requests beyond the cap wait for a slot (up to `QUEUE_WAIT_TIMEOUT` seconds); on timeout they receive an immediate 503.
 
 ## Configuration
 
@@ -48,6 +49,7 @@ providers:
     type: openai                          # openai
     base_url: https://api.deepseek.com/v1
     api_key_env: DEEPSEEK_API_KEY         # env var name for the API key
+    max_concurrent: 3                     # optional: cap concurrent requests
     headers:                              # extra headers (optional)
       HTTP-Referer: "https://myapp.com"
 ```
@@ -132,6 +134,7 @@ src/
 
 - **Streaming**: SSE pass-through with UTF-8 split handling at chunk boundaries. Multi-byte characters split across TCP chunks are buffered and recovered. Supports both `\n\n` and `\r\n\r\n` SSE separators.
 - **Rate limit retry**: Exponential backoff on 429 — `min(base_delay * 2^attempt, max_delay)`. Detects rate limits via `status_code` and `original_exception.response.status_code`.
+- **Concurrency limiting**: Per-provider `max_concurrent` (in `providers.yaml`) gates outbound requests via an `asyncio.Semaphore`. Queued requests fail fast with 503 after `QUEUE_WAIT_TIMEOUT` (default 30s).
 - **Hot-reload**: Background task polls config file mtimes. On change, reloads YAML and invokes callbacks (e.g. clearing provider cache). Partial reload (missing file) is rejected.
 - **Access control**: Per-key model and endpoint restrictions. Access check runs *before* existence check to prevent leaking information about configured models.
 - **Message sanitization**: When `SANITIZE_MESSAGES=true`, strips fields like `done`, `__stream_end__`, `__internal__` from messages and stream chunks. Disabled by default.
@@ -147,13 +150,6 @@ python -m pytest tests/api/ -v    # integration tests (service on :8777)
 
 See [tests/README.md](tests/README.md) for details on what each test file covers.
 
-## Development
-
-```bash
-pip install -r requirements.txt
-uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
-```
-
 ## Environment Variables
 
 | Variable | Default | Description |
@@ -161,12 +157,18 @@ uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
 | `HTTPX_MAX_CONNECTIONS` | 100 | Connection pool size |
 | `HTTPX_MAX_KEEPALIVE_CONNECTIONS` | 20 | Keep-alive connections |
 | `HTTPX_CONNECT_TIMEOUT` | 60.0 | Connection timeout (s) |
-| `HTTPX_READ_TIMEOUT` | 60.0 | Provider read timeout (s) |
+| `HTTPX_READ_TIMEOUT` | 60.0 | Non-streaming read timeout (s) |
 | `HTTPX_POOL_TIMEOUT` | 5.0 | Pool wait timeout (s) |
+| `STREAM_READ_TIMEOUT` | 300 | Streaming read timeout (s) |
+| `OPENAI_CONNECT_TIMEOUT` | 60.0 | OpenAI connection timeout (s) |
+| `OPENAI_TRANSCRIPTION_TIMEOUT` | 3600.0 | Transcription request timeout (s) |
+| `OPENAI_EMBEDDINGS_READ_TIMEOUT` | 30.0 | Embeddings read timeout (s) |
+| `QUEUE_WAIT_TIMEOUT` | 30.0 | Concurrency slot wait timeout (s) |
 | `PROVIDER_MAX_RETRIES` | 3 | 429 retry attempts |
 | `PROVIDER_RETRY_BASE_DELAY` | 1.0 | Retry base delay (s) |
 | `PROVIDER_RETRY_MAX_DELAY` | 30.0 | Retry max delay (s) |
 | `CONFIG_RELOAD_INTERVAL` | 5 | Config poll interval (s) |
 | `SANITIZE_MESSAGES` | false | Strip service fields from messages |
+| `DEBUG` | false | Enable debug-level JSON logging |
 | `LOG_LEVEL` | INFO | Logging level |
 | `DEFAULT_STT_MODEL` | stt/dummy | Fallback transcription model |
