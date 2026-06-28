@@ -38,10 +38,12 @@ OpenAI-compatible API gateway for multiple LLM providers. Routes requests to Ope
 
 All env-backed settings are read via `ConfigManager` properties (no direct `os.getenv` in providers/services except initial logger/debug setup).
 
+**Ports**: the container listens on `8000` (uvicorn `--port 8000`); `docker-compose` maps host `8777` → container `8000`. Clients and the test suite talk to `8777`.
+
 * **HTTPX pools**: `HTTPX_MAX_CONNECTIONS`, `HTTPX_MAX_KEEPALIVE_CONNECTIONS`, `HTTPX_CONNECT_TIMEOUT`, `HTTPX_READ_TIMEOUT`, `HTTPX_POOL_TIMEOUT` — applied **per provider pool** (each provider instance owns its own `httpx.AsyncClient`). Total connections ≈ providers × limit.
 * **Streaming**: `STREAM_READ_TIMEOUT` (default 300) — read timeout for SSE streams.
 * **Transcription**: `DEFAULT_STT_MODEL` (default `stt/dummy`) — fallback model when none is requested.
-* **Per-provider concurrency**: optional `max_concurrent` key per provider in `providers.yaml` gates outbound requests via an `asyncio.Semaphore`; queued requests fail fast with 503 after `QUEUE_WAIT_TIMEOUT` (default `30.0`). Takes effect only after `clear_provider_cache()` on reload (semaphore is per-instance).
+* **Per-provider concurrency**: optional `max_concurrent` key per provider in `providers.yaml` gates outbound requests via an `asyncio.Semaphore`; queued requests fail fast with 503 after `QUEUE_WAIT_TIMEOUT` (default `30.0`). Takes effect only after a config reload rebuilds the cache (semaphore is per-instance).
 
 ## Architecture Discovery
 

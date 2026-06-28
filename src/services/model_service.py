@@ -66,7 +66,7 @@ class ModelService(BaseService):
         """
         additional_model_details = {}
         try:
-            provider_instance = self._get_provider(provider_name, provider_config)
+            provider_instance = await self._get_provider(provider_name, provider_config)
             found_model = await provider_instance.get_model(
                 provider_model_name, request_id=request_id
             )

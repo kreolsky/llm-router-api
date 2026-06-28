@@ -1,13 +1,11 @@
-"""Single function for creating standardized HTTPExceptions with logging."""
+"""Standardized HTTPExceptions creation and provider error logging."""
 
-import logging
-from typing import Optional, Dict, Any
+from typing import Optional
 from fastapi import HTTPException
 
+from ..logging import logger
 from .error_types import ErrorType
 from ...utils.unicode import decode_unicode_escapes
-
-_logger = logging.getLogger("llm_router")
 
 
 def create_error(
@@ -33,9 +31,9 @@ def create_error(
     if original_exception:
         log_extra["original_exception"] = str(original_exception)
         log_extra["original_exception_type"] = type(original_exception).__name__
-        _logger.error(message, extra=log_extra, exc_info=True)
+        logger.error(message, extra=log_extra, exc_info=True)
     else:
-        _logger.error(message, extra=log_extra)
+        logger.error(message, extra=log_extra)
 
     return HTTPException(status_code=error_type.status_code, detail=error_detail)
 
@@ -65,8 +63,43 @@ def log_provider_error(
         log_extra["original_exception"] = str(original_exception)
         log_extra["original_exception_type"] = type(original_exception).__name__
 
-    _logger.error(
+    logger.error(
         f"Provider '{provider_name}' returned error {status_code}: {decoded}",
         extra=log_extra,
         exc_info=original_exception is not None
     )
+
+
+def create_provider_http_error(
+    status_code: int,
+    message: str,
+    provider_name: str,
+    raw: str,
+    request_id: Optional[str] = None,
+    original_exception: Optional[Exception] = None,
+) -> HTTPException:
+    """Build a provider passthrough HTTPException with dynamic status code.
+
+    Uses the OpenRouter error shape ({"error": {"code", "message", "metadata"}})
+    and logs through the unified provider error channel. The status code is
+    dynamic (sourced from the upstream response) so it cannot be an ErrorType.
+    """
+    log_provider_error(
+        provider_name=provider_name,
+        error_details=raw,
+        status_code=status_code,
+        original_exception=original_exception,
+        request_id=request_id,
+    )
+
+    error_detail = {
+        "error": {
+            "code": status_code,
+            "message": message,
+            "metadata": {
+                "provider_name": provider_name,
+                "raw": raw,
+            },
+        }
+    }
+    return HTTPException(status_code=status_code, detail=error_detail)

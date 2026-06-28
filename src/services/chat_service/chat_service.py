@@ -1,11 +1,9 @@
 """Chat completion orchestrator: validation, provider dispatch, streaming."""
 
-import asyncio
-import inspect
 import json
 import time
-from typing import Dict, Any, Tuple
-from fastapi import HTTPException, status, Request
+from typing import Any, Tuple
+from fastapi import Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from ...core.config_manager import ConfigManager
@@ -54,28 +52,27 @@ class ChatService(BaseService):
         model_config, provider_name, provider_model_name, provider_config = \
             self._validate_and_get_config(requested_model, auth_data, **error_ctx)
 
-        provider_instance = self._get_provider(provider_name, provider_config, **error_ctx)
-        
-        try:
+        provider_instance = await self._get_provider(provider_name, provider_config, **error_ctx)
+
+        async with self._guard_service_errors(error_ctx):
             if self.config_manager.should_sanitize_messages:
                 messages = request_body.get("messages", [])
                 if messages:
                     original_count = len(messages)
                     sanitized_messages = MessageSanitizer.sanitize_messages(messages, enabled=True)
                     request_body["messages"] = sanitized_messages
-                    
+
                     if len(sanitized_messages) != original_count:
                         logger.info(
                             f"Sanitized {original_count} messages to {len(sanitized_messages)}",
                             request_id=request_id,
                             user_id=user_id
                         )
-            
-            response_data = await provider_instance.chat_completions(
-                request_body, provider_model_name, model_config, request_id=request_id
-            )
-            
-            if inspect.isasyncgen(response_data):
+
+            if request_body.get("stream", False):
+                provider_stream = provider_instance.chat_completions_stream(
+                    request_body, provider_model_name, model_config, request_id=request_id
+                )
                 self._log_service_data(
                     title="Streaming Response Started",
                     data={
@@ -90,40 +87,34 @@ class ChatService(BaseService):
 
                 return StreamingResponse(
                     self.stream_processor.process_stream(
-                        response_data, requested_model, request_id, user_id
+                        provider_stream, requested_model, request_id, user_id, provider_name
                     ),
                     media_type="text/event-stream",
                     headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"}
                 )
-            else:
-                self._log_service_data(
-                    title="Chat Completion Response JSON",
-                    data=response_data,
+
+            response_data = await provider_instance.chat_completions(
+                request_body, provider_model_name, model_config, request_id=request_id
+            )
+
+            self._log_service_data(
+                title="Chat Completion Response JSON",
+                data=response_data,
+                request_id=request_id,
+                component="chat_service",
+                data_flow="from_provider"
+            )
+
+            usage = response_data.get("usage", {})
+            if usage:
+                from ...core.usage_db import schedule_chat_usage
+                schedule_chat_usage(
+                    usage,
+                    project_name=user_id,
+                    model_id=requested_model,
                     request_id=request_id,
-                    component="chat_service",
-                    data_flow="from_provider"
+                    provider_name=provider_name,
+                    start_time=start_time,
                 )
 
-                usage = response_data.get("usage", {})
-                if usage:
-                    from ...core.usage_db import record_usage
-                    duration_ms = (time.time() - start_time) * 1000
-                    asyncio.create_task(record_usage(
-                        project_name=user_id,
-                        model_id=requested_model,
-                        endpoint="chat",
-                        prompt_tokens=usage.get("prompt_tokens", 0),
-                        completion_tokens=usage.get("completion_tokens", 0),
-                        cached_tokens=usage.get("prompt_tokens_details", {}).get("cached_tokens", 0),
-                        total_tokens=usage.get("total_tokens", 0),
-                        request_id=request_id,
-                        provider_name=provider_name,
-                        duration_ms=duration_ms,
-                    ))
-
-                return JSONResponse(content=response_data)
-
-        except HTTPException as e:
-            raise e
-        except Exception as e:
-            raise create_error(ErrorType.INTERNAL_SERVER_ERROR, original_exception=e, error_details=str(e), **error_ctx)
+            return JSONResponse(content=response_data)

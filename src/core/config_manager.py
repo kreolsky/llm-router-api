@@ -57,7 +57,17 @@ class ConfigManager:
         for path, key, required in file_map:
             try:
                 with open(path, 'r') as f:
-                    config[key] = (yaml.safe_load(f) or {}).get(key, {})
+                    loaded = yaml.safe_load(f) or {}
+                # WHY: a flat YAML (missing the top-level wrapper key) would silently
+                # coerce to {} and only fail later at startup assert (and not at reload).
+                if not isinstance(loaded, dict) or key not in loaded:
+                    if fail_on_error and required:
+                        raise RuntimeError(
+                            f"Config file {path} missing top-level '{key}:' section"
+                        )
+                    logger.warning(f"Config file {path} missing top-level '{key}:' section")
+                    continue
+                config[key] = loaded[key] or {}
             except FileNotFoundError as e:
                 logger.error(f"Configuration file not found: {path}")
                 if fail_on_error and required:

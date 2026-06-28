@@ -1,7 +1,8 @@
 """Base service with shared validation, provider instantiation, and logging."""
 
+import contextlib
 from typing import Dict, Any, Optional, Tuple
-from fastapi import Request
+from fastapi import HTTPException, Request
 
 from ..core.config_manager import ConfigManager
 from ..core.context import RequestContext
@@ -15,6 +16,25 @@ class BaseService:
 
     def __init__(self, config_manager: ConfigManager):
         self.config_manager = config_manager
+
+    @contextlib.asynccontextmanager
+    async def _guard_service_errors(self, error_ctx: Dict[str, Any]):
+        """Wrap a service block: re-raise HTTPException as-is, wrap other errors.
+
+        De-duplicates the identical try/except error-wrapping pattern across
+        chat/embedding/transcription services.
+        """
+        try:
+            yield
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise create_error(
+                ErrorType.INTERNAL_SERVER_ERROR,
+                original_exception=e,
+                error_details=str(e),
+                **error_ctx,
+            )
 
     def _get_request_context(self, request: Optional[Request]) -> Dict[str, str]:
         """Extract request_id and user_id from the typed RequestContext."""
@@ -56,14 +76,14 @@ class BaseService:
 
         return model_config, provider_name, provider_model_name, provider_config
 
-    def _get_provider(
+    async def _get_provider(
         self,
         provider_name: str,
         provider_config: Dict[str, Any],
         **error_context
     ) -> Any:
-        """Instantiate a provider from config, raising on invalid type."""
-        return get_provider_instance(
+        """Instantiate a provider from config (cache lookup under lock), raising on invalid type."""
+        return await get_provider_instance(
             provider_name,
             provider_config,
             self.config_manager

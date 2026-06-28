@@ -93,7 +93,7 @@ class TestErrorTypeCreateErrorDetail:
 
 @pytest.fixture
 def mock_logger():
-    with patch("src.core.error_handling.error_handler._logger") as mock_log:
+    with patch("src.core.error_handling.error_handler.logger") as mock_log:
         yield mock_log
 
 

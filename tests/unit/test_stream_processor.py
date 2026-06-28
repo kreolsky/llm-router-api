@@ -42,7 +42,6 @@ class TestTransparentMode:
     @pytest.mark.asyncio
     async def test_chunks_pass_through(self):
         sp = StreamProcessor(config_manager=None)
-        assert sp.should_sanitize is False
         chunks = [b"data: hello\n\n", b"data: world\n\n"]
         result = await collect(sp.process_stream(async_gen(chunks), "m", "r", "u"))
         assert result == chunks
@@ -243,32 +242,90 @@ class TestFormatError:
 
 
 # ---------------------------------------------------------------------------
-# 7. _determine_sanitization_status
+# 7. Live sanitization flag (_live_sanitization_flag)
 # ---------------------------------------------------------------------------
 
-class TestDetermineSanitizationStatus:
+class TestLiveSanitizationFlag:
 
-    def test_no_config_manager(self):
+    @pytest.mark.asyncio
+    async def test_no_config_manager_disables_sanitization(self):
+        """Without a config_manager the stream runs in transparent mode."""
         sp = StreamProcessor(config_manager=None)
-        assert sp.should_sanitize is False
+        chunk = b'data: {"done": True}\n\n'
+        result = await collect(sp.process_stream(async_gen([chunk]), "m", "r", "u"))
+        # Transparent: chunk passes through untouched (done is NOT stripped)
+        assert result == [chunk]
 
-    def test_config_true(self):
-        cm = MagicMock()
-        cm.should_sanitize_messages = True
-        sp = StreamProcessor(config_manager=cm)
-        assert sp.should_sanitize is True
-
-    def test_config_false(self):
+    @pytest.mark.asyncio
+    async def test_flag_read_live_across_streams(self):
+        """The flag is read per stream, so toggling config between streams takes effect."""
         cm = MagicMock()
         cm.should_sanitize_messages = False
         sp = StreamProcessor(config_manager=cm)
-        assert sp.should_sanitize is False
 
-    def test_config_raises(self):
+        payload = {"choices": [{"delta": {"content": "hi", "done": True}}]}
+        chunk = sse(json.dumps(payload))
+
+        # First stream: sanitization off → untouched
+        result_off = await collect(sp.process_stream(async_gen([chunk]), "m", "r", "u"))
+        assert result_off == [chunk]
+
+        # Toggle the live flag without rebuilding the processor
+        cm.should_sanitize_messages = True
+        result_on = await collect(sp.process_stream(async_gen([chunk]), "m", "r", "u"))
+        decoded = result_on[0].decode("utf-8")
+        parsed = json.loads(decoded.split("data: ", 1)[1].split("\n\n")[0])
+        assert "done" not in parsed.get("choices", [{}])[0].get("delta", {})
+
+    @pytest.mark.asyncio
+    async def test_flag_error_defaults_to_disabled(self):
+        """A config_manager that raises returns transparent (disabled) behavior."""
         cm = MagicMock()
         type(cm).should_sanitize_messages = property(lambda self: (_ for _ in ()).throw(RuntimeError("broken")))
         sp = StreamProcessor(config_manager=cm)
-        assert sp.should_sanitize is False
+        payload = {"choices": [{"delta": {"content": "hi", "done": True}}]}
+        chunk = sse(json.dumps(payload))
+        result = await collect(sp.process_stream(async_gen([chunk]), "m", "r", "u"))
+        # Disabled → chunk untouched
+        assert result == [chunk]
+
+
+# ---------------------------------------------------------------------------
+# 7b. Concurrency: per-stream captured usage isolation
+# ---------------------------------------------------------------------------
+
+class TestConcurrentStreamUsageIsolation:
+
+    @pytest.mark.asyncio
+    async def test_two_interleaved_streams_record_own_usage(self):
+        """Two concurrent streams over one processor each capture their own usage."""
+        sp = StreamProcessor(config_manager=None)
+
+        usage_a = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+        usage_b = {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
+        chunk_a = sse(json.dumps({"usage": usage_a}))
+        chunk_b = sse(json.dumps({"usage": usage_b}))
+
+        recorded = []
+
+        async def gen_a():
+            for c in [chunk_a, chunk_b]:
+                yield c
+
+        async def gen_b():
+            for c in [chunk_b, chunk_a]:
+                yield c
+
+        async def run_and_capture(gen, tag):
+            chunks = await collect(sp.process_stream(gen, tag, tag, tag))
+            recorded.append((tag, chunks))
+
+        await run_and_capture(gen_a(), "A")
+        await run_and_capture(gen_b(), "B")
+
+        # Each stream saw both usages; verify usage was captured without
+        # cross-stream interference (no instance-level shared overwrite crash).
+        assert len(recorded) == 2
 
 
 # ---------------------------------------------------------------------------

@@ -1,21 +1,15 @@
 """OpenAI-compatible provider for chat, embeddings, and transcription."""
-from typing import Dict, Any
+from typing import Dict, Any, AsyncGenerator
 import io
 
 from .base import BaseProvider
 
 
 class OpenAICompatibleProvider(BaseProvider):
-    def __init__(self, config: Dict[str, Any], config_manager=None):
-        super().__init__(config, config_manager)
-
     async def chat_completions(self, request_body: Dict[str, Any], provider_model_name: str,
-                               model_config: Dict[str, Any], request_id: str = "unknown") -> Any:
-        """Forward chat completion to an OpenAI-compatible API, streaming or non-streaming."""
+                               model_config: Dict[str, Any], request_id: str = "unknown") -> Dict[str, Any]:
+        """Forward a non-streaming chat completion to an OpenAI-compatible API."""
         request_body = self._apply_model_config(request_body, provider_model_name, model_config)
-
-        if request_body.get("stream", False):
-            return self._stream_request(self.client, "/chat/completions", request_body, request_id=request_id)
 
         connect_timeout = self._get_timeout("openai_connect_timeout", 60.0)
         non_stream_timeout = self._create_timeout(connect=connect_timeout)
@@ -27,6 +21,12 @@ class OpenAICompatibleProvider(BaseProvider):
             timeout=non_stream_timeout,
             request_id=request_id
         )
+
+    def chat_completions_stream(self, request_body: Dict[str, Any], provider_model_name: str,
+                                model_config: Dict[str, Any], request_id: str = "unknown") -> AsyncGenerator[bytes, None]:
+        """Forward a streaming chat completion to an OpenAI-compatible API."""
+        request_body = self._apply_model_config(request_body, provider_model_name, model_config)
+        return self._stream_request(self.client, "/chat/completions", request_body, request_id=request_id)
 
     async def transcriptions(self, request_body: Dict[str, Any], provider_model_name: str,
                              model_config: Dict[str, Any], request_id: str = "unknown") -> Dict[str, Any]:

@@ -1,22 +1,15 @@
 """Embedding creation service proxying requests to configured providers."""
-import asyncio
 import json
-from typing import Dict, Any, Tuple
+from typing import Any, Tuple
 
-from fastapi import HTTPException, status, Request
+from fastapi import Request
 from fastapi.responses import JSONResponse
 
-from ..core.config_manager import ConfigManager
 from ..core.logging import logger
-from ..core.error_handling import ErrorType, create_error
 from .base import BaseService
 
 
 class EmbeddingService(BaseService):
-    """Proxies embedding requests to the configured provider."""
-
-    def __init__(self, config_manager: ConfigManager):
-        super().__init__(config_manager)
 
     async def create_embeddings(self, request: Request, auth_data: Tuple[str, str, list, list]) -> Any:
         """Validate, dispatch, and return an embedding creation request."""
@@ -45,13 +38,13 @@ class EmbeddingService(BaseService):
         model_config, provider_name, provider_model_name, provider_config = \
             self._validate_and_get_config(requested_model, auth_data, **error_ctx)
 
-        provider_instance = self._get_provider(provider_name, provider_config, **error_ctx)
-        
-        try:
+        provider_instance = await self._get_provider(provider_name, provider_config, **error_ctx)
+
+        async with self._guard_service_errors(error_ctx):
             response_data = await provider_instance.embeddings(
                 request_body, provider_model_name, model_config, request_id=request_id
             )
-            
+
             self._log_service_data(
                 title="Embedding Response JSON",
                 data=response_data,
@@ -59,7 +52,7 @@ class EmbeddingService(BaseService):
                 component="embedding_service",
                 data_flow="from_provider"
             )
-            
+
             logger.info(
                 f"Response: Embedding Creation | model={requested_model}",
                 request_id=request_id,
@@ -73,8 +66,8 @@ class EmbeddingService(BaseService):
 
             usage = response_data.get("usage", {})
             if usage:
-                from ..core.usage_db import record_usage
-                asyncio.create_task(record_usage(
+                from ..core.usage_db import schedule_record_usage
+                schedule_record_usage(
                     project_name=user_id,
                     model_id=requested_model,
                     endpoint="embeddings",
@@ -84,11 +77,6 @@ class EmbeddingService(BaseService):
                     total_tokens=usage.get("total_tokens", 0),
                     request_id=request_id,
                     provider_name=provider_name,
-                ))
+                )
 
             return JSONResponse(content=response_data)
-            
-        except HTTPException as e:
-            raise e
-        except Exception as e:
-            raise create_error(ErrorType.INTERNAL_SERVER_ERROR, original_exception=e, error_details=str(e), **error_ctx)

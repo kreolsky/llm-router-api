@@ -281,7 +281,8 @@ class TestRetrieveModel:
             "id": "a-real", "context_length": 8192,
             "description": "desc", "architecture": {}, "pricing": {}
         })
-        with patch("src.services.base.get_provider_instance", return_value=mock_provider):
+        with patch("src.services.base.get_provider_instance", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = mock_provider
             result = await svc.retrieve_model(
                 "model-a", _make_auth_data(allowed_models=[])
             )
@@ -299,7 +300,8 @@ class TestRetrieveModel:
             "id": "a-real", "context_length": 4096,
             "description": "provider-desc",
         })
-        with patch("src.services.base.get_provider_instance", return_value=mock_provider):
+        with patch("src.services.base.get_provider_instance", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = mock_provider
             result = await svc.retrieve_model(
                 "model-a", _make_auth_data(allowed_models=[])
             )
@@ -312,7 +314,8 @@ class TestRetrieveModel:
         svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS)
         mock_provider = MagicMock()
         mock_provider.get_model = AsyncMock(side_effect=RuntimeError("provider down"))
-        with patch("src.services.base.get_provider_instance", return_value=mock_provider):
+        with patch("src.services.base.get_provider_instance", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = mock_provider
             result = await svc.retrieve_model(
                 "model-a", _make_auth_data(allowed_models=[])
             )

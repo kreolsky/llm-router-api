@@ -1,9 +1,8 @@
 """Audio transcription service with default model fallback."""
 from typing import Any, Tuple, Optional
-from fastapi import HTTPException, Request, UploadFile
+from fastapi import Request, UploadFile
 
 from ..services.model_service import ModelService
-from ..core.error_handling import ErrorType, create_error
 from ..core.logging import logger
 from .base import BaseService
 
@@ -65,11 +64,11 @@ class TranscriptionService(BaseService):
 
         error_ctx = dict(request_id=request_id, user_id=user_id, model_id=model_id)
 
-        try:
+        async with self._guard_service_errors(error_ctx):
             model_config, provider_name, provider_model_name, provider_config = \
                 self._validate_and_get_config(model_id, auth_data, **error_ctx)
 
-            provider_instance = self._get_provider(provider_name, provider_config, **error_ctx)
+            provider_instance = await self._get_provider(provider_name, provider_config, **error_ctx)
 
             provider_request_body = {
                 "audio": {
@@ -101,8 +100,3 @@ class TranscriptionService(BaseService):
             )
 
             return response
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise create_error(ErrorType.INTERNAL_SERVER_ERROR, original_exception=e, error_details=str(e), **error_ctx)

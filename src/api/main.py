@@ -3,6 +3,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException, status, Depends, File, Form, UploadFile
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 from typing import Optional
 import uvicorn
 from typing import Dict, Any
@@ -17,7 +18,7 @@ from ..services.embedding_service import EmbeddingService
 from ..services.transcription_service import TranscriptionService
 from ..core.logging import logger
 from ..utils.generate_key import generate_key
-from ..providers import clear_provider_cache, clear_provider_cache_async, get_provider_instance
+from ..providers import clear_provider_cache_async, rebuild_provider_cache
 from .middleware import RequestLoggerMiddleware
 
 
@@ -25,29 +26,60 @@ def _client_host(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+# Strong references for in-flight reload-rebuild tasks (prevents GC before completion).
+_reload_tasks: set[asyncio.Task] = set()
+
+
 def _request_context(request: Request) -> RequestContext:
     """Read the typed RequestContext set by middleware/auth."""
     return getattr(request.state, "request_context", None) or RequestContext(request_id="unknown")
 
 
-def _validate_providers(config_manager: ConfigManager) -> None:
-    """Eager validation: instantiate every configured provider (fail-fast).
+async def _validate_providers(config_manager: ConfigManager) -> None:
+    """Eager validation: build & cache every configured provider (fail-fast).
 
-    Collects all failures so operators can fix multiple issues at once.
+    All failures are collected by rebuild_provider_cache into one RuntimeError so
+    operators can fix multiple issues at once.
     """
-    config = config_manager.get_config()
-    providers = config.get("providers", {})
-    errors = []
-    for provider_name, provider_config in providers.items():
+    await rebuild_provider_cache(config_manager.get_config(), config_manager)
+
+
+def _make_reload_callback(config_manager: ConfigManager):
+    """Build a reload callback that atomically rebuilds the provider cache.
+
+    Exceptions are caught + logged so a single bad reload never crashes the
+    background reload task; the previous cache is retained on failure. The
+    scheduled rebuild task is kept alive in a module-level set so it is not
+    garbage-collected before completion.
+    """
+    def _on_reload_done(task: asyncio.Task) -> None:
+        _reload_tasks.discard(task)
+
+    def _rebuild_on_reload() -> None:
+        async def _do_rebuild():
+            try:
+                await rebuild_provider_cache(config_manager.get_config(), config_manager)
+            except Exception as e:
+                logger.error(
+                    f"Provider cache rebuild failed on config reload; previous cache retained: {e}",
+                    extra={
+                        "log_type": "error",
+                        "error_type": "provider_cache_rebuild_error",
+                        "error_message": str(e),
+                    },
+                    exc_info=True,
+                )
         try:
-            get_provider_instance(provider_name, provider_config, config_manager)
-        except Exception as e:
-            errors.append(f"  - {provider_name}: {e}")
-    if errors:
-        joined = "\n".join(errors)
-        raise RuntimeError(
-            f"Provider validation failed; refusing to start:\n{joined}"
-        )
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None:
+            task = loop.create_task(_do_rebuild())
+            _reload_tasks.add(task)
+            task.add_done_callback(_on_reload_done)
+        else:
+            asyncio.run(_do_rebuild())
+    return _rebuild_on_reload
 
 
 @asynccontextmanager
@@ -57,9 +89,9 @@ async def lifespan(app: FastAPI):
     app.state.config_manager = config_manager
 
     # ARCH: eager validation — fail fast on bad provider config / missing env keys.
-    _validate_providers(config_manager)
+    await _validate_providers(config_manager)
 
-    config_manager.add_reload_callback(clear_provider_cache)
+    config_manager.add_reload_callback(_make_reload_callback(config_manager))
     reload_task = config_manager.start_reloader_task()
 
     app.state.model_service = ModelService(config_manager)
@@ -83,8 +115,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 app.mount("/stat/static", StaticFiles(directory="src/static"), name="stat_static")
-
-from fastapi.responses import JSONResponse
 
 @app.exception_handler(HTTPException)
 async def custom_http_exception_handler(request: Request, exc: HTTPException):

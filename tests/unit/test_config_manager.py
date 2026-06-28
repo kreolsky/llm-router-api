@@ -142,6 +142,48 @@ class TestLoadConfig:
 
 
 # ===================================================================
+# Top-level key validation
+# ===================================================================
+
+class TestTopLevelKeyValidation:
+
+    def test_flat_yaml_without_wrapper_raises(self):
+        """A flat providers.yaml (no top-level 'providers:' key) raises RuntimeError."""
+        # Missing the 'providers:' wrapper — just a mapping of provider entries
+        flat_providers = (
+            "openai:\n  type: openai\n  base_url: https://api.openai.com\n"
+        )
+        file_map = {
+            "providers.yaml": flat_providers,
+            "models.yaml": MODELS_YAML,
+            "user_keys.yaml": USER_KEYS_YAML,
+        }
+        with patch("builtins.open", side_effect=_multi_open(file_map)), \
+             patch("os.path.exists", return_value=True), \
+             patch("os.path.getmtime", return_value=1000.0), \
+             patch("src.core.config_manager.logger"):
+            with pytest.raises(RuntimeError, match="missing top-level 'providers:'"):
+                ConfigManager(config_dir="/fake/config")
+
+    def test_flat_yaml_at_reload_warns_skips(self):
+        """At reload (fail_on_error=False) a malformed file is skipped, others load."""
+        flat_models = "gpt-4:\n  provider: openai\n"
+        file_map = {
+            "providers.yaml": PROVIDERS_YAML,
+            "models.yaml": flat_models,
+            "user_keys.yaml": USER_KEYS_YAML,
+        }
+        cm = _build_config_manager()
+        with patch("builtins.open", side_effect=_multi_open(file_map)), \
+             patch("src.core.config_manager.logger"):
+            config = cm._load_config(fail_on_error=False)
+        assert "providers" in config
+        assert "user_keys" in config
+        # models.yaml had no top-level 'models:' → skipped
+        assert "models" not in config
+
+
+# ===================================================================
 # reload_config
 # ===================================================================
 

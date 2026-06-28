@@ -2,11 +2,19 @@
 
 import os
 import time
+import asyncio
 import aiosqlite
+
+from .logging import logger
 
 DB_PATH = os.environ.get("USAGE_DB_PATH", "data/usage.db")
 
 _connection: aiosqlite.Connection | None = None
+
+# ARCH: fire-and-forget usage-recording tasks are tracked here so they are not
+# garbage-collected before completion. Each task removes itself via a done
+# callback that logs a WARNING on unexpected failure.
+_usage_tasks: set[asyncio.Task] = set()
 
 
 async def init_db() -> None:
@@ -90,8 +98,91 @@ async def record_usage(
             ),
         )
         await conn.commit()
-    except Exception:
-        pass
+    except Exception as e:
+        # WHY: usage recording runs on every request; a sustained DB outage would
+        # otherwise flood logs. Throttle to a summary once per minute.
+        global _last_usage_error_logged
+        now = time.time()
+        if now - _last_usage_error_logged >= _USAGE_ERROR_LOG_INTERVAL:
+            _last_usage_error_logged = now
+            logger.error(
+                f"Failed to record usage: {e}",
+                extra={
+                    "log_type": "error",
+                    "error_type": "usage_recording_error",
+                    "request_id": request_id,
+                    "model_id": model_id,
+                    "endpoint": endpoint,
+                },
+                exc_info=True,
+            )
+
+
+# Last monotonic-ish timestamp (wall clock) at which a usage-recording error was
+# logged at full detail. Used to throttle logging during a DB outage.
+_last_usage_error_logged: float = 0.0
+_USAGE_ERROR_LOG_INTERVAL: float = 60.0
+
+
+def _on_usage_done(task: asyncio.Task) -> None:
+    """Done callback: discard the task and log WARNING on failure."""
+    _usage_tasks.discard(task)
+    exc = task.exception()
+    if exc is not None:
+        logger.warning(
+            f"Usage recording task failed: {exc}",
+            extra={
+                "log_type": "warning",
+                "error_type": "usage_task_failure",
+                "error_message": str(exc),
+            },
+            exc_info=exc,
+        )
+
+
+def schedule_record_usage(**kwargs) -> asyncio.Task | None:
+    """Fire-and-forget usage recording.
+
+    Returns the created task (tracked in _usage_tasks so it is not GC'd before
+    completion). Returns None when no event loop is running (caller may then
+    await record_usage directly if needed).
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+    task = loop.create_task(record_usage(**kwargs))
+    _usage_tasks.add(task)
+    task.add_done_callback(_on_usage_done)
+    return task
+
+
+def schedule_chat_usage(
+    usage: dict,
+    *,
+    project_name: str,
+    model_id: str,
+    request_id: str,
+    provider_name: str = "",
+    start_time: float,
+) -> asyncio.Task | None:
+    """Shared token-extraction + fire-and-forget recording for chat completions.
+
+    Used by both the non-streaming (chat_service) and streaming (stream_processor)
+    paths so the recorded field set cannot drift between them.
+    """
+    return schedule_record_usage(
+        project_name=project_name,
+        model_id=model_id,
+        endpoint="chat",
+        prompt_tokens=usage.get("prompt_tokens", 0),
+        completion_tokens=usage.get("completion_tokens", 0),
+        cached_tokens=usage.get("prompt_tokens_details", {}).get("cached_tokens", 0),
+        total_tokens=usage.get("total_tokens", 0),
+        request_id=request_id,
+        provider_name=provider_name,
+        duration_ms=(time.time() - start_time) * 1000,
+    )
 
 
 async def get_distinct_users() -> list[str]:

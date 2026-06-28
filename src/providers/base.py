@@ -12,28 +12,24 @@ from fastapi.responses import JSONResponse
 
 from ..utils.deep_merge import deep_merge
 from ..utils.mask import mask_headers
-from ..core.error_handling import ErrorType, create_error, log_provider_error
+from ..core.error_handling import ErrorType, create_error, log_provider_error, create_provider_http_error
 from ..core.logging import logger
 
 
-def retry_on_rate_limit(max_retries: Optional[int] = None, base_delay: Optional[float] = None, max_delay: Optional[float] = None, config_manager=None):
+def retry_on_rate_limit(max_retries: Optional[int] = None, base_delay: Optional[float] = None, max_delay: Optional[float] = None):
     """Retry decorator for 429 (Too Many Requests) with exponential backoff.
 
     Backoff formula: min(base_delay * 2^attempt, max_delay).
     Rate-limit detection checks both e.status_code == 429 and
     e.original_exception.response.status_code == 429 (wrapped httpx errors).
-    Config resolution: self.config_manager > closure arg > hardcoded defaults.
+    Config is read from self.config_manager (first arg); otherwise the decorator
+    args / hardcoded defaults are used.
     """
     def decorator(func: Callable):
         @wraps(func)
         async def wrapper(*args, **kwargs):
-            # Get retry settings from config_manager if available, otherwise use defaults
             # Try to get config_manager from the first argument (self)
-            cm = None
-            if args and hasattr(args[0], 'config_manager'):
-                cm = args[0].config_manager
-            elif config_manager:
-                cm = config_manager
+            cm = args[0].config_manager if args and hasattr(args[0], 'config_manager') else None
 
             if cm:
                 actual_max_retries = cm.provider_max_retries if max_retries is None else max_retries
@@ -123,7 +119,7 @@ class BaseProvider:
         # ARCH: per-instance concurrency gate (asyncio.Semaphore). Only created when
         # `max_concurrent` is a positive int; otherwise None (no limiting). The semaphore
         # is owned per-instance, so a config reload that changes max_concurrent only takes
-        # effect after clear_provider_cache() rebuilds instances.
+        # effect after a config reload rebuilds the cache (semaphore is per-instance).
         max_concurrent = config.get("max_concurrent")
         if isinstance(max_concurrent, int) and max_concurrent > 0:
             self._semaphore = asyncio.Semaphore(max_concurrent)
@@ -254,26 +250,13 @@ class BaseProvider:
         except (json.JSONDecodeError, ValueError, httpx.ResponseNotRead):
             error_message = response_text or error_message
 
-        log_provider_error(
+        raise create_provider_http_error(
+            status_code=e.response.status_code,
+            message=error_message,
             provider_name=self.provider_name,
-            error_details=response_text,
-            status_code=e.response.status_code,
+            raw=response_text,
+            request_id=request_id,
             original_exception=e,
-            request_id=request_id
-        )
-
-        raise HTTPException(
-            status_code=e.response.status_code,
-            detail={
-                "error": {
-                    "code": e.response.status_code,
-                    "message": error_message,
-                    "metadata": {
-                        "provider_name": self.provider_name,
-                        "raw": response_text
-                    }
-                }
-            }
         ) from e
 
     def _get_timeout(self, timeout_type: str, default_value: float) -> float:
@@ -309,7 +292,7 @@ class BaseProvider:
                 timeout=timeout, files=files, data=data, request_id=request_id,
             )
 
-    @retry_on_rate_limit(config_manager=None)
+    @retry_on_rate_limit()
     async def _make_request_inner(
         self,
         method: str,
@@ -486,7 +469,13 @@ class BaseProvider:
             raise
 
     async def chat_completions(self, request_body: Dict[str, Any], provider_model_name: str,
-                               model_config: Dict[str, Any], request_id: str = "unknown") -> Any:
+                               model_config: Dict[str, Any], request_id: str = "unknown") -> Dict[str, Any]:
+        """Non-streaming chat completion. Returns the parsed provider JSON response."""
+        raise NotImplementedError
+
+    def chat_completions_stream(self, request_body: Dict[str, Any], provider_model_name: str,
+                                model_config: Dict[str, Any], request_id: str = "unknown") -> AsyncGenerator[bytes, None]:
+        """Streaming chat completion. Yields raw SSE bytes from the provider."""
         raise NotImplementedError
 
     async def embeddings(self, request_body: Dict[str, Any], provider_model_name: str,

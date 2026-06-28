@@ -1,7 +1,7 @@
 """Unit tests for src/services/base.py — BaseService class."""
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
 from fastapi import HTTPException
@@ -212,8 +212,9 @@ class TestValidateAndGetConfig:
 
 class TestGetProvider:
 
-    @patch("src.services.base.get_provider_instance")
-    def test_valid_config_returns_provider(self, mock_get):
+    @pytest.mark.asyncio
+    @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
+    async def test_valid_config_returns_provider(self, mock_get):
         """Valid config returns a provider instance."""
         mock_provider = MagicMock()
         mock_get.return_value = mock_provider
@@ -221,14 +222,15 @@ class TestGetProvider:
         svc = _build_service()
         provider_config = {"type": "openai", "base_url": "https://api.openai.com"}
 
-        result = svc._get_provider("openai", provider_config)
+        result = await svc._get_provider("openai", provider_config)
         assert result is mock_provider
         mock_get.assert_called_once_with(
             "openai", provider_config, svc.config_manager
         )
 
-    @patch("src.services.base.get_provider_instance")
-    def test_invalid_type_raises(self, mock_get):
+    @pytest.mark.asyncio
+    @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
+    async def test_invalid_type_raises(self, mock_get):
         """Invalid provider type raises (factory raises HTTPException via create_error)."""
         mock_get.side_effect = HTTPException(status_code=404, detail="not found")
 
@@ -236,5 +238,5 @@ class TestGetProvider:
         provider_config = {"type": "bad"}
 
         with pytest.raises(HTTPException) as exc_info:
-            svc._get_provider("bad", provider_config)
+            await svc._get_provider("bad", provider_config)
         assert exc_info.value.status_code == 404
