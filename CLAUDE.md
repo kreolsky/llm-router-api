@@ -18,7 +18,7 @@ OpenAI-compatible API gateway for multiple LLM providers. Routes requests to Ope
 
 **Request Flow**: Middleware (request ID, logging) → Auth (Bearer token, HMAC) → Service (model access validation) → Provider (HTTP to backend) → Response (JSON or SSE stream).
 
-**Provider Abstraction**: Single provider type (`openai`). Each provider instance owns its own `httpx.AsyncClient` (per-backend connection pool). Instances are cached by **provider name** (the dict key in `providers.yaml`); the cache is cleared on config reload, closing each cached client first (`aclose()`). Base class handles retry with exponential backoff on 429s.
+**Provider Abstraction**: Single provider type (`openai`). Each provider instance owns its own `httpx.AsyncClient` (per-backend connection pool). Instances are cached by **provider name** (the dict key in `providers.yaml`); the cache is cleared on config reload, closing each cached client first (`aclose()`). Base class handles retry with exponential backoff on 429s. Optional per-provider `proxy` key (e.g. `socks5://host:port`) routes all of that provider's traffic through a SOCKS5 proxy; `None` (unset) = direct connection. Requires the `httpx[socks]` extra (`socksio`).
 
 **Startup Validation**: Eager fail-fast — on startup every configured provider is instantiated (validating `base_url` + env API key). Any failure (collected, all reported) refuses to start.
 

@@ -85,6 +85,8 @@ class BaseProvider:
         Reads API key from the env var named by config['api_key_env'].
         Owns its own httpx.AsyncClient (per-provider connection pool). Limits
         come from config_manager (global env applied per pool).
+        Reads an optional `proxy` URL (e.g. socks5://host:port) from config;
+        when set, all of the provider's traffic is routed through that proxy.
         Auto-derives provider_name from class name for logging.
         Sets default Content-Type: application/json (subclasses may override before super().__init__).
 
@@ -96,6 +98,7 @@ class BaseProvider:
         self.headers = dict(config.get("headers") or {})
         self.api_key = os.environ.get(self.api_key_env) if self.api_key_env else None
         self.config_manager = config_manager
+        self.proxy = config.get("proxy")
         self.provider_name = self.__class__.__name__.replace("Provider", "").lower()
         self.headers.setdefault("Content-Type", "application/json")
 
@@ -138,7 +141,16 @@ class BaseProvider:
             )
 
     def _build_client(self) -> httpx.AsyncClient:
-        """Construct an httpx.AsyncClient using limits from config_manager."""
+        """Construct an httpx.AsyncClient using limits from config_manager.
+
+        ARCH: per-provider proxy support. The optional `proxy` config key
+        (a full URL with scheme, e.g. socks5://proxy.red:1331) is passed to
+        httpx as-is; no normalization in code. `None` = direct connection
+        (httpx default), so providers without the key behave unchanged.
+        httpx requires the socksio extra for socks5://; an invalid/unsupported
+        proxy URL surfaces as an error when the client is first used (or on the
+        fail-fast startup instantiation).
+        """
         if self.config_manager is not None:
             limits = httpx.Limits(
                 max_connections=self.config_manager.httpx_max_connections,
@@ -153,7 +165,7 @@ class BaseProvider:
         else:
             limits = httpx.Limits()
             timeout = httpx.Timeout(connect=60.0, read=60.0, write=None, pool=5.0)
-        return httpx.AsyncClient(limits=limits, timeout=timeout)
+        return httpx.AsyncClient(limits=limits, timeout=timeout, proxy=self.proxy)
 
     async def aclose(self) -> None:
         """Close the owned httpx.AsyncClient. Safe to call multiple times."""

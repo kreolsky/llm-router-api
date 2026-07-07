@@ -40,7 +40,7 @@ def _make_config(base_url="https://api.example.com", api_key_env="TEST_API_KEY",
 
 
 def _build_provider(base_url="https://api.example.com", api_key_env="TEST_API_KEY",
-                     env_vars=None, config_manager=None, headers=None):
+                     env_vars=None, config_manager=None, headers=None, proxy=None):
     """Build a ProviderStub with mocked env.
 
     The provider owns its own httpx.AsyncClient (built in __init__).
@@ -50,6 +50,8 @@ def _build_provider(base_url="https://api.example.com", api_key_env="TEST_API_KE
         config["api_key_env"] = api_key_env
     if headers is not None:
         config["headers"] = headers
+    if proxy is not None:
+        config["proxy"] = proxy
 
     env = {"TEST_API_KEY": "sk-test-123"}
     if env_vars is not None:
@@ -449,6 +451,48 @@ class TestClientOwnership:
         await provider.aclose()
         await provider.aclose()  # no error
         assert provider.client.is_closed
+
+
+# ===================================================================
+# Per-provider proxy (SOCKS5)
+# ===================================================================
+
+class TestProxySupport:
+    """Tests for the per-provider `proxy` config key (SOCKS5)."""
+
+    def test_provider_without_proxy_defaults_none(self):
+        """A provider without the `proxy` key has self.proxy is None."""
+        provider = _build_provider()
+        assert provider.proxy is None
+        assert isinstance(provider.client, httpx.AsyncClient)
+        assert not provider.client.is_closed
+
+    def test_provider_with_proxy_builds_client(self):
+        """Provider with a socks5 proxy URL builds a client without error."""
+        provider = _build_provider(proxy="socks5://proxy.red:1331")
+        assert provider.proxy == "socks5://proxy.red:1331"
+        assert isinstance(provider.client, httpx.AsyncClient)
+        assert not provider.client.is_closed
+
+    @pytest.mark.asyncio
+    async def test_proxy_client_closes_cleanly(self):
+        """A proxy-backed client can be closed via aclose()."""
+        provider = _build_provider(proxy="socks5://proxy.red:1331")
+        await provider.aclose()
+        assert provider.client.is_closed
+
+    def test_proxy_with_config_manager(self):
+        """Proxy and config_manager limits coexist on the same client."""
+        cm = MagicMock()
+        cm.httpx_max_connections = 10
+        cm.httpx_max_keepalive_connections = 2
+        cm.httpx_connect_timeout = 12.0
+        cm.httpx_read_timeout = 33.0
+        cm.httpx_pool_timeout = 4.0
+        provider = _build_provider(proxy="socks5://proxy.red:1331", config_manager=cm)
+        assert provider.proxy == "socks5://proxy.red:1331"
+        assert provider.client.timeout.connect == 12.0
+        assert provider.client.timeout.read == 33.0
 
 
 # ===================================================================

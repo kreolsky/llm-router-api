@@ -11,6 +11,7 @@ providers:
     type: openai
     base_url: https://openrouter.ai/api/v1
     api_key_env: OPENROUTER_API_KEY
+    proxy: socks5://proxy.red:1331
     headers:
       HTTP-Referer: "https://nnp.space"
       X-Title: "nnp.space"
