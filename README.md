@@ -11,6 +11,7 @@ OpenAI-compatible API gateway for multiple LLM providers. One endpoint, multiple
 - `POST /v1/embeddings` — text embeddings
 - `POST /v1/audio/transcriptions` — speech-to-text (model optional, fallback to `DEFAULT_STT_MODEL`)
 - `GET /tools/generate_key` — generate an API key in `nnp-v1-<hex>` format
+- `GET /stat/` — token usage dashboard (HTML); backed by `/stat/api/users`, `/stat/api/models`, `/stat/api/usage`
 
 ## Quick Start
 
@@ -31,7 +32,7 @@ curl http://localhost:8777/v1/chat/completions \
 1. **Request arrives** at a FastAPI endpoint. Middleware generates a `request_id` and logs the lifecycle.
 2. **Auth** extracts the Bearer token, looks it up in `user_keys.yaml` (constant-time comparison), sets `project_name` on request state.
 3. **Service layer** validates the model: checks `allowed_models` *before* checking existence (prevents information leakage about configured models). Resolves `provider_name` and `provider_model_name` from `models.yaml`.
-4. **Provider layer** gets a cached provider instance (keyed by `(type, base_url)`). The provider translates the request to the backend's format and sends it via a shared `httpx.AsyncClient` connection pool.
+4. **Provider layer** gets a cached provider instance (keyed by provider name). The provider translates the request to the backend's format and sends it via its own `httpx.AsyncClient` connection pool, optionally through a per-provider proxy.
 5. **Streaming**: `_stream_request` yields raw bytes → `StreamProcessor` either passes them through transparently or buffers UTF-8, splits on SSE `\n\n` boundaries, and sanitizes each `data:` frame.
 6. **Errors**: Provider HTTP errors are extracted from the JSON response body, logged, and returned in OpenRouter-compatible format `{"error": {"code", "message", "metadata": {"provider_name", "raw"}}}`.
 7. **Rate limits**: 429 responses trigger exponential backoff retry (`min(base * 2^attempt, max)`), configurable via env vars.
@@ -50,11 +51,12 @@ providers:
     base_url: https://api.deepseek.com/v1
     api_key_env: DEEPSEEK_API_KEY         # env var name for the API key
     max_concurrent: 3                     # optional: cap concurrent requests
+    proxy: socks5://host:1080             # optional: route this provider's traffic through a proxy
     headers:                              # extra headers (optional)
       HTTP-Referer: "https://myapp.com"
 ```
 
-`type` determines the provider class: `openai` (pass-through). Any OpenAI-compatible API works with `type: openai`.
+`type` determines the provider class: `openai` (pass-through). Any OpenAI-compatible API works with `type: openai`. The optional `proxy` key routes all of that provider's traffic through a SOCKS5/HTTP proxy (requires the `httpx[socks]` extra); unset = direct connection.
 
 ### models.yaml — model registry
 
@@ -138,7 +140,9 @@ src/
 - **Hot-reload**: Background task polls config file mtimes. On change, reloads YAML and invokes callbacks (e.g. clearing provider cache). Partial reload (missing file) is rejected.
 - **Access control**: Per-key model and endpoint restrictions. Access check runs *before* existence check to prevent leaking information about configured models.
 - **Message sanitization**: When `SANITIZE_MESSAGES=true`, strips fields like `done`, `__stream_end__`, `__internal__` from messages and stream chunks. Disabled by default.
-- **Provider caching**: Provider instances cached by `(type, base_url)`. Cache cleared on config reload.
+- **Per-provider proxy**: Optional `proxy` key (e.g. `socks5://host:1080`) routes a provider's outbound traffic through a SOCKS5/HTTP proxy. Requires the `httpx[socks]` extra.
+- **Token usage dashboard**: `/stat/` serves an HTML dashboard of token usage per user/model over time, backed by a SQLite store (`data/usage.db`, path via `USAGE_DB_PATH`). Persist it by mounting `./data:/app/data`.
+- **Provider caching**: Provider instances cached by provider name (the `providers.yaml` key); each owns its own `httpx.AsyncClient` pool. Cache cleared on config reload, closing each client first.
 - **Error format**: All errors returned as `{"error": {"code", "message", "metadata"}}` — OpenRouter-compatible. Provider errors include `metadata.provider_name` and `metadata.raw`.
 
 ## Tests
@@ -172,3 +176,4 @@ See [tests/README.md](tests/README.md) for details on what each test file covers
 | `DEBUG` | false | Enable debug-level JSON logging |
 | `LOG_LEVEL` | INFO | Logging level |
 | `DEFAULT_STT_MODEL` | stt/dummy | Fallback transcription model |
+| `USAGE_DB_PATH` | data/usage.db | SQLite path for the token usage dashboard |
