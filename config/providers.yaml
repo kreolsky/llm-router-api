@@ -7,6 +7,7 @@ providers:
     type: openai
     base_url: https://api.moonshot.ai/v1
     api_key_env: KIMI_API_KEY
+    proxy: socks5://proxy.red:1331
   openrouter:
     type: openai
     base_url: https://openrouter.ai/api/v1

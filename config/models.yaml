@@ -22,7 +22,7 @@ models:
         enable_thinking: false
   kimi:
     provider: kimi
-    provider_model_name: kimi-k2.6
+    provider_model_name: kimi-k2.7-code
     options:
       stream: true
   embeddings/dummy:
