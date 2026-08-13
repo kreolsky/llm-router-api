@@ -5,8 +5,8 @@ OpenAI-compatible API gateway for multiple LLM providers. One endpoint, multiple
 ## Endpoints
 
 - `GET /health` — healthcheck
-- `GET /v1/models` — list models (filtered by API key permissions)
-- `GET /v1/models/{model_id}` — model details, enriched with live provider metadata
+- `GET /v1/models` — list models (filtered by API key permissions) with declared capabilities (context, vision, pricing)
+- `GET /v1/models/{model_id}` — model details; `?refresh=true` for a debug best-effort upstream refresh
 - `POST /v1/chat/completions` — chat completion (streaming + non-streaming)
 - `POST /v1/embeddings` — text embeddings
 - `POST /v1/audio/transcriptions` — speech-to-text (model optional, fallback to `DEFAULT_STT_MODEL`)
@@ -75,6 +75,33 @@ models:
 
 `options` are deep-merged into the request body, so you can set default parameters per model. `is_hidden` keeps the model usable but invisible in the model list.
 
+### model_info.yaml — manual capability catalog
+
+Declares per-model capabilities (context, output limit, vision/modalities, supported parameters, pricing). This is the **manual override** layer; the **auto-cache** (`src/core/model_capabilities.py`, persisted to `data/model_cache.json`) fills the rest from upstream `/models` responses. `model_info.yaml` always wins over the auto-cache. All fields optional.
+
+```yaml
+model_info:
+  gemini/mini:
+    description: "Google Gemini 2.0 Flash — fast, multimodal, tool calling"
+    context_length: 1048576               # int -> top_provider.context_length too
+    max_completion_tokens: 8192           # int -> top_provider.max_completion_tokens too
+    architecture:
+      input_modalities: [text, image]     # presence of "image" == vision (derives supports_vision)
+      output_modalities: [text]
+      tokenizer: Gemini                   # optional
+    supported_parameters: [tools, tool_choice, max_tokens, temperature, top_p, stream]
+    reasoning:                            # manual-only; not derived from upstream
+      supported: false
+      default_enabled: false
+    pricing:                              # numbers per-token; serialized to strings (no exponent)
+      prompt: 0.0000001
+      completion: 0.0000004
+      input_cache_read: 0.000000025
+      image: 0.0000258                    # optional
+```
+
+Derived fields (`architecture.modality`, `supports_vision`, `top_provider`, string `pricing`, `per_request_limits`) are computed by `render_capabilities()` on serialization — they are **not** stored here.
+
 ### user_keys.yaml — access control
 
 ```yaml
@@ -111,6 +138,7 @@ src/
 ├── core/
 │   ├── auth.py            # Bearer token extraction, hmac comparison, endpoint access
 │   ├── config_manager.py  # YAML loading, hot-reload task, env-based properties
+│   ├── model_capabilities.py  # Capabilities: render/normalize/merge + auto-cache + background refresh
 │   ├── sanitizer.py       # Strip non-standard fields (done, __stream_end__, etc.)
 │   ├── error_handling/    # ErrorType enum, ErrorHandler factory, ErrorLogger
 │   └── logging/           # Logger with request/response/debug_data methods
@@ -124,7 +152,7 @@ src/
 │   │   ├── chat_service.py    # Orchestrator: validation → provider → StreamingResponse/JSONResponse
 │   │   └── stream_processor.py # SSE buffering, UTF-8 split recovery, optional sanitization
 │   ├── embedding_service.py
-│   ├── model_service.py   # Model listing with provider enrichment
+│   ├── model_service.py   # Model listing/retrieval from merged capabilities (no network)
 │   └── transcription_service.py  # Default model fallback
 └── utils/
     ├── deep_merge.py      # Recursive dict merge (for model options)
@@ -143,6 +171,7 @@ src/
 - **Per-provider proxy**: Optional `proxy` key (e.g. `socks5://host:1080`) routes a provider's outbound traffic through a SOCKS5/HTTP proxy. Requires the `httpx[socks]` extra.
 - **Token usage dashboard**: `/stat/` serves an HTML dashboard of token usage per user/model over time, backed by a SQLite store (`data/usage.db`, path via `USAGE_DB_PATH`). Persist it by mounting `./data:/app/data`.
 - **Provider caching**: Provider instances cached by provider name (the `providers.yaml` key); each owns its own `httpx.AsyncClient` pool. Cache cleared on config reload, closing each client first.
+- **Model capabilities**: `/v1/models` declares the full capability set per model (context, output limit, vision/modalities, supported parameters, pricing). Two layers — manual `model_info.yaml` (always wins) and an upstream auto-cache (`data/model_cache.json`, refreshed by a background task). The hot path never touches the network; `?refresh=true` is a debug-only best-effort refresh.
 - **Error format**: All errors returned as `{"error": {"code", "message", "metadata"}}` — OpenRouter-compatible. Provider errors include `metadata.provider_name` and `metadata.raw`.
 
 ## Tests
@@ -172,6 +201,10 @@ See [tests/README.md](tests/README.md) for details on what each test file covers
 | `PROVIDER_RETRY_BASE_DELAY` | 1.0 | Retry base delay (s) |
 | `PROVIDER_RETRY_MAX_DELAY` | 30.0 | Retry max delay (s) |
 | `CONFIG_RELOAD_INTERVAL` | 5 | Config poll interval (s) |
+| `MODEL_CACHE_ENABLED` | true | Populate the model capabilities auto-cache |
+| `MODEL_CACHE_REFRESH_INTERVAL` | 3600 | Capabilities cache refresh interval (s) |
+| `MODEL_CACHE_TTL` | 86400 | Capabilities cache entry TTL (s) |
+| `MODEL_CACHE_PATH` | data/model_cache.json | Persisted capabilities cache file |
 | `SANITIZE_MESSAGES` | false | Strip service fields from messages |
 | `DEBUG` | false | Enable debug-level JSON logging |
 | `LOG_LEVEL` | INFO | Logging level |

@@ -76,7 +76,57 @@ class ConfigManager:
                 logger.error(f"Error parsing YAML file {path}: {e}", exc_info=True)
                 if fail_on_error and required:
                     raise RuntimeError(f"Failed to parse config: {path}") from e
+        self._validate_model_info(config)
         return config
+
+    # Allowed top-level keys per model_info entry (normalized schema; see
+    # config/model_info.yaml header). Used by the soft validation below.
+    _MODEL_INFO_KEYS = {
+        "name", "description", "context_length", "max_completion_tokens",
+        "is_moderated", "architecture", "supported_parameters", "reasoning", "pricing",
+    }
+    _MODEL_INFO_ARCH_KEYS = {
+        "input_modalities", "output_modalities", "tokenizer", "instruct_type",
+    }
+
+    @staticmethod
+    def _validate_model_info(config: Dict[str, Any]) -> None:
+        """Soft-validate model_info: warn on unknown keys and orphan entries.
+
+        Non-fatal (model_info is required=False). Warns when an entry has no
+        matching model in models.yaml, or uses keys outside the normalized
+        schema — both indicate a stale or mistyped catalog.
+        """
+        model_info = config.get("model_info") or {}
+        if not isinstance(model_info, dict) or not model_info:
+            return
+        models = config.get("models") or {}
+        for model_id, entry in model_info.items():
+            if not isinstance(entry, dict):
+                logger.warning(
+                    f"model_info entry '{model_id}' is not a mapping, ignoring",
+                    extra={"config": {"model_info_key": model_id}},
+                )
+                continue
+            if model_id not in models:
+                logger.warning(
+                    f"model_info entry '{model_id}' has no matching model in models.yaml",
+                    extra={"config": {"model_info_key": model_id}},
+                )
+            unknown = set(entry) - ConfigManager._MODEL_INFO_KEYS
+            if unknown:
+                logger.warning(
+                    f"model_info entry '{model_id}' has unknown keys: {sorted(unknown)}",
+                    extra={"config": {"model_info_key": model_id, "unknown_keys": sorted(unknown)}},
+                )
+            arch = entry.get("architecture")
+            if isinstance(arch, dict):
+                arch_unknown = set(arch) - ConfigManager._MODEL_INFO_ARCH_KEYS
+                if arch_unknown:
+                    logger.warning(
+                        f"model_info entry '{model_id}'.architecture has unknown keys: {sorted(arch_unknown)}",
+                        extra={"config": {"model_info_key": model_id, "unknown_keys": sorted(arch_unknown)}},
+                    )
 
     def get_config(self) -> Dict[str, Any]:
         return self.config
@@ -157,6 +207,24 @@ class ConfigManager:
     @property
     def openai_embeddings_read_timeout(self) -> float:
         return float(os.getenv("OPENAI_EMBEDDINGS_READ_TIMEOUT", "30.0"))
+
+    # --- Model capabilities auto-cache (see src/core/model_capabilities.py) ---
+
+    @property
+    def model_cache_enabled(self) -> bool:
+        return os.getenv("MODEL_CACHE_ENABLED", "true").lower() == "true"
+
+    @property
+    def model_cache_refresh_interval(self) -> int:
+        return int(os.getenv("MODEL_CACHE_REFRESH_INTERVAL", "3600"))
+
+    @property
+    def model_cache_ttl(self) -> int:
+        return int(os.getenv("MODEL_CACHE_TTL", "86400"))
+
+    @property
+    def model_cache_path(self) -> str:
+        return os.getenv("MODEL_CACHE_PATH", "data/model_cache.json")
 
     def add_reload_callback(self, callback, name: str = ""):
         """Register an async callback invoked after a successful config load.

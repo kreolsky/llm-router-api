@@ -1,22 +1,47 @@
 # Model information catalog — exposed to clients via /v1/models and /v1/models/{id}.
 # Keyed by model_id (matching models.yaml keys).
-# All fields optional; missing entries or fields simply don't appear in responses.
+#
+# This is the MANUAL layer of model capabilities. The AUTO-CACHE layer
+# (src/core/model_capabilities.py, persisted to data/model_cache.json) is filled
+# from upstream /models responses. On serialization the two are deep-merged:
+#
+#   INVARIANT: model_info.yaml ALWAYS wins over the auto-cache.
+#
+# Stored schema (all fields optional). This is the SAME shape the auto-cache
+# stores, so a deep-merge between the two is well-defined:
+#   <model_id>:
+#     name: str                            # human-readable name
+#     description: str
+#     context_length: int
+#     max_completion_tokens: int
+#     is_moderated: bool                   # -> top_provider.is_moderated
+#     architecture:
+#       input_modalities: [text, image]    # presence of "image" == vision support
+#       output_modalities: [text]
+#       tokenizer: str                     # optional
+#       instruct_type: str                 # optional
+#     supported_parameters: [tools, tool_choice, max_tokens, temperature, top_p, stream]
+#     reasoning:
+#       supported: bool
+#       default_enabled: bool
+#     pricing:                             # numbers per-token; serialized to strings
+#       prompt: float
+#       completion: float
+#       input_cache_read: float
+#       image: float                       # optional
+#
+# Derived fields (architecture.modality, supports_vision, top_provider,
+# flat-duplicated max_completion_tokens, string pricing, per_request_limits) are
+# NOT stored here — they are computed by render_capabilities() on serialization.
 model_info:
-  deepseek/pro:
-    description: "DeepSeek V4 Pro — high-performance MoE, thinking mode, tool calling"
-    context_length: 262144
-    max_completion_tokens: 32768
-    reasoning:
-      supported: true
-      default_enabled: true
-    pricing:
-      prompt: 0.000000435
-      completion: 0.00000087
-      input_cache_read: 0.000000003625
   deepseek/flash:
     description: "DeepSeek V4 Flash — efficiency-optimized MoE, 284B total / 13B active params, thinking mode, tool calling"
     context_length: 262144
     max_completion_tokens: 32768
+    architecture:
+      input_modalities: [text]
+      output_modalities: [text]
+    supported_parameters: [tools, tool_choice, max_tokens, temperature, top_p, stream]
     reasoning:
       supported: true
       default_enabled: true
@@ -24,21 +49,56 @@ model_info:
       prompt: 0.00000014
       completion: 0.00000028
       input_cache_read: 0.0000000028
-  kimi:
-    description: "Kimi K2.6 — Moonshot AI, tool calling, thinking mode"
+  deepseek/pro:
+    description: "DeepSeek V4 Pro — high-performance MoE, thinking mode, tool calling"
     context_length: 262144
-    max_completion_tokens: 4096
+    max_completion_tokens: 32768
+    architecture:
+      input_modalities: [text]
+      output_modalities: [text]
+    supported_parameters: [tools, tool_choice, max_tokens, temperature, top_p, stream]
+    reasoning:
+      supported: true
+      default_enabled: true
+    pricing:
+      prompt: 0.000000435
+      completion: 0.00000087
+      input_cache_read: 0.000000003625
+  kimi:
+    description: "Kimi K2.7 Code — Moonshot AI, code-optimized, tool calling, thinking mode"
+    context_length: 262144
+    max_completion_tokens: 8192
+    architecture:
+      input_modalities: [text]
+      output_modalities: [text]
+    supported_parameters: [tools, tool_choice, max_tokens, temperature, top_p, stream]
     reasoning:
       supported: true
   gemini/mini:
+    # context_length / max_completion_tokens / pricing come from the openrouter
+    # auto-cache; this entry only declares what the cache cannot (vision flag,
+    # reasoning policy, display name).
     description: "Google Gemini 2.0 Flash — fast, multimodal, tool calling"
-    context_length: 262144
-    max_completion_tokens: 8192
+    architecture:
+      input_modalities: [text, image]
+      output_modalities: [text]
     reasoning:
       supported: false
-  local/orange:
-    description: "Local LLM via llama-server — GPU-accelerated inference"
+  local/chat:
+    description: "Local LLM via llama-server — GPU-accelerated inference (low reasoning)"
     context_length: 32768
     max_completion_tokens: 4096
+    architecture:
+      input_modalities: [text, image]
+      output_modalities: [text]
+    reasoning:
+      supported: false
+  local/reasoner:
+    description: "Local LLM via llama-server — GPU-accelerated inference (high reasoning)"
+    context_length: 32768
+    max_completion_tokens: 4096
+    architecture:
+      input_modalities: [text, image]
+      output_modalities: [text]
     reasoning:
       supported: false

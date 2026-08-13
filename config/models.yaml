@@ -14,12 +14,20 @@ models:
   gemini/mini:
     provider: openrouter
     provider_model_name: google/gemini-2.0-flash-001
-  local/orange:
+  local/chat:
     provider: orange
     provider_model_name: dummy
     options:
       chat_template_kwargs:
+        reasoning_strength: low
         enable_thinking: false
+  local/reasoner:
+    provider: orange
+    provider_model_name: dummy
+    options:
+      chat_template_kwargs:
+        reasoning_strength: high
+        enable_thinking: true
   kimi:
     provider: kimi
     provider_model_name: kimi-k2.7-code

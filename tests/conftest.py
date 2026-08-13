@@ -33,8 +33,8 @@ def api_keys() -> Dict[str, str]:
 def test_models() -> Dict[str, Dict[str, Any]]:
     """Test models configuration."""
     return {
-        "local_orange": {
-            "id": "local/orange",
+        "local_chat": {
+            "id": "local/chat",
             "provider": "orange",
             "type": "chat",
             "streaming": True,

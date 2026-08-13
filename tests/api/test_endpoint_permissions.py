@@ -37,7 +37,7 @@ class TestEndpointPermissions:
         
         # Test chat completion endpoint
         payload = {
-            "model": test_models["local_orange"]["id"],
+            "model": test_models["local_chat"]["id"],
             "messages": sample_messages,
             "stream": False,
             "max_tokens": 50
@@ -110,7 +110,7 @@ class TestEndpointPermissions:
         
         # Test chat completion endpoint
         payload = {
-            "model": "local/orange",
+            "model": "local/chat",
             "messages": [{"role": "user", "content": "Hello"}],
             "stream": False,
             "max_tokens": 50
@@ -159,7 +159,7 @@ class TestEndpointPermissions:
         
         # Test chat completion endpoint
         payload = {
-            "model": "local/orange",
+            "model": "local/chat",
             "messages": [{"role": "user", "content": "Hello"}],
             "stream": False,
             "max_tokens": 50
@@ -227,19 +227,19 @@ class TestEndpointPermissions:
 
 
 class TestLimitedUserPermissions:
-    """Test permissions for user with allowed_models: [local/orange] only."""
+    """Test permissions for user with allowed_models: [local/chat] only."""
 
     @pytest.mark.asyncio
     async def test_limited_chat_allowed_model(
         self, base_url, api_keys, sample_messages, http_client
     ):
-        """Chat completions with allowed model local/orange should succeed."""
+        """Chat completions with allowed model local/chat should succeed."""
         response = await http_client.post(
             f"{base_url}/v1/chat/completions",
             headers={"Authorization": f"Bearer {api_keys['limited']}", "Content-Type": "application/json"},
-            json={"model": "local/orange", "messages": sample_messages, "stream": False, "max_tokens": 50}
+            json={"model": "local/chat", "messages": sample_messages, "stream": False, "max_tokens": 50}
         )
-        assert response.status_code == 200, "limited user should access local/orange"
+        assert response.status_code == 200, "limited user should access local/chat"
 
     @pytest.mark.asyncio
     async def test_limited_chat_denied_gemini(
@@ -306,26 +306,26 @@ class TestLimitedUserPermissions:
     async def test_limited_model_list_filtered(
         self, base_url, api_keys, http_client
     ):
-        """Model listing should return only local/orange for limited user."""
+        """Model listing should return only local/chat for limited user."""
         response = await http_client.get(
             f"{base_url}/v1/models",
             headers={"Authorization": f"Bearer {api_keys['limited']}"}
         )
         assert response.status_code == 200
         model_ids = [m["id"] for m in response.json()["data"]]
-        assert model_ids == ["local/orange"], f"limited user should only see local/orange, got {model_ids}"
+        assert model_ids == ["local/chat"], f"limited user should only see local/chat, got {model_ids}"
 
     @pytest.mark.asyncio
     async def test_limited_model_retrieve_allowed(
         self, base_url, api_keys, http_client
     ):
-        """Retrieving local/orange should succeed for limited user."""
+        """Retrieving local/chat should succeed for limited user."""
         response = await http_client.get(
-            f"{base_url}/v1/models/local/orange",
+            f"{base_url}/v1/models/local/chat",
             headers={"Authorization": f"Bearer {api_keys['limited']}"}
         )
         assert response.status_code == 200
-        assert response.json()["id"] == "local/orange"
+        assert response.json()["id"] == "local/chat"
 
     @pytest.mark.asyncio
     async def test_limited_model_retrieve_denied(
@@ -397,7 +397,7 @@ class TestTransctiberUserPermissions:
         )
         assert response.status_code == 200
         model_ids = [m["id"] for m in response.json()["data"]]
-        for expected in ["local/orange", "gemini/mini", "deepseek/flash", "kimi"]:
+        for expected in ["local/chat", "gemini/mini", "deepseek/flash", "kimi"]:
             assert expected in model_ids, f"transctiber should see {expected}"
         # Hidden models must not appear
         assert "embeddings/dummy" not in model_ids
@@ -413,7 +413,7 @@ class TestTransctiberUserPermissions:
         Only the model list is needed for service compatibility.
         """
         response = await http_client.get(
-            f"{base_url}/v1/models/local/orange",
+            f"{base_url}/v1/models/local/chat",
             headers={"Authorization": f"Bearer {api_keys['transctiber']}"}
         )
         assert response.status_code == 403, "transctiber should be denied model retrieval (endpoint not in allowed_endpoints)"
@@ -426,7 +426,7 @@ class TestTransctiberUserPermissions:
         response = await http_client.post(
             f"{base_url}/v1/chat/completions",
             headers={"Authorization": f"Bearer {api_keys['transctiber']}", "Content-Type": "application/json"},
-            json={"model": "local/orange", "messages": sample_messages, "stream": False, "max_tokens": 50}
+            json={"model": "local/chat", "messages": sample_messages, "stream": False, "max_tokens": 50}
         )
         assert response.status_code == 403, "transctiber should be denied chat completions"
 

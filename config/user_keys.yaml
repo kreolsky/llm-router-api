@@ -6,7 +6,7 @@ user_keys:
   limited:
     api_key: limited
     allowed_models:
-      - local/orange
+      - local/chat
   transctiber:
     api_key: transctiber
     allowed_models:

@@ -12,6 +12,7 @@ from ..core.config_manager import ConfigManager
 from ..core.auth import get_api_key, check_endpoint_access
 from ..core.context import RequestContext
 from ..core.error_handling import ErrorType, create_error
+from ..core.model_capabilities import CapabilitiesCache, capabilities_refresh_loop
 from ..services.chat_service.chat_service import ChatService
 from ..services.model_service import ModelService
 from ..services.embedding_service import EmbeddingService
@@ -59,7 +60,13 @@ async def lifespan(app: FastAPI):
     config_manager.add_reload_callback(_rebuild_on_reload, name="rebuild_provider_cache")
     reload_task = config_manager.start_reloader_task()
 
-    app.state.model_service = ModelService(config_manager)
+    # ARCH: capabilities auto-cache. Loaded from disk so data is available even
+    # when upstreams are down; refreshed in the background (never blocks startup,
+    # never touches the network on the hot path).
+    capabilities_cache = CapabilitiesCache(config_manager.model_cache_path)
+    capabilities_cache.load()
+
+    app.state.model_service = ModelService(config_manager, capabilities_cache)
     app.state.chat_service = ChatService(config_manager, app.state.model_service)
     app.state.embedding_service = EmbeddingService(config_manager)
     app.state.transcription_service = TranscriptionService(config_manager, app.state.model_service)
@@ -67,11 +74,18 @@ async def lifespan(app: FastAPI):
     from ..core.usage_db import init_db, close_db
     await init_db()
 
+    capabilities_task = asyncio.create_task(capabilities_refresh_loop(config_manager, capabilities_cache))
+
     yield
 
     reload_task.cancel()
     try:
         await reload_task
+    except asyncio.CancelledError:
+        pass
+    capabilities_task.cancel()
+    try:
+        await capabilities_task
     except asyncio.CancelledError:
         pass
     # Close every provider-owned pool on shutdown (awaited so pools drain).
@@ -108,8 +122,12 @@ async def list_models(
 # ARCH: endpoint string "/v1/models/{model_id:path}" отличается от "/v1/models" —
 # это позволяет давать доступ к списку моделей без доступа к деталям конкретной модели
 @app.get("/v1/models/{model_id:path}")
-async def retrieve_model(model_id: str, auth_data: tuple = Depends(check_endpoint_access("/v1/models/{model_id:path}"))):
-    return await app.state.model_service.retrieve_model(model_id, auth_data)
+async def retrieve_model(
+    model_id: str,
+    refresh: bool = False,
+    auth_data: tuple = Depends(check_endpoint_access("/v1/models/{model_id:path}"))
+):
+    return await app.state.model_service.retrieve_model(model_id, auth_data, refresh=refresh)
 
 @app.post("/v1/chat/completions")
 async def chat_completions(

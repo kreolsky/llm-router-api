@@ -34,6 +34,13 @@ OpenAI-compatible API gateway for multiple LLM providers. Routes requests to Ope
 
 **Message Sanitization**: Optional stripping of non-standard fields (`done`, `__stream_end__`, `__internal__`) from messages and stream chunks. Controlled by `SANITIZE_MESSAGES` env var.
 
+**Model Capabilities**: `/v1/models` and `/v1/models/{id}` declare the full capability set per model (context, output limit, vision/modalities, supported parameters, pricing). Two layers, both in the same normalized stored shape:
+
+1. **Manual layer** — `config/model_info.yaml` (operator-curated). Soft-validated on load: unknown keys / orphan entries (no matching model in `models.yaml`) → `logger.warning`, non-fatal.
+2. **Auto-cache** — `src/core/model_capabilities.py` `CapabilitiesCache`, persisted to `data/model_cache.json`. A background task (`capabilities_refresh_loop`) calls one `list_models()` per provider, normalizes the raw upstream response (`normalize_provider_model`, shape-dispatched: OpenRouter / llama-server / generic-empty), and stores it. Stale-if-error: on upstream failure the old entry is retained.
+
+Priority: `model_info.yaml` **always wins** over the auto-cache (deep-merge where lists are *replaced*, not concatenated — `merge_capabilities`, distinct from `utils.deep_merge`). The single serializer `render_capabilities()` produces the response shape (derives `supports_vision`, `architecture.modality`, `top_provider`, string `pricing` without exponent). The **hot path never touches the network** — `?refresh=true` is a debug-only best-effort refresh. `reasoning{}` is manual-only; upstream `supported_parameters` is not translated into it.
+
 ## Configuration (env vars)
 
 All env-backed settings are read via `ConfigManager` properties (no direct `os.getenv` in providers/services except initial logger/debug setup).
@@ -44,6 +51,7 @@ All env-backed settings are read via `ConfigManager` properties (no direct `os.g
 * **Streaming**: `STREAM_READ_TIMEOUT` (default 300) — read timeout for SSE streams.
 * **Transcription**: `DEFAULT_STT_MODEL` (default `stt/dummy`) — fallback model when none is requested.
 * **Per-provider concurrency**: optional `max_concurrent` key per provider in `providers.yaml` gates outbound requests via an `asyncio.Semaphore`; queued requests fail fast with 503 after `QUEUE_WAIT_TIMEOUT` (default `30.0`). Takes effect only after a config reload rebuilds the cache (semaphore is per-instance).
+* **Model capabilities cache**: `MODEL_CACHE_ENABLED` (default `true`), `MODEL_CACHE_REFRESH_INTERVAL` (default `3600`s), `MODEL_CACHE_TTL` (default `86400`s), `MODEL_CACHE_PATH` (default `data/model_cache.json`). `data/` is mounted in `docker-compose.yml`, so the cache survives restarts.
 
 ## Architecture Discovery
 

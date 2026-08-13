@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from src.services.model_service import ModelService
+from src.core.model_capabilities import CapabilitiesCache
 
 
 # ---------------------------------------------------------------------------
@@ -29,11 +30,19 @@ def _make_config(models=None, providers=None, model_info=None):
     return result
 
 
-def _build_service(models=None, providers=None, model_info=None):
-    """Build a ModelService with a mocked ConfigManager."""
+def _build_service(models=None, providers=None, model_info=None, cache=None):
+    """Build a ModelService with a mocked ConfigManager and optional cache."""
     cm = MagicMock()
     cm.get_config.return_value = _make_config(models, providers, model_info)
-    return ModelService(cm)
+    return ModelService(cm, cache)
+
+
+def _make_cache(entries=None):
+    """Build an in-memory CapabilitiesCache pre-populated with entries."""
+    cache = CapabilitiesCache("data/unused.json")
+    for model_id, data in (entries or {}).items():
+        cache.upsert(model_id, data, source="test-provider")
+    return cache
 
 
 # Sample model configs used across tests
@@ -153,12 +162,16 @@ class TestListModels:
 
         assert result["data"] == []
 
-
     @pytest.mark.asyncio
-    async def test_model_info_passthrough_in_list(self):
-        """model_info fields from catalog are included in list response."""
+    async def test_model_info_rendered_in_list(self):
+        """model_info fields from catalog are rendered into the list response."""
         model_info = {
-            "model-a": {"description": "desc-a", "context_length": 8192, "pricing": {"completion": 0.001}},
+            "model-a": {
+                "description": "desc-a",
+                "context_length": 8192,
+                "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["text"]},
+                "pricing": {"completion": 0.001},
+            },
         }
         svc = _build_service(models=SAMPLE_MODELS, model_info=model_info)
         auth_data = _make_auth_data(allowed_models=[])
@@ -168,17 +181,25 @@ class TestListModels:
         model_a = next(m for m in result["data"] if m["id"] == "model-a")
         assert model_a["description"] == "desc-a"
         assert model_a["context_length"] == 8192
-        assert model_a["pricing"] == {"completion": 0.001}
-        # model-b has no info entry → no extra fields
+        # vision derived from input_modalities
+        assert model_a["supports_vision"] is True
+        assert model_a["architecture"]["modality"] == "text+image->text"
+        # top_provider mirrors flat fields
+        assert model_a["top_provider"]["context_length"] == 8192
+        # pricing rendered to strings, missing keys filled with "0"
+        assert model_a["pricing"]["completion"] == "0.001"
+        assert model_a["pricing"]["prompt"] == "0"
+        # model-b has no info entry → no capability fields
         model_b = next(m for m in result["data"] if m["id"] == "model-b")
         assert "description" not in model_b
+        assert "supports_vision" not in model_b
 
     @pytest.mark.asyncio
-    async def test_model_info_reasoning_in_list(self):
-        """reasoning field from catalog is included in list response."""
+    async def test_model_info_reasoning_passthrough_in_list(self):
+        """reasoning block passes through unchanged (manual-only, not derived)."""
         model_info = {
             "model-b": {
-                "reasoning": {"supported": True, "default_enabled": False, "supported_efforts": ["high"]}
+                "reasoning": {"supported": True, "default_enabled": False},
             },
         }
         svc = _build_service(models=SAMPLE_MODELS, model_info=model_info)
@@ -187,7 +208,7 @@ class TestListModels:
         result = await svc.list_models(auth_data)
 
         model_b = next(m for m in result["data"] if m["id"] == "model-b")
-        assert model_b["reasoning"] == {"supported": True, "default_enabled": False, "supported_efforts": ["high"]}
+        assert model_b["reasoning"] == {"supported": True, "default_enabled": False}
 
     @pytest.mark.asyncio
     async def test_model_info_empty_catalog_no_crash(self):
@@ -201,6 +222,19 @@ class TestListModels:
             assert "description" not in model
             assert "context_length" not in model
 
+    @pytest.mark.asyncio
+    async def test_cache_feeds_list_when_no_model_info(self):
+        """Auto-cache provides capabilities when no manual model_info entry exists."""
+        cache = _make_cache({"model-a": {"context_length": 32768, "max_completion_tokens": 4096}})
+        svc = _build_service(models=SAMPLE_MODELS, cache=cache)
+        auth_data = _make_auth_data(allowed_models=[])
+
+        result = await svc.list_models(auth_data)
+
+        model_a = next(m for m in result["data"] if m["id"] == "model-a")
+        assert model_a["context_length"] == 32768
+        assert model_a["top_provider"]["max_completion_tokens"] == 4096
+
 
 # ===================================================================
 # retrieve_model
@@ -212,7 +246,6 @@ class TestRetrieveModel:
     async def test_unrestricted_user_retrieves_model(self):
         """Unrestricted user can retrieve any existing model."""
         svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS)
-        svc._get_model_details_from_provider = AsyncMock(return_value={})
         auth_data = _make_auth_data(allowed_models=[])
 
         result = await svc.retrieve_model("model-a", auth_data)
@@ -224,7 +257,6 @@ class TestRetrieveModel:
     async def test_restricted_user_retrieves_allowed(self):
         """Restricted user can retrieve a model in their allowed_models."""
         svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS)
-        svc._get_model_details_from_provider = AsyncMock(return_value={})
         auth_data = _make_auth_data(allowed_models=["model-a"])
 
         result = await svc.retrieve_model("model-a", auth_data)
@@ -273,53 +305,109 @@ class TestRetrieveModel:
         assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_enrichment_routed_through_provider(self):
-        """Enrichment resolves the provider via the cache and calls get_model."""
+    async def test_retrieve_does_not_touch_network(self):
+        """ARCH: retrieve_model never instantiates a provider / makes no HTTP call."""
         svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS)
-        mock_provider = MagicMock()
-        mock_provider.get_model = AsyncMock(return_value={
-            "id": "a-real", "context_length": 8192,
-            "description": "desc", "architecture": {}, "pricing": {}
-        })
+        auth_data = _make_auth_data(allowed_models=[])
+
         with patch("src.services.base.get_provider_instance", new_callable=AsyncMock) as mock_get:
-            mock_get.return_value = mock_provider
-            result = await svc.retrieve_model(
-                "model-a", _make_auth_data(allowed_models=[])
-            )
-        mock_provider.get_model.assert_awaited_once()
-        assert result["context_length"] == 8192
-        assert result["description"] == "desc"
+            result = await svc.retrieve_model("model-a", auth_data)
+
+        mock_get.assert_not_called()
+        assert result["id"] == "model-a"
 
     @pytest.mark.asyncio
-    async def test_model_info_overrides_provider_enrichment(self):
-        """Catalog model_info takes priority over provider enrichment fields."""
-        model_info = {"model-a": {"description": "catalog-desc", "context_length": 16384}}
-        svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS, model_info=model_info)
-        mock_provider = MagicMock()
-        mock_provider.get_model = AsyncMock(return_value={
-            "id": "a-real", "context_length": 4096,
-            "description": "provider-desc",
-        })
-        with patch("src.services.base.get_provider_instance", new_callable=AsyncMock) as mock_get:
-            mock_get.return_value = mock_provider
-            result = await svc.retrieve_model(
-                "model-a", _make_auth_data(allowed_models=[])
-            )
+    async def test_model_info_overrides_cache(self):
+        """INVARIANT: manual model_info wins over auto-cache."""
+        cache = _make_cache({"model-a": {"context_length": 4096, "description": "cache-desc"}})
+        model_info = {"model-a": {"context_length": 16384, "description": "catalog-desc"}}
+        svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS, model_info=model_info, cache=cache)
+        auth_data = _make_auth_data(allowed_models=[])
+
+        result = await svc.retrieve_model("model-a", auth_data)
+
         assert result["description"] == "catalog-desc"
         assert result["context_length"] == 16384
 
     @pytest.mark.asyncio
-    async def test_enrichment_best_effort_on_provider_error(self):
-        """Provider error during enrichment is non-fatal → empty enrichment, no 5xx."""
+    async def test_cache_and_model_info_deep_merge(self):
+        """Cache fills fields absent from manual model_info (deep merge)."""
+        cache = _make_cache({"model-a": {
+            "context_length": 32768,
+            "max_completion_tokens": 4096,
+            "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["text"]},
+            "pricing": {"prompt": 0.001},
+        }})
+        # manual only overrides description; rest comes from cache
+        model_info = {"model-a": {"description": "manual"}}
+        svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS, model_info=model_info, cache=cache)
+        auth_data = _make_auth_data(allowed_models=[])
+
+        result = await svc.retrieve_model("model-a", auth_data)
+
+        assert result["description"] == "manual"
+        assert result["context_length"] == 32768
+        assert result["supports_vision"] is True  # from cache architecture
+
+    @pytest.mark.asyncio
+    async def test_supports_vision_in_list_and_detail_match(self):
+        """supports_vision is present and identical in both list and detail."""
+        model_info = {
+            "model-a": {"architecture": {"input_modalities": ["text", "image"], "output_modalities": ["text"]}},
+        }
+        svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS, model_info=model_info)
+        auth_data = _make_auth_data(allowed_models=[])
+
+        listed = await svc.list_models(auth_data)
+        detail = await svc.retrieve_model("model-a", auth_data)
+
+        listed_a = next(m for m in listed["data"] if m["id"] == "model-a")
+        assert listed_a["supports_vision"] is True
+        assert detail["supports_vision"] is True
+
+    @pytest.mark.asyncio
+    async def test_capability_meta_fields(self):
+        """Detail includes capabilities_source / capabilities_fetched_at from cache."""
+        cache = _make_cache({"model-a": {"context_length": 8192}})
+        svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS, cache=cache)
+        auth_data = _make_auth_data(allowed_models=[])
+
+        result = await svc.retrieve_model("model-a", auth_data)
+
+        assert result["capabilities_source"] == "test-provider"
+        assert result["capabilities_fetched_at"] is not None
+
+    @pytest.mark.asyncio
+    async def test_no_meta_fields_without_cache(self):
+        """Without a cache, no provenance fields are added."""
         svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS)
-        mock_provider = MagicMock()
-        mock_provider.get_model = AsyncMock(side_effect=RuntimeError("provider down"))
-        with patch("src.services.base.get_provider_instance", new_callable=AsyncMock) as mock_get:
-            mock_get.return_value = mock_provider
-            result = await svc.retrieve_model(
-                "model-a", _make_auth_data(allowed_models=[])
-            )
-        # Enrichment fields absent but response still valid
-        assert result["id"] == "model-a"
-        assert result["provider"] == "prov-a"
-        assert "context_length" not in result
+        auth_data = _make_auth_data(allowed_models=[])
+
+        result = await svc.retrieve_model("model-a", auth_data)
+
+        assert "capabilities_source" not in result
+        assert "capabilities_fetched_at" not in result
+
+    @pytest.mark.asyncio
+    async def test_refresh_true_triggers_provider_refresh(self):
+        """refresh=True triggers a best-effort refresh of the provider (non-blocking)."""
+        svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS,
+                             cache=_make_cache({"model-a": {"context_length": 1}}))
+        svc.config_manager.model_cache_enabled = True
+        auth_data = _make_auth_data(allowed_models=[])
+
+        with patch("src.services.model_service.refresh_provider_capabilities", new_callable=AsyncMock) as mock_refresh:
+            await svc.retrieve_model("model-a", auth_data, refresh=True)
+
+        mock_refresh.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_refresh_false_does_not_trigger_refresh(self):
+        """Default refresh=False keeps the hot path network-free."""
+        svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS, cache=_make_cache())
+        auth_data = _make_auth_data(allowed_models=[])
+
+        with patch("src.services.model_service.refresh_provider_capabilities", new_callable=AsyncMock) as mock_refresh:
+            await svc.retrieve_model("model-a", auth_data, refresh=False)
+
+        mock_refresh.assert_not_called()

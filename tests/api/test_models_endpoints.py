@@ -46,7 +46,7 @@ class TestModelsEndpoints:
         assert "stt/dummy" not in model_ids, "Hidden transcription model should not be in list"
         
         # Check that visible models ARE in the list
-        expected_visible_models = ["local/orange", "gemini/mini", "deepseek/flash", "kimi"]
+        expected_visible_models = ["local/chat", "local/reasoner", "gemini/mini", "deepseek/flash", "deepseek/pro", "kimi"]
         for model_id in expected_visible_models:
             assert model_id in model_ids, f"Visible model {model_id} should be in list"
         
@@ -67,7 +67,7 @@ class TestModelsEndpoints:
         http_client: httpx.AsyncClient
     ):
         """Test retrieving a visible model by ID."""
-        model_id = test_models["local_orange"]["id"]
+        model_id = test_models["local_chat"]["id"]
         
         with TestTimer() as timer:
             response = await http_client.get(
@@ -154,7 +154,7 @@ class TestModelsEndpoints:
         assert response.status_code == 401
         
         # Test retrieving model without auth
-        response = await http_client.get(f"{base_url}/v1/models/local/orange")
+        response = await http_client.get(f"{base_url}/v1/models/local/chat")
         assert response.status_code == 401
     
     @pytest.mark.asyncio
@@ -174,7 +174,7 @@ class TestModelsEndpoints:
         
         # Test retrieving model with invalid key
         response = await http_client.get(
-            f"{base_url}/v1/models/local/orange",
+            f"{base_url}/v1/models/local/chat",
             headers={"Authorization": f"Bearer {api_keys['invalid']}"}
         )
         assert response.status_code == 401
@@ -202,7 +202,7 @@ class TestModelsEndpoints:
         http_client: httpx.AsyncClient
     ):
         """Test that model responses are consistent (caching test)."""
-        model_id = "local/orange"
+        model_id = "local/chat"
         
         # Make multiple requests for the same model
         responses = []
@@ -237,7 +237,7 @@ class TestModelsEndpoints:
             return response.status_code == 200
         
         # Make concurrent requests for different models
-        model_ids = ["local/orange", "gemini/mini", "deepseek/flash"]
+        model_ids = ["local/chat", "gemini/mini", "deepseek/flash"]
         tasks = [get_model(model_id) for model_id in model_ids]
         results = await asyncio.gather(*tasks)
         
@@ -311,7 +311,7 @@ class TestModelsEndpoints:
         http_client: httpx.AsyncClient
     ):
         """Test that model metadata contains expected fields."""
-        model_id = test_models["local_orange"]["id"]
+        model_id = test_models["local_chat"]["id"]
         
         response = await http_client.get(
             f"{base_url}/v1/models/{model_id}",
@@ -332,6 +332,59 @@ class TestModelsEndpoints:
             if field in model_data and model_data[field] is not None:
                 assert isinstance(model_data[field], (str, list)), \
                     f"Optional field {field} should be string or list"
+
+    @pytest.mark.asyncio
+    async def test_capabilities_in_model_list(
+        self,
+        base_url: str,
+        api_keys: dict,
+        http_client: httpx.AsyncClient
+    ):
+        """/v1/models exposes rendered capabilities for configured models."""
+        response = await http_client.get(
+            f"{base_url}/v1/models",
+            headers={"Authorization": f"Bearer {api_keys['full_access']}"}
+        )
+        assert response.status_code == 200
+        by_id = {m["id"]: m for m in response.json()["data"]}
+
+        # gemini/mini declares vision via manual model_info (architecture.input_modalities).
+        # context_length/max_completion_tokens come from the auto-cache (unreliable
+        # offline), so only assert what the manual catalog guarantees.
+        gemini = by_id["gemini/mini"]
+        assert gemini["supports_vision"] is True
+        assert gemini["architecture"]["modality"] == "text+image->text"
+
+        # deepseek/flash has full manual capabilities (no cache dependency)
+        flash = by_id["deepseek/flash"]
+        assert flash["context_length"] == 262144
+        assert flash["top_provider"]["context_length"] == 262144
+        assert flash["supports_vision"] is False
+        # pricing rendered as strings (no exponent)
+        assert isinstance(flash["pricing"]["prompt"], str)
+        assert "e" not in flash["pricing"]["prompt"]
+
+    @pytest.mark.asyncio
+    async def test_capabilities_match_list_and_detail(
+        self,
+        base_url: str,
+        api_keys: dict,
+        http_client: httpx.AsyncClient
+    ):
+        """supports_vision is identical in the list and the detail endpoint."""
+        list_resp = await http_client.get(
+            f"{base_url}/v1/models",
+            headers={"Authorization": f"Bearer {api_keys['full_access']}"}
+        )
+        detail_resp = await http_client.get(
+            f"{base_url}/v1/models/gemini/mini",
+            headers={"Authorization": f"Bearer {api_keys['full_access']}"}
+        )
+        assert list_resp.status_code == 200 and detail_resp.status_code == 200
+        listed = next(m for m in list_resp.json()["data"] if m["id"] == "gemini/mini")
+        detail = detail_resp.json()
+        assert listed["supports_vision"] == detail["supports_vision"]
+        assert listed.get("context_length") == detail.get("context_length")
     
     @pytest.mark.asyncio
     async def test_model_id_validation(
@@ -458,14 +511,14 @@ class TestRestrictedUserModelAccess:
     async def test_limited_user_sees_only_allowed_models(
         self, base_url, api_keys, http_client
     ):
-        """Limited user (allowed_models: [local/orange]) sees only that model in list."""
+        """Limited user (allowed_models: [local/chat]) sees only that model in list."""
         response = await http_client.get(
             f"{base_url}/v1/models",
             headers={"Authorization": f"Bearer {api_keys['limited']}"}
         )
         assert response.status_code == 200
         model_ids = [m["id"] for m in response.json()["data"]]
-        assert model_ids == ["local/orange"], f"Expected only local/orange, got {model_ids}"
+        assert model_ids == ["local/chat"], f"Expected only local/chat, got {model_ids}"
 
     @pytest.mark.asyncio
     async def test_limited_user_retrieve_allowed(
@@ -473,11 +526,11 @@ class TestRestrictedUserModelAccess:
     ):
         """Limited user can retrieve their allowed model."""
         response = await http_client.get(
-            f"{base_url}/v1/models/local/orange",
+            f"{base_url}/v1/models/local/chat",
             headers={"Authorization": f"Bearer {api_keys['limited']}"}
         )
         assert response.status_code == 200
-        assert response.json()["id"] == "local/orange"
+        assert response.json()["id"] == "local/chat"
 
     @pytest.mark.asyncio
     async def test_limited_user_retrieve_disallowed(
@@ -512,7 +565,7 @@ class TestRestrictedUserModelAccess:
         )
         assert response.status_code == 200
         model_ids = [m["id"] for m in response.json()["data"]]
-        for expected in ["local/orange", "gemini/mini", "deepseek/flash", "kimi"]:
+        for expected in ["local/chat", "gemini/mini", "deepseek/flash", "kimi"]:
             assert expected in model_ids, f"transctiber should see {expected}"
         assert "embeddings/dummy" not in model_ids, "Hidden model should not appear"
         assert "stt/dummy" not in model_ids, "Hidden model should not appear"
@@ -523,7 +576,7 @@ class TestRestrictedUserModelAccess:
     ):
         """Transctiber gets 403 on model retrieval — endpoint /v1/models/{model_id:path} not allowed."""
         response = await http_client.get(
-            f"{base_url}/v1/models/local/orange",
+            f"{base_url}/v1/models/local/chat",
             headers={"Authorization": f"Bearer {api_keys['transctiber']}"}
         )
         assert response.status_code == 403
