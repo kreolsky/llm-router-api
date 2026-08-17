@@ -9,6 +9,31 @@ from ...core.error_handling import ErrorType, create_error
 from fastapi import HTTPException
 
 
+def duplicate_reasoning_field(data: Any) -> bool:
+    """Duplicate OpenAI-style 'reasoning' into llama.cpp-style 'reasoning_content'.
+
+    vLLM (and some other backends) stream thinking into delta/message.reasoning,
+    while clients in this lab were built against llama.cpp, which emits
+    reasoning_content. Duplicating keeps both client styles working; the
+    original field is left intact. Returns True when the data was modified.
+    """
+    if not isinstance(data, dict):
+        return False
+    choices = data.get("choices")
+    if not isinstance(choices, list):
+        return False
+    changed = False
+    for choice in choices:
+        if not isinstance(choice, dict):
+            continue
+        for holder in (choice.get("message"), choice.get("delta")):
+            if (isinstance(holder, dict) and "reasoning" in holder
+                    and "reasoning_content" not in holder):
+                holder["reasoning_content"] = holder["reasoning"]
+                changed = True
+    return changed
+
+
 class StreamProcessor:
     """Forwards provider SSE streams with optional message sanitization.
 
@@ -90,6 +115,9 @@ class StreamProcessor:
                     if is_debug:
                         preview = chunk.decode('utf-8', errors='replace')[:200].replace('\n', '\\n')
                         logger.debug(f"Chunk {chunk_count} ({len(chunk)}B): {preview}", request_id=request_id)
+
+                    if b'"reasoning"' in chunk:
+                        chunk = _remap_reasoning_in_chunk(chunk)
 
                     yield chunk
 
@@ -264,6 +292,37 @@ def _capture_usage_from_chunk(chunk: bytes, captured_usage: Dict[str, Any]) -> N
         pass
 
 
+def _remap_reasoning_in_chunk(chunk: bytes) -> bytes:
+    """Best-effort reasoning->reasoning_content duplication for a raw transparent-mode chunk.
+
+    Only rewrites 'data: ' lines that parse as complete JSON objects; a line
+    split across chunk boundaries fails to parse here and passes through
+    unchanged (it will be handled on its completing chunk or, worst case,
+    reach the client with the original field name only).
+    """
+    try:
+        text = chunk.decode('utf-8')
+    except UnicodeDecodeError:
+        return chunk
+    out_lines = []
+    changed = False
+    for line in text.split('\n'):
+        stripped = line.rstrip('\r')
+        if stripped.startswith('data: ') and '"reasoning"' in stripped:
+            try:
+                data = json.loads(stripped[6:])
+            except json.JSONDecodeError:
+                out_lines.append(line)
+                continue
+            if duplicate_reasoning_field(data):
+                changed = True
+                line = 'data: ' + json.dumps(data, ensure_ascii=False)
+        out_lines.append(line)
+    if not changed:
+        return chunk
+    return '\n'.join(out_lines).encode('utf-8')
+
+
 def _sanitize_sse_message(
     message: str,
     request_id: str,
@@ -287,6 +346,7 @@ def _sanitize_sse_message(
         chunk_data = json.loads(json_str)
         if 'usage' in chunk_data:
             captured_usage["usage"] = chunk_data['usage']
+        duplicate_reasoning_field(chunk_data)
         logger.debug(f"JSON parsed successfully", extra={
             "request_id": request_id,
             "keys": list(chunk_data.keys())

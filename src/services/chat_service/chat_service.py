@@ -12,7 +12,7 @@ from ...core.logging import logger
 from ...core.sanitizer import MessageSanitizer
 from ...core.error_handling import ErrorType, create_error
 from ...services.base import BaseService
-from .stream_processor import StreamProcessor
+from .stream_processor import StreamProcessor, duplicate_reasoning_field
 
 
 class ChatService(BaseService):
@@ -96,6 +96,8 @@ class ChatService(BaseService):
             response_data = await provider_instance.chat_completions(
                 request_body, provider_model_name, model_config, request_id=request_id
             )
+
+            duplicate_reasoning_field(response_data)
 
             self._log_service_data(
                 title="Chat Completion Response JSON",

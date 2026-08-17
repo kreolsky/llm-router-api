@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.services.chat_service.stream_processor import StreamProcessor
+from src.services.chat_service.stream_processor import StreamProcessor, duplicate_reasoning_field
 from src.core.sanitizer import MessageSanitizer
 from fastapi import HTTPException
 
@@ -351,3 +351,73 @@ class TestRemainingBuffer:
         result = await collect(sp.process_stream(async_gen([chunk]), "m", "r", "u"))
         # Should get exactly the message, no extra
         assert len(result) == 1
+
+
+# ---------------------------------------------------------------------------
+# 9. reasoning -> reasoning_content duplication
+# ---------------------------------------------------------------------------
+
+class TestReasoningFieldDuplication:
+
+    def test_stream_delta_duplicated(self):
+        data = {"choices": [{"delta": {"reasoning": "We"}}]}
+        assert duplicate_reasoning_field(data) is True
+        assert data["choices"][0]["delta"]["reasoning_content"] == "We"
+        assert data["choices"][0]["delta"]["reasoning"] == "We"
+
+    def test_non_stream_message_duplicated(self):
+        data = {"choices": [{"message": {"role": "assistant", "reasoning": "think", "content": "42"}}]}
+        assert duplicate_reasoning_field(data) is True
+        assert data["choices"][0]["message"]["reasoning_content"] == "think"
+
+    def test_existing_reasoning_content_not_overwritten(self):
+        data = {"choices": [{"delta": {"reasoning": "new", "reasoning_content": "old"}}]}
+        assert duplicate_reasoning_field(data) is False
+        assert data["choices"][0]["delta"]["reasoning_content"] == "old"
+
+    def test_no_reasoning_untouched(self):
+        data = {"choices": [{"delta": {"content": "hi"}}]}
+        assert duplicate_reasoning_field(data) is False
+        assert data == {"choices": [{"delta": {"content": "hi"}}]}
+
+    def test_malformed_shapes_ignored(self):
+        assert duplicate_reasoning_field(None) is False
+        assert duplicate_reasoning_field("string") is False
+        assert duplicate_reasoning_field({"choices": "oops"}) is False
+        assert duplicate_reasoning_field({"choices": ["oops"]}) is False
+
+    @pytest.mark.asyncio
+    async def test_transparent_stream_remapped(self):
+        sp = StreamProcessor(config_manager=None)
+        chunk = sse(json.dumps({"choices": [{"delta": {"reasoning": "We"}}]}))
+        result = await collect(sp.process_stream(async_gen([chunk]), "m", "r", "u"))
+        parsed = json.loads(result[0].decode("utf-8").split("data: ", 1)[1].split("\n\n")[0])
+        assert parsed["choices"][0]["delta"]["reasoning_content"] == "We"
+
+    @pytest.mark.asyncio
+    async def test_transparent_stream_without_reasoning_unchanged(self):
+        sp = StreamProcessor(config_manager=None)
+        chunk = sse(json.dumps({"choices": [{"delta": {"content": "hi"}}]}))
+        result = await collect(sp.process_stream(async_gen([chunk]), "m", "r", "u"))
+        assert result == [chunk]
+
+    @pytest.mark.asyncio
+    async def test_sanitized_stream_remapped(self):
+        sp = make_processor(sanitize=True)
+        chunk = sse(json.dumps({"choices": [{"delta": {"reasoning": "We"}}]}))
+        result = await collect(sp.process_stream(async_gen([chunk]), "m", "r", "u"))
+        parsed = json.loads(result[0].decode("utf-8").split("data: ", 1)[1].split("\n\n")[0])
+        assert parsed["choices"][0]["delta"]["reasoning_content"] == "We"
+
+    @pytest.mark.asyncio
+    async def test_transparent_split_json_not_corrupted(self):
+        """A JSON line split across chunks must pass through without corruption."""
+        sp = StreamProcessor(config_manager=None)
+        full = 'data: {"choices": [{"delta": {"reasoning": "hello"}}]}\n\n'
+        encoded = full.encode("utf-8")
+        mid = encoded.index(b'"hello') + 3
+        result = await collect(sp.process_stream(
+            async_gen([encoded[:mid], encoded[mid:]]), "m", "r", "u"))
+        combined = b"".join(result).decode("utf-8")
+        parsed = json.loads(combined.split("data: ", 1)[1].split("\n\n")[0])
+        assert parsed["choices"][0]["delta"]["reasoning"] == "hello"
