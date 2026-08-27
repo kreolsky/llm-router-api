@@ -93,6 +93,10 @@
           {
             "type": "command",
             "command": "bash -c 'CMD=\"$CLAUDE_TOOL_INPUT\"; echo \"$CMD\" | grep -qE \"git\\s+commit\" || exit 0; OUT=$(bash .claude/scripts/pre-commit-gates.sh 2>&1); [ $? -eq 0 ] && exit 0; echo \"BLOCKED: pre-commit gates fail. Fix, then commit:\" >&2; echo \"$OUT\" >&2; exit 1'"
+          },
+          {
+            "type": "command",
+            "command": "python3 .claude/scripts/plan-snapshot.py"
           }
         ]
       },

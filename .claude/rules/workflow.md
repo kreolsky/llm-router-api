@@ -95,6 +95,8 @@ Never modify an existing test to make failing code pass.
 
 **Plans are ALWAYS written in English** — the entire file, every heading and body line,
 regardless of the language of the request. Only the short chat summary may be in Russian.
+Enforced by `plan-shape-gate.py` (any Cyrillic in a new or modified plan fails); plans
+already in `plans/` are history and are never retranslated.
 
 **Approved plans land in `plans/`**, named `<epoch-ms>-<slug>.md` by `save-plan.py` (the
 PostToolUse hook on ExitPlanMode). The timestamp is the directory's only ordering — a plan

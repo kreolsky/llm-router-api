@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Write|Edit) hook: keep the version of a plan that is about to be replaced.
+"""PreToolUse(Write|Edit|Bash) hook: keep the version of a plan about to be replaced.
 
 `workflow.md` says understanding changed ⇒ delete the plan and write it again. That
 rule works — but each firing destroys the only copy of the draft that went wrong, and
@@ -11,6 +11,10 @@ So: before a plan file is overwritten, its current content is copied to
 `plans/superseded/<name>.<epoch>.md`. Costs the author nothing, changes no
 rule, and makes the NEXT drift diagnosable from a diff instead of recollection.
 
+Bash is matched too, not only Write|Edit: a plan edited with `sed -i`, a heredoc or
+`>` never reaches the Write tool, so the hook silently did nothing for every such edit
+and `plans/superseded/` stayed empty while plans were being patched in place.
+
 Never blocks: any failure is reported and the write proceeds. Snapshots are skipped
 when the content is unchanged, and pruned after 30 days.
 """
@@ -18,6 +22,7 @@ when the content is unchanged, and pruned after 30 days.
 import json
 import os
 import pathlib
+import re
 import shutil
 import sys
 import time
@@ -27,22 +32,38 @@ SUPERSEDED = ROOT / "plans" / "superseded"
 KEEP_DAYS = 30
 
 
-def target_path() -> pathlib.Path | None:
-    """The file this Write/Edit is about to touch, from env or the hook payload."""
+# A plans/*.md path as it appears inside a shell command line.
+PLAN_IN_CMD_RE = re.compile(r"[\w./\-]*plans/[\w.\-]+\.md")
+# Write intent. A command that only READS a plan (`cat`, `grep`, `head`) must not burn a
+# snapshot slot, so the path alone is not enough — something must be about to modify it.
+WRITE_INTENT_RE = re.compile(
+    r">>?|\bsed\s+-i|\btee\b|\bmv\b|\bcp\b|\brm\b|\btruncate\b|"
+    r"\bpython3?\b|\bperl\b|\bawk\b"
+)
+
+
+def targets() -> list[pathlib.Path]:
+    """The plan files this tool call is about to touch, from env or the hook payload."""
     raw = os.environ.get("CLAUDE_FILE_PATH", "")
-    if not raw:
-        try:
-            data = json.loads(sys.stdin.read() or "{}")
-        except (json.JSONDecodeError, OSError):
-            return None
-        for key in ("tool_input", "toolInput", "input"):
-            block = data.get(key)
-            if isinstance(block, dict):
-                raw = block.get("file_path") or block.get("path") or ""
-                if raw:
-                    break
-        raw = raw or data.get("file_path", "")
-    return pathlib.Path(raw) if raw else None
+    if raw:
+        return [pathlib.Path(raw)]
+    try:
+        data = json.loads(sys.stdin.read() or "{}")
+    except (json.JSONDecodeError, OSError):
+        return []
+    block: dict = {}
+    for key in ("tool_input", "toolInput", "input"):
+        found = data.get(key)
+        if isinstance(found, dict):
+            block = found
+            break
+    raw = block.get("file_path") or block.get("path") or data.get("file_path", "")
+    if raw:
+        return [pathlib.Path(raw)]
+    command = block.get("command") or data.get("command") or ""
+    if not command or not WRITE_INTENT_RE.search(command):
+        return []
+    return [pathlib.Path(m) for m in dict.fromkeys(PLAN_IN_CMD_RE.findall(command))]
 
 
 def prune() -> None:
@@ -52,17 +73,15 @@ def prune() -> None:
             p.unlink(missing_ok=True)
 
 
-def main() -> int:
-    path = target_path()
-    if not path:
-        return 0
+def snapshot(path: pathlib.Path) -> str | None:
+    """Copy `path` aside if it is a live plan with content not already kept."""
     parts = path.parts
     if "plans" not in parts or path.suffix != ".md":
-        return 0
+        return None
     if "superseded" in parts or "archive" in parts:
-        return 0
+        return None
     if not path.is_file():
-        return 0  # a brand-new plan supersedes nothing
+        return None  # a brand-new plan supersedes nothing
 
     try:
         SUPERSEDED.mkdir(parents=True, exist_ok=True)
@@ -70,14 +89,19 @@ def main() -> int:
         # Skip a no-op rewrite: the newest snapshot already holds this content.
         existing = sorted(SUPERSEDED.glob(f"{path.stem}.*.md"))
         if existing and existing[-1].read_bytes() == current:
-            return 0
+            return None
         dest = SUPERSEDED / f"{path.stem}.{int(time.time())}.md"
         shutil.copy2(path, dest)
         prune()
-        print(json.dumps({"systemMessage":
-                          f"Superseded plan kept → {dest.relative_to(ROOT)}"}))
+        return str(dest.relative_to(ROOT))
     except OSError as exc:
-        print(json.dumps({"systemMessage": f"plan-snapshot failed ({exc}) — write proceeds."}))
+        return f"{path.name}: snapshot failed ({exc}) — the write proceeds"
+
+
+def main() -> int:
+    kept = [msg for path in targets() if (msg := snapshot(path))]
+    if kept:
+        print(json.dumps({"systemMessage": "plan-snapshot: " + ", ".join(kept)}))
     return 0
 
 

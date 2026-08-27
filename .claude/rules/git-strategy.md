@@ -22,6 +22,12 @@ alwaysApply: true
   change just because they sit in the same `git status`. If a foreign edit blocks you, say so
   and ask. Same for deletions you did not make: they are deliberate. Why: undoing in-flight
   work destroys uncommitted state that has no history to recover from.
+* **The commit carries the plan it was written from.** If the work followed a plan in
+  `plans/`, that file is staged in the SAME commit as the code — new plan, or the edits
+  and the `## Progress` line that the work produced. On an L, the plan lands with the
+  first commit of the `## Order` and its `## Progress` update rides with each later one.
+  Why: a plan committed separately (or left dirty in the tree) detaches the instruction
+  from the diff it produced, so `git show` no longer answers what the change was for.
 * **Commit messages are English-only — subject AND body, no exceptions**, including when the
   request and the whole chat are in Russian. Conventional-commit form:
   `feat(stat): …`, `fix(provider): …`, `docs(plans): …`.

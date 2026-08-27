@@ -64,6 +64,10 @@ H1_RE = re.compile(r"^#\s+\S", re.M)
 TS_NAME_RE = re.compile(r"^\d{13}-[a-z0-9-]+\.md$")
 # A decision ID used as a label: line-leading, optionally bulleted/bolded.
 DECISION_ID_RE = re.compile(r"^\s*(?:[-*]\s*)?\*{0,2}([DFR]\d{1,2})\b")
+# Cyrillic anywhere in the file. Plans are English-only (workflow.md `## Plans`) —
+# the request's language does not carry into the artifact, because the plan is read
+# by an executor and by the tree's own markers, both of which are English.
+CYRILLIC_RE = re.compile(r"[\u0400-\u04FF]")
 
 
 def changed_plans() -> list[Path]:
@@ -154,6 +158,18 @@ def check(path: Path) -> list[str]:
     for name in REQUIRED:
         if name not in found:
             problems.append(f"missing required section `## {name}`")
+
+    cyrillic = [
+        f"{n}: {line.strip()[:70]}"
+        for n, line in enumerate(lines, 1)
+        if CYRILLIC_RE.search(line)
+    ]
+    if cyrillic:
+        problems.append(
+            f"Cyrillic on {len(cyrillic)} line(s) — plans are English-only, every "
+            f"heading and body line, whatever the language of the request "
+            f"(first: {cyrillic[0]})"
+        )
 
     problems += check_citations(text)
 
