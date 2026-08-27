@@ -44,7 +44,11 @@ Output `━━━ PHASE 3: IMPLEMENTATION ━━━`. Work the plan step by step
   `.claude/rules-scoped/testing-ops.md`. Rebuild the container — the image copies source.
 - Add `ARCH:` / `INVARIANT:` / `WHY:` markers per `documentation.md`; regenerate `SYSTEMS.md`
   if a `SYSTEM:` marker changed.
-- Ambiguous step → halt and ask.
+- Ambiguous step → **rule on it and keep going**, logging
+  `Ruling: <what you decided> — <why> — <what it costs if wrong>` in the run output (and in the
+  plan's `## Progress` if steps remain). Halt only for the four stop conditions in
+  `workflow.md` Phase 3. Why: a wrong ruling costs rework the user can see and undo; a session
+  parked on a question costs a turn every time, and the answer is usually "yes, do it".
 - After the final step: **drive the affected flow live** against `:8777` (streaming and
   non-streaming as applicable, plus the refused principal for any access change) and record
   the output verbatim — reality-facing acceptance per `workflow.md` Phase 4. A

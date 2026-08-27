@@ -50,7 +50,22 @@ trigger is flagged as noise to drop, not kept as harmless.
 New or changed logic has tests in `tests/`. Run the breadth the entanglement table demands,
 then `.claude/scripts/pre-commit-gates.sh` **unpiped**.
 
-## 6. Summary — card form (`subagent-contract.md`)
+## 6. Receiving findings — verify before implementing
+
+Applies to findings from ANY source that is not this session's own diff read: `/code-review`,
+`ultra`, a subagent reviewer, the user relaying someone else's report. A finding is a
+hypothesis about this codebase, not an instruction.
+
+- **Check it against the code before touching anything**: does the claimed path exist, is the
+  current shape deliberate (`INVARIANT:` / `WHY:` / `DEBT:` on the line), does the suggestion
+  break a caller. A finding that survives none of these is answered with technical reasoning,
+  not implemented.
+- **Unclear on ANY item ⇒ implement NONE of them yet.** Items in one review interact; doing
+  the understood four and asking about the fifth bakes in an ordering nobody chose.
+- **Push back in the same card.** Rejecting a finding is a normal outcome and belongs in
+  **Residual** with its reason — silently dropping it reads as agreement.
+
+## 7. Summary — card form (`subagent-contract.md`)
 
 **What moved** · **Evidence** (checks actually run, output verbatim) · **Residual**
 (findings + fix plan, awaiting approval) · **Outside scope**. Wait for approval.
