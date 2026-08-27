@@ -35,6 +35,51 @@ def duplicate_reasoning_field(data: Any) -> bool:
     return changed
 
 
+async def open_provider_stream(
+        provider_stream: AsyncGenerator[bytes, None]) -> AsyncGenerator[bytes, None]:
+    """Pull the first chunk eagerly, then return an equivalent stream.
+
+    # WHY: a provider generator does nothing until it is iterated, and iteration
+    # starts inside StreamingResponse — after the 200 and the response headers
+    # have already gone out. An upstream 401/429 then reached the client as a
+    # 200 carrying an SSE error frame, losing the status code entirely.
+    #
+    # Priming moves the first read (which is where upstream errors surface) in
+    # front of the response, so the HTTPException propagates through the normal
+    # error handler and the client gets the real status. If the first read
+    # raises, the generator is already finished, so its cleanup — the in-flight
+    # count and the concurrency slot — has run.
+    """
+    try:
+        first_chunk = await provider_stream.__anext__()
+    except StopAsyncIteration:
+        return _empty_stream()
+    return _prepend(first_chunk, provider_stream)
+
+
+async def _empty_stream() -> AsyncGenerator[bytes, None]:
+    """An already-exhausted byte stream."""
+    return
+    yield  # pragma: no cover - makes this an async generator
+
+
+async def _prepend(first_chunk: bytes,
+                   rest: AsyncGenerator[bytes, None]) -> AsyncGenerator[bytes, None]:
+    """Re-attach an already-consumed first chunk to the front of a stream.
+
+    # INVARIANT: closing this wrapper must close the wrapped stream. Without the
+    # finally, a client disconnect throws GeneratorExit in here and leaves `rest`
+    # suspended, so the provider's in-flight count and concurrency slot are never
+    # released — and a config reload would then wait out the full drain timeout.
+    """
+    try:
+        yield first_chunk
+        async for chunk in rest:
+            yield chunk
+    finally:
+        await rest.aclose()
+
+
 class StreamProcessor:
     """Forwards provider SSE streams with optional message sanitization.
 

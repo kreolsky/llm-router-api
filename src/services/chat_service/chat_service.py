@@ -12,7 +12,7 @@ from ...core.logging import logger
 from ...core.sanitizer import MessageSanitizer
 from ...core.error_handling import ErrorType, create_error
 from ...services.base import BaseService
-from .stream_processor import StreamProcessor, duplicate_reasoning_field
+from .stream_processor import StreamProcessor, duplicate_reasoning_field, open_provider_stream
 
 
 class ChatService(BaseService):
@@ -75,6 +75,9 @@ class ChatService(BaseService):
                     request_body, provider_model_name, model_config, request_id=request_id,
                     extra_headers=identity_headers
                 )
+                # Surface an upstream failure as a real HTTP status instead of a
+                # 200 carrying an SSE error frame (see open_provider_stream).
+                provider_stream = await open_provider_stream(provider_stream)
                 self._log_service_data(
                     title="Streaming Response Started",
                     data={

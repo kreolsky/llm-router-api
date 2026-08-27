@@ -513,3 +513,85 @@ class TestDecodeChunks:
         stream = async_gen([b"\xff\xfe" + b"ok" * 4])
         texts = [t async for t in _decode_chunks(stream, "r", stats)]
         assert "ok" in "".join(texts)
+
+
+# ---------------------------------------------------------------------------
+# 10. Eager priming: upstream errors must keep their HTTP status
+# ---------------------------------------------------------------------------
+
+from src.services.chat_service.stream_processor import open_provider_stream  # noqa: E402
+
+
+class TestOpenProviderStream:
+
+    @pytest.mark.asyncio
+    async def test_first_chunk_error_propagates(self):
+        """An error on the first read raises instead of becoming a stream body."""
+        async def failing():
+            raise HTTPException(status_code=429, detail={"error": {"code": 429}})
+            yield b""  # pragma: no cover
+
+        with pytest.raises(HTTPException) as exc_info:
+            await open_provider_stream(failing())
+        assert exc_info.value.status_code == 429
+
+    @pytest.mark.asyncio
+    async def test_stream_content_is_unchanged(self):
+        """Priming does not consume or reorder the stream."""
+        stream = await open_provider_stream(async_gen([b"a", b"b", b"c"]))
+        assert await collect(stream) == [b"a", b"b", b"c"]
+
+    @pytest.mark.asyncio
+    async def test_empty_stream_stays_empty(self):
+        stream = await open_provider_stream(async_gen([]))
+        assert await collect(stream) == []
+
+    @pytest.mark.asyncio
+    async def test_later_error_still_reaches_the_body(self):
+        """An error after the first chunk cannot change the status; it is framed."""
+        async def fails_late():
+            yield b"first"
+            raise HTTPException(status_code=500, detail="boom")
+
+        primed = await open_provider_stream(fails_late())
+        sp = make_processor(sanitize=False)
+        result = b"".join(await collect(sp.process_stream(primed, "m", "r", "u")))
+        assert result.startswith(b"first")
+        assert b"[DONE]" in result
+
+    @pytest.mark.asyncio
+    async def test_generator_cleanup_runs_on_first_read_failure(self):
+        """The failing generator's finally block runs, releasing its slot."""
+        released = []
+
+        async def failing():
+            try:
+                raise HTTPException(status_code=401, detail="nope")
+                yield b""  # pragma: no cover
+            finally:
+                released.append(True)
+
+        with pytest.raises(HTTPException):
+            await open_provider_stream(failing())
+        assert released == [True]
+
+    @pytest.mark.asyncio
+    async def test_abandoning_primed_stream_closes_the_source(self):
+        """A client disconnect must close the wrapped provider stream.
+
+        Otherwise the provider's in-flight slot is never released and a config
+        reload waits out the whole drain timeout before closing the pool.
+        """
+        closed = []
+
+        async def source():
+            try:
+                yield b"a"
+                yield b"b"
+            finally:
+                closed.append(True)
+
+        primed = await open_provider_stream(source())
+        assert await primed.__anext__() == b"a"
+        await primed.aclose()
+        assert closed == [True]
