@@ -6,7 +6,9 @@ from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Dict, Optional, Tuple
 
 from ...core.logging import logger
+from ...core.usage_db import schedule_chat_usage
 from ...core.error_handling import ErrorType, create_error
+from ...core.sanitizer import MessageSanitizer
 from fastapi import HTTPException
 
 
@@ -90,18 +92,9 @@ class StreamProcessor:
 
     def __init__(self, config_manager=None):
         self.config_manager = config_manager
-        # Resolved lazily on first sanitized stream; import kept lazy to avoid
-        # loading the sanitizer module when sanitization is disabled.
-        self._message_sanitizer = None
         logger.info("StreamProcessor initialized", extra={
             "stream_processor": {"config_manager": config_manager is not None}
         })
-
-    def _resolve_sanitizer(self):
-        if self._message_sanitizer is None:
-            from ...core.sanitizer import MessageSanitizer
-            self._message_sanitizer = MessageSanitizer
-        return self._message_sanitizer
 
     def _live_sanitization_flag(self) -> bool:
         """Read the sanitization flag live from config_manager."""
@@ -216,7 +209,7 @@ class StreamProcessor:
                           captured_usage: Dict[str, Any],
                           stats: "_StreamStats") -> AsyncGenerator[bytes, None]:
         """Decode, re-frame and sanitize each SSE message before forwarding it."""
-        sanitizer = self._resolve_sanitizer()
+        sanitizer = MessageSanitizer
         text_stream = _decode_chunks(provider_stream, request_id, stats)
 
         async for message, separator in _iter_sse_frames(text_stream, request_id):
@@ -442,7 +435,6 @@ def _sanitize_sse_message(
 
 def _schedule_stream_usage(usage, request_id, user_id, model_id, start_time, provider_name) -> None:
     """Schedule fire-and-forget usage recording for a completed stream."""
-    from ...core.usage_db import schedule_chat_usage
     schedule_chat_usage(
         usage,
         project_name=user_id,

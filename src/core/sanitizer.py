@@ -1,6 +1,5 @@
 """Message sanitization to strip non-standard fields that break strict providers."""
 
-import copy
 from typing import Dict, Any, List, Tuple
 
 from .logging import logger
@@ -44,55 +43,29 @@ class MessageSanitizer:
     
     @classmethod
     def sanitize_stream_chunk(cls, chunk: Dict[str, Any], enabled: bool = True) -> Dict[str, Any]:
-        """Remove SERVICE_FIELDS from a streaming chunk's choices/delta when enabled."""
+        """Remove SERVICE_FIELDS from a streaming chunk when enabled.
+
+        _sanitize_dict already rebuilds every nested dict and list it walks, so
+        the result shares no mutable structure with the caller's chunk — the
+        deep copy this used to make on top of that was pure duplication.
+        """
         if not enabled:
             logger.debug("Stream chunk sanitization is disabled")
             return chunk
-        
-        # WHY: deep copy — sanitize_dict returns new dicts, but choices/delta are
-        # shared with the caller's chunk and would otherwise be mutated in place
-        clean_chunk = copy.deepcopy(chunk)
-        removed_fields = []
 
-        if "choices" in clean_chunk and clean_chunk["choices"]:
-            for i, choice in enumerate(clean_chunk["choices"]):
-                choice_removed = []
+        clean_chunk, removed_fields = cls._sanitize_dict(chunk)
 
-                if "delta" in choice:
-                    sanitized_delta, delta_removed = cls._sanitize_dict(choice["delta"])
-                    choice["delta"] = sanitized_delta
-                    choice_removed.extend(delta_removed)
-
-                sanitized_choice, choice_removed_extra = cls._sanitize_dict(choice)
-                clean_chunk["choices"][i] = sanitized_choice
-                choice = sanitized_choice
-                choice_removed.extend(choice_removed_extra)
-                
-                if choice_removed:
-                    logger.debug(f"Sanitized choice {i}, removed fields: {choice_removed}", extra={
-                        "sanitization": {
-                            "choice_index": i,
-                            "removed_fields": choice_removed,
-                            "choice_content": choice.get("delta", {}).get("content", "")[:50] + "..." if choice.get("delta", {}).get("content") else None
-                        }
-                    })
-                    removed_fields.extend(choice_removed)
-        
         if removed_fields:
-            logger.info(f"Stream chunk sanitization completed", extra={
+            logger.info("Stream chunk sanitization completed", extra={
                 "sanitization": {
                     "total_removed_fields": len(removed_fields),
                     "removed_fields": removed_fields,
-                    "chunk_summary": {
-                        "has_choices": "choices" in clean_chunk and len(clean_chunk["choices"]) > 0,
-                        "choices_count": len(clean_chunk.get("choices", [])),
-                        "has_content": any(choice.get("delta", {}).get("content") for choice in clean_chunk.get("choices", []))
-                    }
+                    "choices_count": len(clean_chunk.get("choices", [])),
                 }
             })
-        
+
         return clean_chunk
-    
+
     @classmethod
     def _sanitize_dict(cls, data: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
         """Recursively remove SERVICE_FIELDS from a dict, returning (cleaned, removed_list)."""

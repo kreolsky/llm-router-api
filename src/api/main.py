@@ -20,7 +20,15 @@ from ..services.transcription_service import TranscriptionService
 from ..core.logging import logger
 from ..utils.generate_key import generate_key
 from ..providers import clear_provider_cache_async, rebuild_provider_cache
+from ..core.usage_db import (
+    close_db,
+    get_distinct_models,
+    get_distinct_users,
+    get_usage_data,
+    init_db,
+)
 from .middleware import RequestLoggerMiddleware
+from .stat_page import stat_page
 
 
 def _client_host(request: Request) -> str:
@@ -63,7 +71,6 @@ async def lifespan(app: FastAPI):
     app.state.embedding_service = EmbeddingService(config_manager)
     app.state.transcription_service = TranscriptionService(config_manager, app.state.model_service)
 
-    from ..core.usage_db import init_db, close_db
     await init_db()
 
     capabilities_task = asyncio.create_task(capabilities_refresh_loop(config_manager, capabilities_cache))
@@ -218,25 +225,21 @@ async def generate_key_endpoint(
 
 @app.get("/stat/")
 async def stat_dashboard(request: Request):
-    from .stat_page import stat_page
     return await stat_page(request)
 
 
 @app.get("/stat/api/users")
 async def stat_users():
-    from ..core.usage_db import get_distinct_users
     return await get_distinct_users()
 
 
 @app.get("/stat/api/models")
 async def stat_models():
-    from ..core.usage_db import get_distinct_models
     return await get_distinct_models()
 
 
 @app.get("/stat/api/usage")
 async def stat_usage(users: str = "", models: str = "", days: str = ""):
-    from ..core.usage_db import get_usage_data
     user_list = [u.strip() for u in users.split(",") if u.strip()] if users else []
     model_list = [m.strip() for m in models.split(",") if m.strip()] if models else []
     days_int = int(days) if days else None

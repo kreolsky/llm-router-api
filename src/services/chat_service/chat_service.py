@@ -10,6 +10,7 @@ from ...core.config_manager import ConfigManager
 from ...services.model_service import ModelService
 from ...core.logging import logger
 from ...core.sanitizer import MessageSanitizer
+from ...core.usage_db import schedule_chat_usage
 from ...core.error_handling import ErrorType, create_error
 from ...services.base import BaseService
 from .stream_processor import StreamProcessor, duplicate_reasoning_field, open_provider_stream
@@ -115,7 +116,6 @@ class ChatService(BaseService):
 
             usage = response_data.get("usage", {})
             if usage:
-                from ...core.usage_db import schedule_chat_usage
                 schedule_chat_usage(
                     usage,
                     project_name=user_id,
