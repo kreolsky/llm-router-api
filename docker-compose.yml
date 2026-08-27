@@ -7,7 +7,7 @@ services:
       - ./src:/app/src
       - ./config:/app/config
       - ./logs:/app/logs
-      - ./data:/app/data
+      - usage_data:/app/data
     env_file:
       - .env
     restart: unless-stopped
@@ -17,3 +17,15 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+
+volumes:
+  usage_data:
+    # INVARIANT(data-loss): /app/data lives on this named volume — the DB file is
+    # opened by the container process only, never from the macOS host.
+    # Why: a host-side `sqlite3 data/usage.db` open resets the WAL under the live
+    # connection over VirtioFS (the mmap'd -shm is not shared host<->container),
+    # so every later commit succeeds and is silently lost. Inspect via
+    # `docker compose exec api python3 -c "import sqlite3; …"` or /stat/api/*.
+    # The name is pinned, not derived from the compose project name — a renamed
+    # directory or a -p flag must not silently mount a different, empty volume.
+    name: nnp-ai-router_usage_data

@@ -1,126 +1,122 @@
-# Fix the usage-writer wedge after mid-stream client disconnects
+# Stop losing usage rows to host-side SQLite access on the dev Mac
 
-Size **M** — one commit, high entanglement (the usage-DB write path is a named
-entanglement signal), straight to `dev`, no branch.
-
-Discovered while validating `plans/1787901000000-remove-message-sanitization.md`;
-pre-existing (reproduced on the pre-change build via `git stash` + rebuild).
+Size **M** — one commit, medium entanglement (usage-DB write path, no code on the
+request path changes), straight to `dev`, no branch.
 
 ## Decisions
 
-**Symptom.** After a client aborts an SSE stream mid-body (`curl -N … | head`),
-every subsequent usage flush silently stops inserting rows. No
-`Failed to record usage` (`src/core/usage_db.py:287`, throttled to 1/min — zero matches
-in full container logs), no `Usage recording task failed` (`:311`). The event
-loop stays healthy: streams serve, `Stream completed` and `Outgoing Response`
-are logged, health is 200. `docker restart` restores writes. Reproduced 3×:
-twice on the new build, once on the pre-change build.
+**The bug, named.** Usage rows silently stop persisting after anyone opens
+`data/usage.db` from the macOS host (`sqlite3 data/usage.db …`) while the
+container runs. Nothing hangs: the aiosqlite worker thread is idle, `/stat/api/*`
+answers in ~30 ms over the same connection (`src/core/usage_db.py:182`), the
+INSERT and COMMIT in `_flush_row` succeed, and no error is ever logged. The rows
+are visible only to the app's own connection and are gone at the next restart.
 
-**Architecture facts** (re-grepped today):
+**Mechanism.** `init_db` opens the DB in WAL (`src/core/usage_db.py:128`) on the
+`./data` bind mount (`docker-compose.yml:10`). WAL coordination goes through the
+mmap'd `-shm` file, which Docker Desktop's VirtioFS does not share between host
+and container. The host CLI therefore believes it is the only client, and on exit
+checkpoints and truncates the WAL under the live connection. Everything the app
+commits afterwards is invalid for every other reader.
 
-- One global aiosqlite connection: `_connection` at `src/core/usage_db.py:26`,
-  opened in `init_db` (`:129`, called from `src/api/main.py:75`), closed only at
-  lifespan shutdown (`src/api/main.py:93`). aiosqlite runs a single dedicated thread
-  with a serialized queue — one operation that never returns wedges every later
-  operation, silently.
-- Flush path: `src/api/middleware.py:153` (`finally`) → `schedule_flush`
-  (`src/core/usage_db.py:322`) → `_flush_row` (`:248–279`, `execute` + `commit`).
-- The DB is WAL (`src/core/usage_db.py:130`) on the `./data` bind mount
-  (`docker-compose.yml:10`) under Docker Desktop on macOS. WAL coordination
-  uses a mmap'd `-shm` file — the exact place a VFS-level hang can live on
-  VirtioFS. `busy_timeout=5000` (`:136`) only turns table-lock waits into
-  errors; a hang below the busy handler never surfaces as `SQLITE_BUSY`.
-- `/stat/api/*` reads share the same connection (`src/core/usage_db.py:388–640`): both
-  the diagnostic probe and the blast radius — a wedged thread hangs the
-  dashboard too.
+**Evidence** (reproduced in one shot; `app` = `/stat/api/summary`, `fresh` = a new
+sqlite connection inside the container):
 
-**Root cause is not yet named.** Step 1 captures the thread stack while wedged
-(`py-spy dump` inside the running container; `pip install` it ephemerally, no
-image change). Expected finding: the aiosqlite thread blocked in a SQLite VFS
-call (shm lock / fsync) on the bind mount. The fix branches on the dump.
+```
+=== after restart:   app=1491 fresh=1491
+=== req1:            app=1492 fresh=1492
+--- host `sqlite3 data/usage.db 'select count(*)'` → 1492
+=== req2:            app=1493 fresh=1492      ← divergence starts here
+after a restart:     app=1492 fresh=1492      ← row 1493 lost
+```
 
-**Primary fix (expected branch): take WAL off the bind mount.**
-`init_db` sets `PRAGMA journal_mode=TRUNCATE` instead of WAL. TRUNCATE converts
-the persistent WAL flag in the existing file and uses no shared memory. Brief
-EXCLUSIVE locks during commit are fine at one-INSERT-per-request rates, and
-host-side `sqlite3 data/usage.db` inspection keeps working (this plan's own
-validation and the operator workflow depend on it). Stale `usage.db-wal` /
-`usage.db-shm` are removed after a successful conversion (conversion fails if a
-host CLI holds the file — close CLI sessions first; on failure log ERROR and
-continue in the current mode, loud but not fatal).
+**Fix: make host access structurally impossible.** `./data:/app/data` becomes a
+named volume, with a one-time copy of the existing `./data` contents into it.
+Discipline ("do not run sqlite3 on the host") is not a fix — the previous
+investigation broke writes with its own measurement command. Inspection moves to
+`docker compose exec api python3 -c "import sqlite3 …"` and `/stat/api/*`.
 
-**Watchdog regardless of branch.** Silent wedges must never be silent again.
-Track the oldest pending flush; a check piggybacked on `schedule_flush` (cheap,
-synchronous, no new background task): if the oldest pending flush exceeds
-`USAGE_FLUSH_STUCK_TIMEOUT` (env, default 30 s), log ERROR with pending count
-and swap in a fresh connection. The old connection gets a best-effort close
-bounded by a short timeout; an abandoned wedged thread leaks one fd — bounded,
-rare, accepted (`INVARIANT:` note in code).
+**The volume name is pinned, not derived.** The `volumes:` block declares
+`name: nnp-ai-router_usage_data` explicitly, so it no longer depends on the
+compose project name. Otherwise a renamed directory or a `-p` flag silently
+mounts a different, empty volume and the router starts on an empty DB while every
+command still reports success.
 
-**Tests.** A new api test aborts a stream mid-body (httpx stream, early
-close), then asserts a usage row lands for a follow-up request via the
-`/stat/api` summary. It reproduces the wedge on this Mac pre-fix and must never
-fail post-fix; on other hosts it may not reproduce, which is fine. Unit tests
-pin the watchdog (fake wedged connection: detection, ERROR log, swap) and the
-journal-mode pragma.
+**Not a production bug.** On the Linux deploy host a bind mount is the same
+inode and WAL/shm behave; this is a Docker Desktop artifact. So the fix is in
+`docker-compose.yml`, not in `usage_db.py`, and `journal_mode` stays WAL.
+
+**Marker placement.** The rule that keeps this fixed is enforced by the compose
+volume, not by any Python line, so the `INVARIANT(data-loss):` goes on the volume
+line in `docker-compose.yml`. The stale `WHY:` at `src/core/usage_db.py:129-133`
+— which claims `busy_timeout=5000` protects against "the sqlite3 CLI during an
+inspection", now known to be false on this mount — is rewritten as a `WHY:`
+stating that only the container process opens the file, pointing at the compose
+marker.
+
+**No tests.** The diff is compose + comments + docs; there is no runtime surface
+a pytest case could bind. Acceptance is the live drive in `## Validation`.
 
 ## Risks
 
-- The diagnosis may exonerate WAL/VFS (stack shows something else). Then step 2
-  is NOT applied — record the stack in the ticket and re-plan; only the
-  watchdog (step 3) ships, as mitigation.
-- `journal_mode=TRUNCATE` conversion requires exclusive access; a left-open
-  host CLI makes startup conversion fail. Mitigated: loud ERROR + keep current
-  mode; the operator closes the CLI and restarts.
-- Watchdog swap races an in-flight flush holding the old connection reference
-  (`:245` captures it at start): the racing flush is abandoned to its own
-  timeout and logged. Accepted — at worst one row is lost loudly.
-- Losing WAL costs reader/writer concurrency for host inspection during write
-  bursts. One INSERT per request; negligible.
+- **Server history.** The deploy host keeps its bind mount and is unaffected on
+  Linux. If this repo's `docker-compose.yml` is ever synced to the server, the
+  server's `./data` is orphaned and the whole usage history disappears silently —
+  migrate the server's volume first, or keep the server file on `./data`. The
+  README note lands in the same commit.
+- The named volume hides the DB from `ls data/`; an operator expecting a host
+  file will think stats were wiped. Mitigated by the README inspection recipe.
+- The one-time copy must run while the container is stopped, or the copied file
+  is the stale pre-divergence snapshot. The step stops it first.
+- Rows written since the current divergence started are already lost and are not
+  recoverable by this change; the copied file is the authoritative snapshot.
+- `data/model_cache.json` moves into the volume too. It is a rebuildable cache;
+  the refresh loop repopulates it if the copy is skipped.
 
 ## Order
 
-1. **Diagnose** (no code; capture verbatim into the PR body): reproduce the
-   wedge (`curl -N … stream … | head -3`, then a non-stream request, then
-   `sqlite3 data/usage.db 'select max(id) from usage_events'` shows no new row).
-   While wedged: (a) `curl /stat/api/users` — hanging confirms the shared
-   thread is stuck; (b) `py-spy dump --pid 1` in the container. Branch on the
-   stack: VFS/shm/fsync → continue; anything else → only step 3–4, re-plan 2.
-2. **WAL off**: `init_db` (`src/core/usage_db.py:130`) sets `journal_mode=TRUNCATE`,
-   logs the resulting mode, deletes `data/usage.db-wal`/`-shm` after
-   successful conversion.
-3. **Watchdog** in `usage_db.py`: pending-flush age tracking around
-   `schedule_flush`/`_flush_row`, stuck check inside `schedule_flush`, ERROR
-   log + bounded-close connection swap, `USAGE_FLUSH_STUCK_TIMEOUT` via
-   `ConfigManager`-style env read (module-level, read once — matches the
-   `_ENV_SETTINGS` ARCH in `src/core/config_manager.py:14`).
-4. **Tests**: `tests/unit/test_usage_db_watchdog.py` (new); api test in
-   `tests/api/test_chat_completions.py` or a sibling file
-   (`test_usage_writer_survives_aborted_stream`).
-5. **Docs**: README env table row for `USAGE_FLUSH_STUCK_TIMEOUT`; `ARCH:` /
-   `INVARIANT:` markers in `usage_db.py`; `SYSTEMS.md` regen only if the
-   `SYSTEM:` marker text changes.
+1. **Move the DB off the bind mount** (one commit):
+   - `docker-compose.yml:10` → `usage_data:/app/data`, plus a top-level block
+     `volumes: { usage_data: { name: nnp-ai-router_usage_data } }` carrying
+     `INVARIANT(data-loss):` + `Why:` — the DB file is opened by the container
+     process only; a host-side sqlite3 open resets the WAL under the live
+     connection over VirtioFS and every later commit is lost.
+   - One-time migration, container stopped:
+     `docker compose down` → `docker volume create nnp-ai-router_usage_data` →
+     `docker run --rm -v "$PWD/data:/src:ro" -v nnp-ai-router_usage_data:/dst
+     alpine cp -a /src/. /dst/` → `docker compose up -d --build`.
+   - Rename the host copy to `data.pre-volume-backup/` so it cannot be mistaken
+     for the live DB; do not delete it, and add it to `.gitignore` — the existing
+     `data/` entry (`.gitignore:30`) does not cover the new name.
+   - Replace the stale `WHY:` at `src/core/usage_db.py:129-133` per Decisions.
+   - README: `README.md:194` and the `USAGE_DB_PATH` row at `README.md:243` gain
+     the named-volume note, the two inspection commands and the server warning;
+     `CLAUDE.md:55` gains one clause pointing at the compose `INVARIANT:`.
 
 ## Not doing
 
-- Not moving the DB to a named volume or container-local path — it breaks the
-  host `sqlite3 data/usage.db` inspection the workflow relies on. Revisit only
-  if step 1 shows TRUNCATE also hangs.
-- Not building a queue/worker indirection over aiosqlite — single-writer is
-  already the design; the wedge sits below aiosqlite.
-- Not touching the gemini/mini and deepseek/flash upstream availability
-  failures seen in the api suite (separate, environmental).
+- Not switching `journal_mode` to TRUNCATE/DELETE. It drops the `-shm` file but
+  leaves cross-VirtioFS POSIX locking equally unreliable — a different failure,
+  not a fix — and it would change production behaviour for a dev-host defect.
+- Not adding the stuck-flush watchdog from the superseded version of this plan.
+  Nothing is stuck; a flush-age timer would never have fired here.
+- Not adding a periodic read-back detector (fresh connection vs the app's
+  `max(id)`). The named volume removes the only known trigger; revisit only if
+  divergence is observed again.
+- Not moving `logs/` or `config/` off their bind mounts — they are plain files
+  with no shared-memory coordination.
 
 ## Validation
 
-- Pre-fix repro evidence (already captured 3×) quoted in the PR; post-fix the
-  exact repro ×5, each followed by a row in `select max(id)`, verbatim.
-- Dashboard reads (`/stat/api/users`) responsive during and after the repro.
-- Full `tests/unit/` + `tests/api/test_chat_completions.py` + the new tests,
-  then a repeat run for ordering (high entanglement). Known environmental
-  failures — `gemini/mini` (upstream model retired), `deepseek/flash` (flaky)
-  — are expected to stay identical.
-- `.claude/scripts/pre-commit-gates.sh` run UNPIPED.
-- Live drive on the rebuilt container: aborted stream → follow-up non-stream
-  request → `sqlite3` shows both rows; a completed usage-bearing stream
-  (`stream_options: {"include_usage": true}`) still records tokens.
+- Migration landed: `docker compose exec api python3 -c "import sqlite3; …"`
+  reports the same row count as the pre-migration host file, verbatim.
+- Repro attempt post-fix: that same in-container read, then a chat request, then
+  the read again — the count increments.
+- The trigger is out of reach: `sqlite3 data.pre-volume-backup/usage.db` stays
+  frozen while `/stat/api/summary` advances.
+- Row survives a restart: request → `docker compose restart api` → still counted.
+- `tests/unit/test_usage_db.py` (tmp_path-based, must stay green) plus
+  `.claude/scripts/pre-commit-gates.sh` run UNPIPED.
+- Live drive on the rebuilt container: one non-stream and one streaming request
+  (`-N`, `stream_options: {"include_usage": true}`) each produce a row with
+  tokens recorded.

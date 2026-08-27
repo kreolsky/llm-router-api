@@ -126,11 +126,13 @@ async def init_db(db_path: str) -> None:
         os.makedirs(db_dir, exist_ok=True)
     _connection = await aiosqlite.connect(db_path)
     await _connection.execute("PRAGMA journal_mode=WAL")
-    # WHY: WAL allows one writer at a time. Without a busy timeout a concurrent
-    # writer (another uvicorn worker, or the sqlite3 CLI during an inspection)
-    # makes the write fail instantly with "database is locked" — and the
-    # failure is swallowed by _flush_row, so usage events would vanish in
-    # silence.
+    # WHY: WAL allows one writer at a time; busy_timeout makes a concurrent
+    # writer wait instead of failing instantly with "database is locked" — and
+    # the failure is swallowed by _flush_row, so usage events would vanish in
+    # silence. The only other client this tolerates is an in-container
+    # inspection connection; a host-side sqlite3 open of the file is not
+    # survivable at all (it resets the WAL over VirtioFS) — preventing that is
+    # the INVARIANT(data-loss) on the usage_data volume in docker-compose.yml.
     await _connection.execute("PRAGMA busy_timeout=5000")
     await _connection.execute("""
         CREATE TABLE IF NOT EXISTS usage_events (

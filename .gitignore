@@ -28,6 +28,7 @@ logs/
 *.sqlite3
 *.db
 data/
+data.pre-volume-backup/
 _help
 TODO.md
 
