@@ -970,6 +970,25 @@ class TestChatExtraHeadersForwarding:
         async for _ in gen:
             pass
 
+    @pytest.mark.asyncio
+    async def test_embeddings_forwards_extra_headers(self):
+        provider = _build_openai_provider()
+        provider._make_request = AsyncMock(return_value={"data": []})
+        extra = {"user-agent": "Kilo-Code/7.5.5"}
+        await provider.embeddings({"input": "hi"}, "emb", {}, request_id="r1",
+                                  extra_headers=extra)
+        assert provider._make_request.call_args.kwargs["extra_headers"] == extra
+
+    @pytest.mark.asyncio
+    async def test_transcriptions_forwards_extra_headers(self):
+        provider = _build_openai_provider()
+        provider._make_request = AsyncMock(return_value={"text": "ok"})
+        extra = {"user-agent": "Kilo-Code/7.5.5"}
+        body = {"audio": {"filename": "a.wav", "content_type": "audio/wav", "data": b"x"},
+                "params": {}}
+        await provider.transcriptions(body, "stt", {}, request_id="r1", extra_headers=extra)
+        assert provider._make_request.call_args.kwargs["extra_headers"] == extra
+
 
 # ===================================================================
 # Graceful drain on aclose (config reload must not kill live streams)

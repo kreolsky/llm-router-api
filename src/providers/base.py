@@ -578,7 +578,8 @@ class BaseProvider:
         raise NotImplementedError
 
     async def embeddings(self, request_body: dict[str, Any], provider_model_name: str,
-                         model_config: dict[str, Any], request_id: str = "unknown") -> Any:
+                         model_config: dict[str, Any], request_id: str = "unknown",
+                         extra_headers: dict[str, str] = None) -> Any:
         raise NotImplementedError
 
     async def list_models(self, request_id: str = "unknown") -> dict[str, Any]:
@@ -590,11 +591,12 @@ class BaseProvider:
         raise NotImplementedError
 
     async def transcriptions(self, request_body: dict[str, Any], provider_model_name: str,
-                             model_config: dict[str, Any], request_id: str = "unknown") -> Any:
+                             model_config: dict[str, Any], request_id: str = "unknown",
+                             extra_headers: dict[str, str] = None) -> Any:
         """Transcribe audio. request_body shape:
 
             {"audio": {"filename": str, "content_type": str, "data": bytes},
              "params": {"language"?, "temperature"?, "response_format"?,
-                        "return_timestamps"?, "prompt"?}}
+                         "return_timestamps"?, "prompt"?}}
         """
         raise NotImplementedError

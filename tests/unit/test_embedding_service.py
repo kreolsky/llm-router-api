@@ -43,3 +43,26 @@ class TestInvalidJsonBody:
 
         assert exc_info.value.status_code == 400
         assert "valid JSON body" in exc_info.value.detail["error"]["message"]
+
+
+class TestIdentityHeadersForwarded:
+
+    @pytest.mark.asyncio
+    async def test_client_user_agent_reaches_provider(self):
+        """identity: passthrough — the client's User-Agent rides along to the
+        embeddings call, so endpoints of one provider share one fingerprint."""
+        models = {"emb/model": {"provider": "embed"}}
+        providers = {"embed": {"type": "openai", "base_url": "https://api.example.com"}}
+        service = EmbeddingService(_make_config_manager(models, providers))
+
+        request = _make_request(json.dumps({"model": "emb/model", "input": "hi"}).encode())
+        request.headers = {"user-agent": "Kilo-Code/7.5.5", "authorization": "Bearer nnp-v1-x"}
+
+        provider_instance = SimpleNamespace(identity="passthrough")
+        provider_instance.embeddings = AsyncMock(return_value={"data": [], "usage": {}})
+        service._get_provider = AsyncMock(return_value=provider_instance)
+
+        await service.create_embeddings(request, ("proj", "sk-1", [], []))
+
+        kwargs = provider_instance.embeddings.call_args.kwargs
+        assert kwargs["extra_headers"] == {"user-agent": "Kilo-Code/7.5.5"}

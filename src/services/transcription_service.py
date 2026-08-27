@@ -77,6 +77,7 @@ class TranscriptionService(BaseService):
             stats.provider_name = provider_name
 
             provider_instance = await self._get_provider(provider_name, provider_config, **error_ctx)
+            identity_headers = self._build_identity_headers(provider_instance, request)
 
             provider_request_body = {
                 "audio": {
@@ -97,6 +98,7 @@ class TranscriptionService(BaseService):
                 provider_model_name,
                 model_config,
                 request_id=request_id,
+                extra_headers=identity_headers,
             )
 
             self._log_service_data(

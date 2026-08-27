@@ -34,10 +34,13 @@ class OpenAICompatibleProvider(BaseProvider):
                                     request_id=request_id, extra_headers=extra_headers)
 
     async def transcriptions(self, request_body: dict[str, Any], provider_model_name: str,
-                             model_config: dict[str, Any], request_id: str = "unknown") -> dict[str, Any]:
+                             model_config: dict[str, Any], request_id: str = "unknown",
+                             extra_headers: dict[str, str] = None) -> dict[str, Any]:
         """Send audio to an OpenAI-compatible /audio/transcriptions endpoint.
 
         Uses provider's own credentials from self.headers (set in BaseProvider.__init__).
+        extra_headers (client identity) ride along; the multipart Content-Type
+        is still set by httpx — _make_request pops it for multipart bodies.
         """
         audio = request_body["audio"]
         params = dict(request_body.get("params") or {})
@@ -63,12 +66,14 @@ class OpenAICompatibleProvider(BaseProvider):
             path="/audio/transcriptions",
             files=files,
             data=form,
+            extra_headers=extra_headers,
             timeout=transcription_timeout,
             request_id=request_id
         )
 
     async def embeddings(self, request_body: dict[str, Any], provider_model_name: str,
-                         model_config: dict[str, Any], request_id: str = "unknown") -> Any:
+                         model_config: dict[str, Any], request_id: str = "unknown",
+                         extra_headers: dict[str, str] = None) -> Any:
         """Forward embedding request to an OpenAI-compatible API."""
         request_body = self._apply_model_config(request_body, provider_model_name, model_config)
 
@@ -79,6 +84,7 @@ class OpenAICompatibleProvider(BaseProvider):
             method="POST",
             path="/embeddings",
             request_body=request_body,
+            extra_headers=extra_headers,
             timeout=embeddings_timeout,
             request_id=request_id
         )
