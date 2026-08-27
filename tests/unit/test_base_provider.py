@@ -971,3 +971,128 @@ class TestChatExtraHeadersForwarding:
                                                extra_headers={"X-Session-Id": "ses_x"})
         async for _ in gen:
             pass
+
+
+# ===================================================================
+# Graceful drain on aclose (config reload must not kill live streams)
+# ===================================================================
+
+class TestGracefulDrain:
+    """aclose() waits for in-flight requests before closing the pool.
+
+    A config reload rebuilds the provider cache and closes the OLD pools while
+    long-lived SSE streams may still be reading from them.
+    """
+
+    @pytest.mark.asyncio
+    async def test_idle_provider_closes_immediately(self):
+        """With nothing in flight, aclose() closes without waiting."""
+        provider = _build_provider()
+        await asyncio.wait_for(provider.aclose(), timeout=1.0)
+        assert provider.client.is_closed
+
+    @pytest.mark.asyncio
+    async def test_aclose_waits_for_inflight_request(self):
+        """A request in flight keeps the pool open until it finishes."""
+        provider = _build_provider()
+        release = asyncio.Event()
+        entered = asyncio.Event()
+
+        async def slow_post(*a, **k):
+            entered.set()
+            await release.wait()
+            return _mock_response()
+
+        provider.client.post = slow_post
+
+        request = asyncio.create_task(
+            provider._make_request("POST", "/x", request_body={}, request_id="r1")
+        )
+        await asyncio.wait_for(entered.wait(), timeout=1.0)
+
+        closing = asyncio.create_task(provider.aclose())
+        await asyncio.sleep(0.05)
+        assert not closing.done(), "aclose() closed the pool with a request in flight"
+        assert not provider.client.is_closed
+
+        release.set()
+        await asyncio.wait_for(request, timeout=1.0)
+        await asyncio.wait_for(closing, timeout=1.0)
+        assert provider.client.is_closed
+
+    @pytest.mark.asyncio
+    async def test_aclose_waits_for_inflight_stream(self):
+        """A stream being consumed keeps the pool open until the consumer stops."""
+        provider = _build_provider()
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def fake_inner(*a, **k):
+            entered.set()
+            yield b"chunk-1"
+            await release.wait()
+            yield b"chunk-2"
+
+        provider._stream_request_inner = fake_inner
+
+        chunks = []
+
+        async def consume():
+            async for chunk in provider._stream_request(provider.client, "/x", {}, "r1"):
+                chunks.append(chunk)
+
+        consumer = asyncio.create_task(consume())
+        await asyncio.wait_for(entered.wait(), timeout=1.0)
+
+        closing = asyncio.create_task(provider.aclose())
+        await asyncio.sleep(0.05)
+        assert not closing.done(), "aclose() closed the pool mid-stream"
+        assert not provider.client.is_closed
+
+        release.set()
+        await asyncio.wait_for(consumer, timeout=1.0)
+        await asyncio.wait_for(closing, timeout=1.0)
+        assert provider.client.is_closed
+        assert chunks == [b"chunk-1", b"chunk-2"]
+
+    @pytest.mark.asyncio
+    async def test_drain_timeout_forces_close(self):
+        """A request that never finishes cannot block shutdown forever."""
+        provider = _build_provider()
+        entered = asyncio.Event()
+
+        async def never_finishes(*a, **k):
+            entered.set()
+            await asyncio.Event().wait()
+
+        provider.client.post = never_finishes
+        request = asyncio.create_task(
+            provider._make_request("POST", "/x", request_body={}, request_id="r1")
+        )
+        await asyncio.wait_for(entered.wait(), timeout=1.0)
+
+        await asyncio.wait_for(provider.aclose(drain_timeout=0.05), timeout=1.0)
+        assert provider.client.is_closed
+
+        request.cancel()
+
+    @pytest.mark.asyncio
+    async def test_inflight_released_on_stream_abandon(self):
+        """A consumer that abandons the stream still releases the in-flight slot."""
+        provider = _build_provider()
+        entered = asyncio.Event()
+
+        async def fake_inner(*a, **k):
+            entered.set()
+            yield b"chunk-1"
+            await asyncio.Event().wait()
+
+        provider._stream_request_inner = fake_inner
+
+        stream = provider._stream_request(provider.client, "/x", {}, "r1")
+        assert await stream.__anext__() == b"chunk-1"
+        await asyncio.wait_for(entered.wait(), timeout=1.0)
+        await stream.aclose()
+
+        await asyncio.wait_for(provider.aclose(), timeout=1.0)
+        assert provider.client.is_closed

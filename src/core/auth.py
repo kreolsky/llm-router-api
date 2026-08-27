@@ -1,6 +1,6 @@
 """Authentication and authorization for the API gateway."""
 import hmac
-from fastapi import Security, HTTPException, status, Request
+from fastapi import Depends, Security, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Dict, Any, Tuple, List
 from .context import RequestContext
@@ -97,8 +97,6 @@ def check_endpoint_access(endpoint_path: str):
 
     Empty allowed_endpoints list means unrestricted access (default for admin keys).
     """
-    from fastapi import Depends
-    
     async def endpoint_checker(
         request: Request,
         auth_data: Tuple[str, str, List[str], List[str]] = Depends(get_api_key)

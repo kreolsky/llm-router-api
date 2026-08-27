@@ -18,19 +18,21 @@ OpenAI-compatible API gateway for multiple LLM providers. Routes requests to Ope
 
 **Request Flow**: Middleware (request ID, logging) → Auth (Bearer token, HMAC) → Service (model access validation) → Provider (HTTP to backend) → Response (JSON or SSE stream).
 
-**Provider Abstraction**: Single provider type (`openai`). Each provider instance owns its own `httpx.AsyncClient` (per-backend connection pool). Instances are cached by **provider name** (the dict key in `providers.yaml`); the cache is cleared on config reload, closing each cached client first (`aclose()`). Base class handles retry with exponential backoff on 429s. Optional per-provider `proxy` key (e.g. `socks5://host:port`) routes all of that provider's traffic through a SOCKS5 proxy; `None` (unset) = direct connection. Requires the `httpx[socks]` extra (`socksio`).
+**Provider Abstraction**: Single provider type (`openai`). Each provider instance owns its own `httpx.AsyncClient` (per-backend connection pool). Instances are cached by **provider name** (the dict key in `providers.yaml`); the cache is rebuilt on config reload, and the previous instances' pools are closed via `aclose()` **after their in-flight requests drain** (bounded by `stream_read_timeout`), so a reload never aborts a live SSE stream. Base class handles retry with exponential backoff on 429s. Optional per-provider `proxy` key (e.g. `socks5://host:port`) routes all of that provider's traffic through a SOCKS5 proxy; `None` (unset) = direct connection. Requires the `httpx[socks]` extra (`socksio`).
 
 **Upstream Identity** (`identity:` key in `providers.yaml`, see `plans/opencode-attribution.md`): `opencode` stamps `User-Agent: opencode/<identity_version>` plus per-request `x-session-affinity`/`X-Session-Id` with a stable `ses_*` id per client project (`src/core/opencode_identity.py`, registry TTL `OPENCODE_SESSION_TTL`); `passthrough` forwards the client's whitelisted harness headers. The whitelist is data (`src/core/identity_headers.py`): the default set is `User-Agent`, `X-Session-Id`, `x-session-affinity`, `x-parent-session-id`, `anthropic-beta`, `x-stainless-*`, and a provider may **replace** it wholesale with `passthrough_headers:` in `providers.yaml` (a trailing `*` is a prefix pattern; exact names are re-cased to the configured spelling, prefix matches keep the client's). A malformed list fails fast at provider construction. Kilo Code is an opencode fork and already sends the default set (`ses_*` ids, `x-session-affinity`, `User-Agent: Kilo-Code/<v>`), so it needs `identity: passthrough` and no synthetic profile; its `HTTP-Referer`/`X-Title`/`x-kilocode-*` extras are opt-in via `passthrough_headers`. Config `headers:` and real client headers win over the synthetic profile. Stream and non-stream paths merge headers identically (`_merge_request_headers`); `Authorization` is never overwritten.
 
+**Process Model**: **one uvicorn worker** (`API_WORKERS`, default `1`). The gateway is I/O-bound, and three subsystems are process-local singletons that extra workers would silently fork into independent copies: the OpenCode `SessionRegistry` (stable `ses_*` ids per client — the whole point of `x-session-affinity`), the `CapabilitiesCache` (N copies, N refresh loops, N× upstream polling), and the SQLite usage writer. `PRAGMA busy_timeout=5000` is set regardless so a concurrent writer waits instead of losing the event.
+
 **Startup Validation**: Eager fail-fast — on startup every configured provider is instantiated (validating `base_url` + env API key). Any failure (collected, all reported) refuses to start.
 
-**Request Context**: A typed `RequestContext` (`request_id`, `project_name`) frozen dataclass is stored on `request.state.request_context` by middleware and rebuilt by auth (to attach `project_name`). Services read it via `BaseService._get_request_context(request)` — no raw `request.state.request_id`/`project_name` keys.
+**Request Context**: A typed `RequestContext` (`request_id`, `project_name`) frozen dataclass is stored on `request.state.request_context` by middleware and rebuilt by auth (to attach `project_name`). `core.context.request_context(request)` is the single accessor (services reach it via `BaseService._get_request_context`), and it returns the dataclass — no raw `request.state.request_id`/`project_name` keys, and no dict-shaped copy of the context.
 
 **Configuration (YAML)**: Three files in `config/` — `providers.yaml` (connections), `models.yaml` (model registry), `user_keys.yaml` (API key access control). Hot-reloaded via background task.
 
 **Access Control**: Per-key model restrictions. Access check runs BEFORE model existence check to prevent information leakage. Keys use `nnp-v1-<hex>` format.
 
-**Streaming**: SSE pass-through with UTF-8 split recovery at chunk boundaries. StreamProcessor handles `\n\n` and `\r\n\r\n` separators.
+**Streaming**: SSE pass-through with UTF-8 split recovery at chunk boundaries. `StreamProcessor.process_stream` is an envelope over two independent bodies (`_passthrough` / `_sanitizing`); the frame parser lives in `_decode_chunks` and `_iter_sse_frames`/`_split_frame`, which handle `\n\n` and `\r\n\r\n` (earliest separator wins) and SSE comments. `open_provider_stream` primes the first chunk BEFORE the response starts, so an upstream 401/429 keeps its real HTTP status instead of arriving as a 200 with an error frame.
 
 **Error Format**: OpenRouter-compatible JSON with `error.code`, `error.message`, `error.metadata`.
 
@@ -45,7 +47,7 @@ Priority: `model_info.yaml` **always wins** over the auto-cache (deep-merge wher
 
 ## Configuration (env vars)
 
-All env-backed settings are read via `ConfigManager` properties (no direct `os.getenv` in providers/services except initial logger/debug setup).
+All env-backed settings are read via `ConfigManager` **once, at construction** (`_ENV_SETTINGS`, exposed through `__getattr__`) — env vars cannot change without a restart, so per-access reads only cost the hot path a parse and moved malformed-value failures into requests. No direct `os.getenv` in providers/services except initial logger/debug setup.
 
 **Ports**: the container listens on `8000` (uvicorn `--port 8000`); `docker-compose` maps host `8777` → container `8000`. Clients and the test suite talk to `8777`.
 

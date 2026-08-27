@@ -10,9 +10,10 @@ from ...core.config_manager import ConfigManager
 from ...services.model_service import ModelService
 from ...core.logging import logger
 from ...core.sanitizer import MessageSanitizer
+from ...core.usage_db import schedule_chat_usage
 from ...core.error_handling import ErrorType, create_error
 from ...services.base import BaseService
-from .stream_processor import StreamProcessor, duplicate_reasoning_field
+from .stream_processor import StreamProcessor, duplicate_reasoning_field, open_provider_stream
 
 
 class ChatService(BaseService):
@@ -25,9 +26,9 @@ class ChatService(BaseService):
     
     async def chat_completions(self, request: Request, auth_data: Tuple[str, str, list, list]) -> Any:
         """Process a chat completion request, returning StreamingResponse or JSONResponse."""
-        context_dict = self._get_request_context(request)
-        request_id = context_dict["request_id"]
-        user_id = context_dict["user_id"]
+        ctx = self._get_request_context(request)
+        request_id = ctx.request_id
+        user_id = ctx.user_id
 
         start_time = time.time()
 
@@ -75,6 +76,9 @@ class ChatService(BaseService):
                     request_body, provider_model_name, model_config, request_id=request_id,
                     extra_headers=identity_headers
                 )
+                # Surface an upstream failure as a real HTTP status instead of a
+                # 200 carrying an SSE error frame (see open_provider_stream).
+                provider_stream = await open_provider_stream(provider_stream)
                 self._log_service_data(
                     title="Streaming Response Started",
                     data={
@@ -112,7 +116,6 @@ class ChatService(BaseService):
 
             usage = response_data.get("usage", {})
             if usage:
-                from ...core.usage_db import schedule_chat_usage
                 schedule_chat_usage(
                     usage,
                     project_name=user_id,

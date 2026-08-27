@@ -421,3 +421,177 @@ class TestReasoningFieldDuplication:
         combined = b"".join(result).decode("utf-8")
         parsed = json.loads(combined.split("data: ", 1)[1].split("\n\n")[0])
         assert parsed["choices"][0]["delta"]["reasoning"] == "hello"
+
+
+# ---------------------------------------------------------------------------
+# 9. SSE framing primitives (extracted from process_stream)
+# ---------------------------------------------------------------------------
+
+from src.services.chat_service.stream_processor import (  # noqa: E402
+    _StreamStats,
+    _decode_chunks,
+    _iter_sse_frames,
+    _split_frame,
+)
+
+
+class TestSplitFrame:
+
+    def test_incomplete_buffer_returns_none(self):
+        assert _split_frame('data: {"a":1}\n') is None
+
+    def test_lf_frame(self):
+        assert _split_frame('data: {"a":1}\n\nrest') == ('data: {"a":1}', "\n\n", "rest")
+
+    def test_crlf_frame(self):
+        assert _split_frame('data: {"a":1}\r\n\r\nrest') == ('data: {"a":1}', "\r\n\r\n", "rest")
+
+    def test_comment_terminated_by_single_newline(self):
+        assert _split_frame(": ping\n\ndata: {}\n\n") == (": ping", "\n", "\ndata: {}\n\n")
+
+    def test_earliest_separator_wins(self):
+        """A mixed-separator buffer must split on whichever boundary comes first.
+
+        Testing for "\\r\\n\\r\\n" anywhere in the buffer merged an earlier
+        "\\n\\n"-terminated message into the next frame.
+        """
+        buffer = 'data: {"a":1}\n\ndata: {"b":2}\r\n\r\n'
+        payload, separator, rest = _split_frame(buffer)
+        assert payload == 'data: {"a":1}'
+        assert separator == "\n\n"
+        assert rest == 'data: {"b":2}\r\n\r\n'
+
+    def test_empty_frame_preserved(self):
+        assert _split_frame("\n\ndata: {}\n\n") == ("", "\n\n", "data: {}\n\n")
+
+
+class TestIterSseFrames:
+
+    @pytest.mark.asyncio
+    async def test_frames_split_across_chunks(self):
+        frames = [f async for f in _iter_sse_frames(async_gen(['data: {"a"', ':1}\n\n']), "r")]
+        assert frames == [('data: {"a":1}', "\n\n")]
+
+    @pytest.mark.asyncio
+    async def test_trailing_content_flushed_with_default_separator(self):
+        frames = [f async for f in _iter_sse_frames(async_gen(['data: {"a":1}']), "r")]
+        assert frames == [('data: {"a":1}', "\n\n")]
+
+    @pytest.mark.asyncio
+    async def test_no_trailing_frame_for_whitespace(self):
+        frames = [f async for f in _iter_sse_frames(async_gen(['data: {}\n\n', "  \n"]), "r")]
+        assert frames == [("data: {}", "\n\n")]
+
+    @pytest.mark.asyncio
+    async def test_mixed_separators_yield_two_frames(self):
+        stream = async_gen(['data: {"a":1}\n\ndata: {"b":2}\r\n\r\n'])
+        frames = [f async for f in _iter_sse_frames(stream, "r")]
+        assert [p for p, _ in frames] == ['data: {"a":1}', 'data: {"b":2}']
+
+
+class TestDecodeChunks:
+
+    @pytest.mark.asyncio
+    async def test_counts_bytes_and_chunks(self):
+        stats = _StreamStats()
+        texts = [t async for t in _decode_chunks(async_gen([b"ab", b"cd"]), "r", stats)]
+        assert texts == ["ab", "cd"]
+        assert stats.chunks == 2
+        assert stats.bytes == 4
+
+    @pytest.mark.asyncio
+    async def test_split_multibyte_char_healed(self):
+        encoded = "üx".encode("utf-8")
+        stats = _StreamStats()
+        stream = async_gen([encoded[:1], encoded[1:]])
+        texts = [t async for t in _decode_chunks(stream, "r", stats)]
+        assert "".join(texts) == "üx"
+
+    @pytest.mark.asyncio
+    async def test_malformed_bytes_replaced(self):
+        stats = _StreamStats()
+        stream = async_gen([b"\xff\xfe" + b"ok" * 4])
+        texts = [t async for t in _decode_chunks(stream, "r", stats)]
+        assert "ok" in "".join(texts)
+
+
+# ---------------------------------------------------------------------------
+# 10. Eager priming: upstream errors must keep their HTTP status
+# ---------------------------------------------------------------------------
+
+from src.services.chat_service.stream_processor import open_provider_stream  # noqa: E402
+
+
+class TestOpenProviderStream:
+
+    @pytest.mark.asyncio
+    async def test_first_chunk_error_propagates(self):
+        """An error on the first read raises instead of becoming a stream body."""
+        async def failing():
+            raise HTTPException(status_code=429, detail={"error": {"code": 429}})
+            yield b""  # pragma: no cover
+
+        with pytest.raises(HTTPException) as exc_info:
+            await open_provider_stream(failing())
+        assert exc_info.value.status_code == 429
+
+    @pytest.mark.asyncio
+    async def test_stream_content_is_unchanged(self):
+        """Priming does not consume or reorder the stream."""
+        stream = await open_provider_stream(async_gen([b"a", b"b", b"c"]))
+        assert await collect(stream) == [b"a", b"b", b"c"]
+
+    @pytest.mark.asyncio
+    async def test_empty_stream_stays_empty(self):
+        stream = await open_provider_stream(async_gen([]))
+        assert await collect(stream) == []
+
+    @pytest.mark.asyncio
+    async def test_later_error_still_reaches_the_body(self):
+        """An error after the first chunk cannot change the status; it is framed."""
+        async def fails_late():
+            yield b"first"
+            raise HTTPException(status_code=500, detail="boom")
+
+        primed = await open_provider_stream(fails_late())
+        sp = make_processor(sanitize=False)
+        result = b"".join(await collect(sp.process_stream(primed, "m", "r", "u")))
+        assert result.startswith(b"first")
+        assert b"[DONE]" in result
+
+    @pytest.mark.asyncio
+    async def test_generator_cleanup_runs_on_first_read_failure(self):
+        """The failing generator's finally block runs, releasing its slot."""
+        released = []
+
+        async def failing():
+            try:
+                raise HTTPException(status_code=401, detail="nope")
+                yield b""  # pragma: no cover
+            finally:
+                released.append(True)
+
+        with pytest.raises(HTTPException):
+            await open_provider_stream(failing())
+        assert released == [True]
+
+    @pytest.mark.asyncio
+    async def test_abandoning_primed_stream_closes_the_source(self):
+        """A client disconnect must close the wrapped provider stream.
+
+        Otherwise the provider's in-flight slot is never released and a config
+        reload waits out the whole drain timeout before closing the pool.
+        """
+        closed = []
+
+        async def source():
+            try:
+                yield b"a"
+                yield b"b"
+            finally:
+                closed.append(True)
+
+        primed = await open_provider_stream(source())
+        assert await primed.__anext__() == b"a"
+        await primed.aclose()
+        assert closed == [True]

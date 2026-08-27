@@ -354,7 +354,7 @@ class TestRefreshProviderCapabilities:
         async def fake_gpi(*a, **k):
             return _FakeProvider(upstream)
 
-        monkeypatch.setattr("src.providers.get_provider_instance", fake_gpi)
+        monkeypatch.setattr("src.core.model_capabilities.get_provider_instance", fake_gpi)
         await refresh_provider_capabilities(cm, cache, "orange")
 
         for mid in ("local/chat", "local/reasoner"):
@@ -373,7 +373,7 @@ class TestRefreshProviderCapabilities:
         async def fake_gpi(*a, **k):
             return _FakeProvider(upstream)
 
-        monkeypatch.setattr("src.providers.get_provider_instance", fake_gpi)
+        monkeypatch.setattr("src.core.model_capabilities.get_provider_instance", fake_gpi)
         await refresh_provider_capabilities(cm, cache, "deepseek")
 
         assert cache.get("deepseek/flash")["context_length"] == 262144
@@ -393,7 +393,7 @@ class TestRefreshProviderCapabilities:
         async def fake_gpi(*a, **k):
             return _Boom()
 
-        monkeypatch.setattr("src.providers.get_provider_instance", fake_gpi)
+        monkeypatch.setattr("src.core.model_capabilities.get_provider_instance", fake_gpi)
         await refresh_provider_capabilities(cm, cache, "orange")  # must not raise
 
         # existing entry retained

@@ -24,6 +24,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Optional
 
 from .logging import logger
+from ..providers import get_provider_instance
 
 # Full set of OpenRouter pricing keys emitted in responses; missing -> "0".
 _PRICING_KEYS = (
@@ -385,9 +386,6 @@ async def refresh_provider_capabilities(
     ]
     if not entries:
         return
-
-    # Local import to keep the module import graph flat (providers -> base -> ...).
-    from ..providers import get_provider_instance
 
     try:
         provider = await get_provider_instance(provider_name, provider_config, config_manager)

@@ -1,0 +1,8 @@
+# Test-only dependencies. Install alongside requirements.txt:
+#   python -m venv .venv && .venv/bin/pip install -r requirements.txt -r requirements-dev.txt
+# WHY: the suite needs these but the runtime image must not carry them, and an
+# environment missing them fails in ways that look like product bugs (a stale
+# local httpx made 62 unit tests fail on a `proxy=` kwarg that Docker supports).
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+numpy>=1.26.0

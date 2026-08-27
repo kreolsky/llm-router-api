@@ -15,4 +15,9 @@ COPY . .
 EXPOSE 8000
 
 # Run the application
-CMD ["sh", "-c", "uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --workers ${API_WORKERS:-4}"]
+# INVARIANT: one worker by default. SessionRegistry (stable ses_* ids), the
+# capabilities cache and the SQLite usage writer are all process-local
+# singletons, so extra workers fork them into independent copies. The
+# gateway is I/O-bound (it awaits upstreams), so one worker is not the
+# bottleneck. Raise API_WORKERS only after that state is moved out of process.
+CMD ["sh", "-c", "uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --workers ${API_WORKERS:-1}"]

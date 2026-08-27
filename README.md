@@ -218,8 +218,15 @@ src/
 ## Tests
 
 ```bash
-python -m pytest tests/unit/ -v   # full unit test suite (fast, no service needed)
-python -m pytest tests/api/ -v    # integration tests (service on :8777)
+# One-time: a project venv matching requirements.txt. Do not rely on a shared
+# interpreter — a stale httpx there fails tests over features Docker has.
+python -m venv .venv
+.venv/bin/pip install -r requirements.txt -r requirements-dev.txt
+```
+
+```bash
+.venv/bin/python -m pytest tests/unit/ -v   # full unit suite (fast, no service needed)
+.venv/bin/python -m pytest tests/api/ -v    # integration tests (service on :8777)
 ```
 
 See [tests/README.md](tests/README.md) for details on what each test file covers.
@@ -249,6 +256,9 @@ See [tests/README.md](tests/README.md) for details on what each test file covers
 | `MODEL_CACHE_PATH` | data/model_cache.json | Persisted capabilities cache file |
 | `SANITIZE_MESSAGES` | false | Strip service fields from messages |
 | `DEBUG` | false | Enable debug-level JSON logging |
-| `LOG_LEVEL` | INFO | Logging level |
+| `API_WORKERS` | 1 | Uvicorn worker processes. Keep at 1: session ids, capabilities cache and usage writer are process-local |
+| `LOG_LEVEL` | INFO | Logging level. `DEBUG` writes full request/response bodies to `logs/debug.log` |
+| `LOG_MAX_BYTES` | 52428800 | Size at which a log file rotates (50 MB) |
+| `LOG_BACKUP_COUNT` | 3 | Rotated log files kept per log |
 | `DEFAULT_STT_MODEL` | stt/dummy | Fallback transcription model |
 | `USAGE_DB_PATH` | data/usage.db | SQLite path for the token usage dashboard |

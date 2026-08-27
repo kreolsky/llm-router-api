@@ -24,6 +24,11 @@ async def init_db() -> None:
         os.makedirs(db_dir, exist_ok=True)
     _connection = await aiosqlite.connect(DB_PATH)
     await _connection.execute("PRAGMA journal_mode=WAL")
+    # WHY: WAL allows one writer at a time. Without a busy timeout a concurrent
+    # writer (another uvicorn worker, or the sqlite3 CLI during an inspection)
+    # makes the write fail instantly with "database is locked" — and the failure
+    # is swallowed by record_usage, so usage events would vanish in silence.
+    await _connection.execute("PRAGMA busy_timeout=5000")
     await _connection.execute("""
         CREATE TABLE IF NOT EXISTS usage_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

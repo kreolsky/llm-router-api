@@ -10,7 +10,7 @@ from typing import Dict, Any
 
 from ..core.config_manager import ConfigManager
 from ..core.auth import get_api_key, check_endpoint_access
-from ..core.context import RequestContext
+from ..core.context import request_context
 from ..core.error_handling import ErrorType, create_error
 from ..core.model_capabilities import CapabilitiesCache, capabilities_refresh_loop
 from ..services.chat_service.chat_service import ChatService
@@ -20,19 +20,19 @@ from ..services.transcription_service import TranscriptionService
 from ..core.logging import logger
 from ..utils.generate_key import generate_key
 from ..providers import clear_provider_cache_async, rebuild_provider_cache
+from ..core.usage_db import (
+    close_db,
+    get_distinct_models,
+    get_distinct_users,
+    get_usage_data,
+    init_db,
+)
 from .middleware import RequestLoggerMiddleware
+from .stat_page import stat_page
 
 
 def _client_host(request: Request) -> str:
     return request.client.host if request.client else "unknown"
-
-
-# Strong references for in-flight reload-rebuild tasks (prevents GC before completion).
-
-
-def _request_context(request: Request) -> RequestContext:
-    """Read the typed RequestContext set by middleware/auth."""
-    return getattr(request.state, "request_context", None) or RequestContext(request_id="unknown")
 
 
 async def _validate_providers(config_manager: ConfigManager) -> None:
@@ -71,7 +71,6 @@ async def lifespan(app: FastAPI):
     app.state.embedding_service = EmbeddingService(config_manager)
     app.state.transcription_service = TranscriptionService(config_manager, app.state.model_service)
 
-    from ..core.usage_db import init_db, close_db
     await init_db()
 
     capabilities_task = asyncio.create_task(capabilities_refresh_loop(config_manager, capabilities_cache))
@@ -156,7 +155,7 @@ async def create_transcription(
     return_timestamps: Optional[bool] = Form(False),
     auth_data: tuple = Depends(check_endpoint_access("/v1/audio/transcriptions"))
 ):
-    ctx = _request_context(request)
+    ctx = request_context(request)
     request_id = ctx.request_id
     user_id = ctx.user_id
 
@@ -202,7 +201,7 @@ async def generate_key_endpoint(
     request: Request,
     auth_data: tuple = Depends(check_endpoint_access("/tools/generate_key"))
 ):
-    ctx = _request_context(request)
+    ctx = request_context(request)
     request_id = ctx.request_id
     user_id = ctx.user_id
 
@@ -226,25 +225,21 @@ async def generate_key_endpoint(
 
 @app.get("/stat/")
 async def stat_dashboard(request: Request):
-    from .stat_page import stat_page
     return await stat_page(request)
 
 
 @app.get("/stat/api/users")
 async def stat_users():
-    from ..core.usage_db import get_distinct_users
     return await get_distinct_users()
 
 
 @app.get("/stat/api/models")
 async def stat_models():
-    from ..core.usage_db import get_distinct_models
     return await get_distinct_models()
 
 
 @app.get("/stat/api/usage")
 async def stat_usage(users: str = "", models: str = "", days: str = ""):
-    from ..core.usage_db import get_usage_data
     user_list = [u.strip() for u in users.split(",") if u.strip()] if users else []
     model_list = [m.strip() for m in models.split(",") if m.strip()] if models else []
     days_int = int(days) if days else None
