@@ -5,6 +5,37 @@ import asyncio
 from typing import Dict, Any
 from .logging import logger
 
+
+# ---------------------------------------------------------------------------
+# Env-backed settings
+#
+# ARCH: every env-backed setting is read ONCE, at construction. Environment
+# variables cannot change without restarting the process, so re-reading them per
+# access bought nothing and cost the hot path a parse on every stream. Reading
+# once also means a malformed value is caught at startup (fail fast, like the
+# rest of the config) instead of raising inside a request.
+# ---------------------------------------------------------------------------
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    return default if raw is None else raw.strip().lower() == "true"
+
+
+def _env_number(name: str, default, cast):
+    """Read a numeric env var, falling back to default with a warning if unparsable."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return cast(raw)
+    except (ValueError, TypeError):
+        logger.warning(
+            f"{name} has invalid value {raw!r}, falling back to default {default}",
+            extra={"config": {"setting": name, "raw_value": raw}},
+        )
+        return default
+
+
 class ConfigManager:
     def __init__(self, config_dir: str = "config"):
         self.config_dir = config_dir
@@ -18,19 +49,11 @@ class ConfigManager:
         self._initialize_mtimes()
         self._on_reload_callbacks = []
         
-        self.debug = os.getenv("DEBUG", "false").lower() == "true"
+        self.debug = _env_bool("DEBUG", False)
         self.log_level = os.getenv("LOG_LEVEL", "INFO")
-        self.sanitize_messages = os.getenv("SANITIZE_MESSAGES", "false").lower() == "true"
+        self.sanitize_messages = _env_bool("SANITIZE_MESSAGES", False)
+        self._settings = self._read_env_settings()
 
-        try:
-            self._queue_wait_timeout = float(os.getenv("QUEUE_WAIT_TIMEOUT", "30.0"))
-        except (ValueError, TypeError):
-            logger.warning(
-                "QUEUE_WAIT_TIMEOUT has invalid value, falling back to default 30.0",
-                extra={"config": {"raw_value": os.getenv("QUEUE_WAIT_TIMEOUT", "")}}
-            )
-            self._queue_wait_timeout = 30.0
-        
         # Log configuration initialization
         logger.info("Configuration manager initialized", extra={
             "config": {
@@ -141,95 +164,59 @@ class ConfigManager:
                     f"Refusing to start."
                 )
     
+    _ENV_SETTINGS = (
+        # (attribute, env var, default, cast)
+        ("httpx_max_connections", "HTTPX_MAX_CONNECTIONS", 100, int),
+        ("httpx_max_keepalive_connections", "HTTPX_MAX_KEEPALIVE_CONNECTIONS", 20, int),
+        ("httpx_connect_timeout", "HTTPX_CONNECT_TIMEOUT", 60.0, float),
+        ("httpx_pool_timeout", "HTTPX_POOL_TIMEOUT", 5.0, float),
+        # WHY: without a read timeout, requests hang indefinitely when providers are unreachable
+        ("httpx_read_timeout", "HTTPX_READ_TIMEOUT", 60.0, float),
+        # WHY: streaming can be long-lived; a separate read timeout keeps non-stream requests snappy
+        ("stream_read_timeout", "STREAM_READ_TIMEOUT", 300.0, float),
+        ("queue_wait_timeout", "QUEUE_WAIT_TIMEOUT", 30.0, float),
+        ("config_reload_interval", "CONFIG_RELOAD_INTERVAL", 5, int),
+        ("provider_max_retries", "PROVIDER_MAX_RETRIES", 3, int),
+        ("provider_retry_base_delay", "PROVIDER_RETRY_BASE_DELAY", 1.0, float),
+        ("provider_retry_max_delay", "PROVIDER_RETRY_MAX_DELAY", 30.0, float),
+        ("openai_connect_timeout", "OPENAI_CONNECT_TIMEOUT", 60.0, float),
+        ("openai_transcription_timeout", "OPENAI_TRANSCRIPTION_TIMEOUT", 3600.0, float),
+        ("openai_embeddings_read_timeout", "OPENAI_EMBEDDINGS_READ_TIMEOUT", 30.0, float),
+        # WHY: synthetic OpenCode sessions must expire after inactivity, not live forever
+        ("opencode_session_ttl", "OPENCODE_SESSION_TTL", 3600.0, float),
+        # Model capabilities auto-cache (see src/core/model_capabilities.py)
+        ("model_cache_refresh_interval", "MODEL_CACHE_REFRESH_INTERVAL", 3600, int),
+        ("model_cache_ttl", "MODEL_CACHE_TTL", 86400, int),
+    )
+
+    def _read_env_settings(self) -> Dict[str, Any]:
+        """Resolve every env-backed setting once (see the module header)."""
+        settings: Dict[str, Any] = {
+            name: _env_number(env_var, default, cast)
+            for name, env_var, default, cast in self._ENV_SETTINGS
+        }
+        settings["default_stt_model"] = os.getenv("DEFAULT_STT_MODEL", "stt/dummy")
+        settings["model_cache_enabled"] = _env_bool("MODEL_CACHE_ENABLED", True)
+        settings["model_cache_path"] = os.getenv("MODEL_CACHE_PATH", "data/model_cache.json")
+        return settings
+
+    def __getattr__(self, name: str) -> Any:
+        """Expose env-backed settings as read-only attributes.
+
+        Only reached for attributes not found normally, so it never shadows real
+        state. Keeps every call site (config_manager.stream_read_timeout, ...)
+        unchanged while the values themselves are resolved once at construction.
+        """
+        try:
+            return self.__dict__["_settings"][name]
+        except KeyError:
+            raise AttributeError(
+                f"{type(self).__name__!r} object has no attribute {name!r}"
+            ) from None
+
     @property
     def should_sanitize_messages(self) -> bool:
         return self.sanitize_messages
-
-    @property
-    def httpx_max_connections(self) -> int:
-        return int(os.getenv("HTTPX_MAX_CONNECTIONS", "100"))
-
-    @property
-    def httpx_max_keepalive_connections(self) -> int:
-        return int(os.getenv("HTTPX_MAX_KEEPALIVE_CONNECTIONS", "20"))
-
-    @property
-    def httpx_connect_timeout(self) -> float:
-        return float(os.getenv("HTTPX_CONNECT_TIMEOUT", "60.0"))
-
-    @property
-    def httpx_pool_timeout(self) -> float:
-        return float(os.getenv("HTTPX_POOL_TIMEOUT", "5.0"))
-
-    @property
-    def httpx_read_timeout(self) -> float:
-        # WHY: without a read timeout, requests hang indefinitely when providers are unreachable
-        return float(os.getenv("HTTPX_READ_TIMEOUT", "60.0"))
-
-    @property
-    def stream_read_timeout(self) -> float:
-        # WHY: streaming can be long-lived; separate read timeout keeps non-stream requests snappy
-        return float(os.getenv("STREAM_READ_TIMEOUT", "300"))
-
-    @property
-    def queue_wait_timeout(self) -> float:
-        # WHY: cached at startup so a malformed env value doesn't crash per-request
-        return self._queue_wait_timeout
-
-    @property
-    def default_stt_model(self) -> str:
-        return os.getenv("DEFAULT_STT_MODEL", "stt/dummy")
-
-    @property
-    def config_reload_interval(self) -> int:
-        return int(os.getenv("CONFIG_RELOAD_INTERVAL", "5"))
-
-    @property
-    def provider_max_retries(self) -> int:
-        return int(os.getenv("PROVIDER_MAX_RETRIES", "3"))
-
-    @property
-    def provider_retry_base_delay(self) -> float:
-        return float(os.getenv("PROVIDER_RETRY_BASE_DELAY", "1.0"))
-
-    @property
-    def provider_retry_max_delay(self) -> float:
-        return float(os.getenv("PROVIDER_RETRY_MAX_DELAY", "30.0"))
-
-    @property
-    def openai_connect_timeout(self) -> float:
-        return float(os.getenv("OPENAI_CONNECT_TIMEOUT", "60.0"))
-
-    @property
-    def openai_transcription_timeout(self) -> float:
-        return float(os.getenv("OPENAI_TRANSCRIPTION_TIMEOUT", "3600.0"))
-
-    @property
-    def openai_embeddings_read_timeout(self) -> float:
-        return float(os.getenv("OPENAI_EMBEDDINGS_READ_TIMEOUT", "30.0"))
-
-    @property
-    def opencode_session_ttl(self) -> float:
-        # WHY: synthetic OpenCode sessions must expire after inactivity, not live forever
-        return float(os.getenv("OPENCODE_SESSION_TTL", "3600"))
-
-    # --- Model capabilities auto-cache (see src/core/model_capabilities.py) ---
-
-    @property
-    def model_cache_enabled(self) -> bool:
-        return os.getenv("MODEL_CACHE_ENABLED", "true").lower() == "true"
-
-    @property
-    def model_cache_refresh_interval(self) -> int:
-        return int(os.getenv("MODEL_CACHE_REFRESH_INTERVAL", "3600"))
-
-    @property
-    def model_cache_ttl(self) -> int:
-        return int(os.getenv("MODEL_CACHE_TTL", "86400"))
-
-    @property
-    def model_cache_path(self) -> str:
-        return os.getenv("MODEL_CACHE_PATH", "data/model_cache.json")
 
     def add_reload_callback(self, callback, name: str = ""):
         """Register an async callback invoked after a successful config load.

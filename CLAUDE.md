@@ -47,7 +47,7 @@ Priority: `model_info.yaml` **always wins** over the auto-cache (deep-merge wher
 
 ## Configuration (env vars)
 
-All env-backed settings are read via `ConfigManager` properties (no direct `os.getenv` in providers/services except initial logger/debug setup).
+All env-backed settings are read via `ConfigManager` **once, at construction** (`_ENV_SETTINGS`, exposed through `__getattr__`) — env vars cannot change without a restart, so per-access reads only cost the hot path a parse and moved malformed-value failures into requests. No direct `os.getenv` in providers/services except initial logger/debug setup.
 
 **Ports**: the container listens on `8000` (uvicorn `--port 8000`); `docker-compose` maps host `8777` → container `8000`. Clients and the test suite talk to `8777`.
 

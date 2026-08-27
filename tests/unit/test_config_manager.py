@@ -244,66 +244,86 @@ class TestReloadConfig:
 # ===================================================================
 
 class TestPropertyGetters:
+    """Env-backed settings are resolved once, when the ConfigManager is built."""
+
+    def _cm_with_env(self, env):
+        with patch.dict("os.environ", env, clear=True):
+            return _build_config_manager()
 
     def test_httpx_max_connections_default(self):
         """httpx_max_connections returns default 100."""
-        cm = _build_config_manager()
-        with patch.dict("os.environ", {}, clear=True):
-            assert cm.httpx_max_connections == 100
+        assert self._cm_with_env({}).httpx_max_connections == 100
 
     def test_httpx_max_connections_from_env(self):
         """httpx_max_connections reads from env var."""
-        cm = _build_config_manager()
-        with patch.dict("os.environ", {"HTTPX_MAX_CONNECTIONS": "200"}, clear=True):
-            assert cm.httpx_max_connections == 200
+        assert self._cm_with_env({"HTTPX_MAX_CONNECTIONS": "200"}).httpx_max_connections == 200
 
     def test_provider_max_retries_default(self):
         """provider_max_retries defaults to 3."""
-        cm = _build_config_manager()
-        with patch.dict("os.environ", {}, clear=True):
-            assert cm.provider_max_retries == 3
+        assert self._cm_with_env({}).provider_max_retries == 3
 
     def test_provider_retry_base_delay_from_env(self):
         """provider_retry_base_delay reads env var as float."""
-        cm = _build_config_manager()
-        with patch.dict("os.environ", {"PROVIDER_RETRY_BASE_DELAY": "2.5"}, clear=True):
-            assert cm.provider_retry_base_delay == 2.5
+        assert self._cm_with_env({"PROVIDER_RETRY_BASE_DELAY": "2.5"}).provider_retry_base_delay == 2.5
 
     def test_httpx_pool_timeout_default(self):
         """httpx_pool_timeout defaults to 5.0."""
-        cm = _build_config_manager()
-        with patch.dict("os.environ", {}, clear=True):
-            assert cm.httpx_pool_timeout == 5.0
+        assert self._cm_with_env({}).httpx_pool_timeout == 5.0
 
     def test_config_reload_interval_from_env(self):
         """config_reload_interval reads from env."""
-        cm = _build_config_manager()
-        with patch.dict("os.environ", {"CONFIG_RELOAD_INTERVAL": "10"}, clear=True):
-            assert cm.config_reload_interval == 10
+        assert self._cm_with_env({"CONFIG_RELOAD_INTERVAL": "10"}).config_reload_interval == 10
 
     def test_stream_read_timeout_default(self):
         """stream_read_timeout defaults to 300.0."""
-        cm = _build_config_manager()
-        with patch.dict("os.environ", {}, clear=True):
-            assert cm.stream_read_timeout == 300.0
+        assert self._cm_with_env({}).stream_read_timeout == 300.0
 
     def test_stream_read_timeout_from_env(self):
         """stream_read_timeout reads from env as float."""
-        cm = _build_config_manager()
-        with patch.dict("os.environ", {"STREAM_READ_TIMEOUT": "600"}, clear=True):
-            assert cm.stream_read_timeout == 600.0
+        assert self._cm_with_env({"STREAM_READ_TIMEOUT": "600"}).stream_read_timeout == 600.0
 
     def test_default_stt_model_default(self):
         """default_stt_model defaults to stt/dummy."""
-        cm = _build_config_manager()
-        with patch.dict("os.environ", {}, clear=True):
-            assert cm.default_stt_model == "stt/dummy"
+        assert self._cm_with_env({}).default_stt_model == "stt/dummy"
 
     def test_default_stt_model_from_env(self):
         """default_stt_model reads from env."""
+        assert self._cm_with_env({"DEFAULT_STT_MODEL": "stt/custom"}).default_stt_model == "stt/custom"
+
+    def test_model_cache_settings(self):
+        """Model-cache settings resolve from env with the documented defaults."""
+        cm = self._cm_with_env({})
+        assert cm.model_cache_enabled is True
+        assert cm.model_cache_refresh_interval == 3600
+        assert cm.model_cache_ttl == 86400
+        assert cm.model_cache_path == "data/model_cache.json"
+
+        cm = self._cm_with_env({"MODEL_CACHE_ENABLED": "false", "MODEL_CACHE_PATH": "/tmp/c.json"})
+        assert cm.model_cache_enabled is False
+        assert cm.model_cache_path == "/tmp/c.json"
+
+
+class TestEnvSettingsResolvedOnce:
+    """Values are frozen at construction and malformed input degrades gracefully."""
+
+    def test_later_env_change_is_ignored(self):
+        """Changing the env after construction does not change a resolved setting."""
+        with patch.dict("os.environ", {"STREAM_READ_TIMEOUT": "111"}, clear=True):
+            cm = _build_config_manager()
+        with patch.dict("os.environ", {"STREAM_READ_TIMEOUT": "999"}, clear=True):
+            assert cm.stream_read_timeout == 111.0
+
+    def test_malformed_number_falls_back_to_default(self):
+        """An unparsable numeric env var falls back rather than crashing a request."""
+        with patch.dict("os.environ", {"QUEUE_WAIT_TIMEOUT": "not-a-number"}, clear=True):
+            cm = _build_config_manager()
+        assert cm.queue_wait_timeout == 30.0
+
+    def test_unknown_attribute_still_raises(self):
+        """__getattr__ exposes settings only; anything else is a normal AttributeError."""
         cm = _build_config_manager()
-        with patch.dict("os.environ", {"DEFAULT_STT_MODEL": "stt/custom"}, clear=True):
-            assert cm.default_stt_model == "stt/custom"
+        with pytest.raises(AttributeError):
+            cm.definitely_not_a_setting
 
 
 # ===================================================================
