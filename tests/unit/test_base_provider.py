@@ -9,6 +9,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
+from src.core.identity_headers import match_passthrough
 from src.providers.base import BaseProvider, retry_on_rate_limit
 from src.core.error_handling import ErrorType, create_error
 
@@ -695,7 +696,7 @@ class TestConcurrencyLimit:
         """After a stream finishes, the slot is released; a second stream starts at once."""
         provider = _build_limited_provider(1, config_manager=_make_cm())
 
-        async def inner(client, url, body, rid):
+        async def inner(client, url, body, rid, extra_headers=None):
             yield b"a"
             yield b"b"
 
@@ -709,7 +710,7 @@ class TestConcurrencyLimit:
         # second stream must start immediately (slot was released)
         second_started = asyncio.Event()
 
-        async def inner2(client, url, body, rid):
+        async def inner2(client, url, body, rid, extra_headers=None):
             second_started.set()
             yield b"c"
 
@@ -726,7 +727,7 @@ class TestConcurrencyLimit:
         provider = _build_limited_provider(1, config_manager=_make_cm())
         gate = asyncio.Event()
 
-        async def inner(client, url, body, rid):
+        async def inner(client, url, body, rid, extra_headers=None):
             yield b"a"
             await gate.wait()
             yield b"b"
@@ -743,7 +744,7 @@ class TestConcurrencyLimit:
         """An exception inside the stream releases the slot."""
         provider = _build_limited_provider(1, config_manager=_make_cm())
 
-        async def inner(client, url, body, rid):
+        async def inner(client, url, body, rid, extra_headers=None):
             yield b"a"
             raise RuntimeError("boom")
 
@@ -783,3 +784,190 @@ class TestConcurrencyLimit:
         assert seen_values == [0, 0]
         # Released exactly once after success.
         assert provider._semaphore._value == 1
+
+
+# ===================================================================
+# Header merge: stream / non-stream parity + extra_headers
+# ===================================================================
+
+class _FakeStreamResponse:
+    """Minimal httpx stream response stand-in."""
+
+    status_code = 200
+    headers = {}
+
+    def raise_for_status(self):
+        return None
+
+    async def aiter_bytes(self):
+        yield b"data: chunk\n\n"
+
+
+class _FakeStreamCtx:
+    """Async context manager returned by a mocked client.stream()."""
+
+    def __init__(self, response):
+        self.response = response
+
+    async def __aenter__(self):
+        return self.response
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class TestHeaderMergeParity:
+    """Stream and non-stream paths must send an identical header set."""
+
+    EXTRA = {"User-Agent": "opencode/1.18.23", "X-Session-Id": "ses_abc",
+             "x-session-affinity": "ses_abc"}
+
+    @pytest.mark.asyncio
+    async def test_stream_and_non_stream_send_identical_headers(self):
+        """Same extra_headers → byte-identical header dicts on both paths."""
+        provider = _build_provider()
+        provider.client.post = AsyncMock(return_value=_mock_response())
+        stream_response = _FakeStreamResponse()
+        provider.client.stream = MagicMock(return_value=_FakeStreamCtx(stream_response))
+
+        await provider._make_request("POST", "/chat", request_body={}, request_id="r1",
+                                     extra_headers=self.EXTRA)
+        chunks = [c async for c in provider._stream_request(provider.client, "/chat", {},
+                                                            "r2", extra_headers=self.EXTRA)]
+        assert chunks == [b"data: chunk\n\n"]
+
+        post_headers = provider.client.post.call_args.kwargs["headers"]
+        stream_headers = provider.client.stream.call_args.kwargs["headers"]
+        assert post_headers == stream_headers
+
+    @pytest.mark.asyncio
+    async def test_stream_without_extra_headers_sends_static_headers(self):
+        """Stream path with no extra_headers sends exactly self.headers."""
+        provider = _build_provider()
+        provider.client.stream = MagicMock(return_value=_FakeStreamCtx(_FakeStreamResponse()))
+
+        async for _ in provider._stream_request(provider.client, "/chat", {}, "r1"):
+            pass
+
+        assert provider.client.stream.call_args.kwargs["headers"] == provider.headers
+
+    def test_merge_replaces_case_insensitive_duplicates(self):
+        """An extra header replaces its case-insensitive base twin, not duplicates it."""
+        provider = _build_provider(headers={"User-Agent": "configured/1.0"})
+        merged = provider._merge_request_headers({"user-agent": "client/2.0"})
+        assert merged["user-agent"] == "client/2.0"
+        assert "User-Agent" not in merged
+
+    def test_merge_never_overwrites_authorization(self):
+        """extra_headers cannot replace Authorization (INVARIANT)."""
+        provider = _build_provider()
+        merged = provider._merge_request_headers({"Authorization": "Bearer attacker",
+                                                  "authorization": "Bearer attacker2"})
+        assert merged["Authorization"] == "Bearer sk-test-123"
+        assert "authorization" not in merged
+
+    def test_merge_without_extra_returns_copy_of_static(self):
+        """No extra_headers → a plain copy of self.headers (no aliasing)."""
+        provider = _build_provider()
+        merged = provider._merge_request_headers(None)
+        assert merged == provider.headers
+        assert merged is not provider.headers
+
+
+class TestIdentityProfileInit:
+    """identity / identity_version config keys in BaseProvider.__init__."""
+
+    def test_identity_opencode_sets_user_agent(self):
+        config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
+                  "identity": "opencode", "identity_version": "9.9.9"}
+        with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
+            provider = ProviderStub(config)
+        assert provider.identity == "opencode"
+        assert provider.headers["User-Agent"] == "opencode/9.9.9"
+
+    def test_identity_opencode_default_version(self):
+        config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
+                  "identity": "opencode"}
+        with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
+            provider = ProviderStub(config)
+        assert provider.headers["User-Agent"] == "opencode/1.18.23"
+
+    def test_configured_user_agent_wins_over_profile(self):
+        """An explicit headers.User-Agent takes priority over the identity profile."""
+        config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
+                  "identity": "opencode", "headers": {"User-Agent": "custom/1.0"}}
+        with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
+            provider = ProviderStub(config)
+        assert provider.headers["User-Agent"] == "custom/1.0"
+
+    def test_identity_passthrough_sets_no_user_agent(self):
+        config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
+                  "identity": "passthrough"}
+        with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
+            provider = ProviderStub(config)
+        assert provider.identity == "passthrough"
+        assert "User-Agent" not in provider.headers
+
+    def test_passthrough_headers_config_compiles_into_spec(self):
+        config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
+                  "identity": "passthrough", "passthrough_headers": ["X-Title", "x-kilocode-*"]}
+        with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
+            provider = ProviderStub(config)
+        assert match_passthrough("x-title", provider.passthrough_spec) == "X-Title"
+        assert match_passthrough("X-KILOCODE-TASKID", provider.passthrough_spec) == "X-KILOCODE-TASKID"
+        assert match_passthrough("User-Agent", provider.passthrough_spec) is None
+
+    def test_passthrough_headers_defaults_when_absent(self):
+        config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY"}
+        with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
+            provider = ProviderStub(config)
+        assert match_passthrough("x-session-affinity", provider.passthrough_spec) == "x-session-affinity"
+
+    @pytest.mark.parametrize("bad", ["X-Title", {"a": 1}, [""], ["*"]])
+    def test_malformed_passthrough_headers_fails_fast(self, bad):
+        config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
+                  "identity": "passthrough", "passthrough_headers": bad}
+        with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
+            with pytest.raises(HTTPException) as exc_info:
+                ProviderStub(config)
+        assert exc_info.value.status_code == 500
+
+    def test_unknown_identity_fails_fast(self):
+        config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
+                  "identity": "claude-code"}
+        with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
+            with pytest.raises(HTTPException) as exc_info:
+                ProviderStub(config)
+        assert exc_info.value.status_code == 500
+
+    def test_no_identity_keeps_current_behavior(self):
+        provider = _build_provider()
+        assert provider.identity is None
+        assert "User-Agent" not in provider.headers
+
+
+class TestChatExtraHeadersForwarding:
+    """OpenAICompatibleProvider chat methods forward extra_headers."""
+
+    @pytest.mark.asyncio
+    async def test_chat_completions_forwards_extra_headers(self):
+        provider = _build_openai_provider()
+        provider._make_request = AsyncMock(return_value={"ok": True})
+        extra = {"X-Session-Id": "ses_x", "x-session-affinity": "ses_x"}
+        await provider.chat_completions({"messages": []}, "gpt-4", {}, request_id="r1",
+                                        extra_headers=extra)
+        assert provider._make_request.call_args.kwargs["extra_headers"] == extra
+
+    @pytest.mark.asyncio
+    async def test_chat_completions_stream_forwards_extra_headers(self):
+        provider = _build_openai_provider()
+
+        async def fake_stream(client, path, body, request_id="unknown", extra_headers=None):
+            assert extra_headers == {"X-Session-Id": "ses_x"}
+            yield b""
+
+        provider._stream_request = fake_stream
+        gen = provider.chat_completions_stream({"messages": []}, "gpt-4", {}, request_id="r1",
+                                               extra_headers={"X-Session-Id": "ses_x"})
+        async for _ in gen:
+            pass

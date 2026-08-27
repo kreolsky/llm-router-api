@@ -7,7 +7,8 @@ from .base import BaseProvider
 
 class OpenAICompatibleProvider(BaseProvider):
     async def chat_completions(self, request_body: Dict[str, Any], provider_model_name: str,
-                               model_config: Dict[str, Any], request_id: str = "unknown") -> Dict[str, Any]:
+                               model_config: Dict[str, Any], request_id: str = "unknown",
+                               extra_headers: Dict[str, str] = None) -> Dict[str, Any]:
         """Forward a non-streaming chat completion to an OpenAI-compatible API."""
         request_body = self._apply_model_config(request_body, provider_model_name, model_config)
 
@@ -18,15 +19,18 @@ class OpenAICompatibleProvider(BaseProvider):
             method="POST",
             path="/chat/completions",
             request_body=request_body,
+            extra_headers=extra_headers,
             timeout=non_stream_timeout,
             request_id=request_id
         )
 
     def chat_completions_stream(self, request_body: Dict[str, Any], provider_model_name: str,
-                                model_config: Dict[str, Any], request_id: str = "unknown") -> AsyncGenerator[bytes, None]:
+                                model_config: Dict[str, Any], request_id: str = "unknown",
+                                extra_headers: Dict[str, str] = None) -> AsyncGenerator[bytes, None]:
         """Forward a streaming chat completion to an OpenAI-compatible API."""
         request_body = self._apply_model_config(request_body, provider_model_name, model_config)
-        return self._stream_request(self.client, "/chat/completions", request_body, request_id=request_id)
+        return self._stream_request(self.client, "/chat/completions", request_body,
+                                    request_id=request_id, extra_headers=extra_headers)
 
     async def transcriptions(self, request_body: Dict[str, Any], provider_model_name: str,
                              model_config: Dict[str, Any], request_id: str = "unknown") -> Dict[str, Any]:

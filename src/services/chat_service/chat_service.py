@@ -53,6 +53,7 @@ class ChatService(BaseService):
             self._validate_and_get_config(requested_model, auth_data, **error_ctx)
 
         provider_instance = await self._get_provider(provider_name, provider_config, **error_ctx)
+        identity_headers = self._build_identity_headers(provider_instance, request)
 
         async with self._guard_service_errors(error_ctx):
             if self.config_manager.should_sanitize_messages:
@@ -71,7 +72,8 @@ class ChatService(BaseService):
 
             if request_body.get("stream", False):
                 provider_stream = provider_instance.chat_completions_stream(
-                    request_body, provider_model_name, model_config, request_id=request_id
+                    request_body, provider_model_name, model_config, request_id=request_id,
+                    extra_headers=identity_headers
                 )
                 self._log_service_data(
                     title="Streaming Response Started",
@@ -94,7 +96,8 @@ class ChatService(BaseService):
                 )
 
             response_data = await provider_instance.chat_completions(
-                request_body, provider_model_name, model_config, request_id=request_id
+                request_body, provider_model_name, model_config, request_id=request_id,
+                extra_headers=identity_headers
             )
 
             duplicate_reasoning_field(response_data)

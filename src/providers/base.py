@@ -14,6 +14,7 @@ from ..utils.deep_merge import deep_merge
 from ..utils.mask import mask_headers
 from ..core.error_handling import ErrorType, create_error, log_provider_error, create_provider_http_error
 from ..core.logging import logger
+from ..core.identity_headers import compile_passthrough_spec
 
 
 def retry_on_rate_limit(max_retries: Optional[int] = None, base_delay: Optional[float] = None, max_delay: Optional[float] = None):
@@ -101,6 +102,34 @@ class BaseProvider:
         self.proxy = config.get("proxy")
         self.provider_name = self.__class__.__name__.replace("Provider", "").lower()
         self.headers.setdefault("Content-Type", "application/json")
+
+        # ARCH: identity profile (plans/opencode-attribution.md). `opencode`
+        # stamps a static OpenCode User-Agent here (an explicit `headers:`
+        # User-Agent wins over the profile); per-request session headers are
+        # assembled by the service layer and arrive via extra_headers.
+        # `passthrough` forwards whitelisted client headers instead; the
+        # whitelist itself is data (`passthrough_headers:`, replaces the
+        # default set) — see core/identity_headers.py.
+        self.identity = config.get("identity")
+        self.identity_version = str(config.get("identity_version") or "1.18.23")
+        if self.identity not in (None, "opencode", "passthrough"):
+            raise create_error(ErrorType.PROVIDER_CONFIG_ERROR,
+                             error_details=f"Unknown identity profile: {self.identity!r} (expected 'opencode' or 'passthrough').",
+                             provider_name=self.provider_name)
+        if self.identity == "opencode":
+            self.headers.setdefault("User-Agent", f"opencode/{self.identity_version}")
+
+        raw_passthrough = config.get("passthrough_headers")
+        if raw_passthrough is not None and not isinstance(raw_passthrough, list):
+            raise create_error(ErrorType.PROVIDER_CONFIG_ERROR,
+                               error_details="passthrough_headers must be a list of header names.",
+                               provider_name=self.provider_name)
+        try:
+            self.passthrough_spec = compile_passthrough_spec(raw_passthrough)
+        except ValueError as e:
+            raise create_error(ErrorType.PROVIDER_CONFIG_ERROR,
+                               error_details=str(e),
+                               provider_name=self.provider_name)
 
         if not self.base_url:
             raise create_error(ErrorType.PROVIDER_CONFIG_ERROR,
@@ -277,6 +306,28 @@ class BaseProvider:
             return getattr(self.config_manager, timeout_type)
         return default_value
 
+    def _merge_request_headers(self, extra_headers: Optional[Dict[str, str]]) -> Dict[str, str]:
+        """Merge per-request extra_headers over self.headers.
+
+        ARCH: shared by the stream and non-stream paths so both send an
+        identical header set — a diverging set is itself a fingerprint.
+        Authorization is never overwritten (INVARIANT above the class);
+        case-insensitive duplicates of extra keys replace their base
+        counterparts instead of being sent twice.
+        """
+        merged = dict(self.headers)
+        if not extra_headers:
+            return merged
+        # WHY: authorization is not replaceable, so it must also survive the
+        # case-insensitive duplicate elimination below.
+        extra_lower = {name.lower() for name in extra_headers} - {"authorization"}
+        merged = {k: v for k, v in merged.items() if k.lower() not in extra_lower}
+        for name, value in extra_headers.items():
+            if name.lower() == "authorization":
+                continue
+            merged[name] = value
+        return merged
+
     async def _make_request(
         self,
         method: str,
@@ -317,12 +368,7 @@ class BaseProvider:
         request_id: str = "unknown"
     ) -> Dict[str, Any]:
         """Actual HTTP request implementation. See _make_request for the slot wrapper."""
-        merged_headers = {**self.headers}
-        if extra_headers:
-            for k, v in extra_headers.items():
-                if k.lower() == "authorization":
-                    continue
-                merged_headers[k] = v
+        merged_headers = self._merge_request_headers(extra_headers)
 
         self._log_provider_data(
             title=f"{self.__class__.__name__} Request",
@@ -385,33 +431,40 @@ class BaseProvider:
                              error_details=str(e), request_id=request_id, provider_name=self.provider_name)
 
     async def _stream_request(self, client: httpx.AsyncClient, url_path: str,
-                              request_body: Dict[str, Any], request_id: str = "unknown") -> AsyncGenerator[bytes, None]:
+                              request_body: Dict[str, Any], request_id: str = "unknown",
+                              extra_headers: Dict[str, str] = None) -> AsyncGenerator[bytes, None]:
         """Async generator streaming raw bytes from a provider API.
 
         Holds a per-provider concurrency slot across the ENTIRE iteration by the
         downstream consumer. `async with` releases on normal completion, on
         exception, and on generator close (AClose) — so a client disconnect also
-        frees the slot.
+        frees the slot. extra_headers are merged exactly like in _make_request.
         """
         async with self._acquire_slot(request_id):
-            async for chunk in self._stream_request_inner(client, url_path, request_body, request_id):
+            async for chunk in self._stream_request_inner(client, url_path, request_body, request_id,
+                                                          extra_headers):
                 yield chunk
 
     async def _stream_request_inner(self, client: httpx.AsyncClient, url_path: str,
-                              request_body: Dict[str, Any], request_id: str = "unknown") -> AsyncGenerator[bytes, None]:
+                              request_body: Dict[str, Any], request_id: str = "unknown",
+                              extra_headers: Dict[str, str] = None) -> AsyncGenerator[bytes, None]:
         """Actual streaming implementation. See _stream_request for the slot wrapper.
 
         Uses client.stream() context manager for memory-efficient chunk iteration.
+        Headers go through _merge_request_headers so the stream and non-stream
+        paths send an identical set.
         Error hierarchy inside stream context:
         - HTTPStatusError with ResponseNotRead fallback for error body
         - PoolTimeout → 503 (connection pool exhausted)
         - RequestError → generic network error
         """
+        merged_headers = self._merge_request_headers(extra_headers)
+
         self._log_provider_data(
             title="Base Provider Request",
             data={
                 "url": f"{self.base_url}{url_path}",
-                "headers": mask_headers(self.headers),
+                "headers": mask_headers(merged_headers),
                 "request_body": request_body
             },
             request_id=request_id,
@@ -429,7 +482,7 @@ class BaseProvider:
         start_time = time.time()
         try:
             async with client.stream("POST", f"{self.base_url}{url_path}",
-                                     headers=self.headers,
+                                     headers=merged_headers,
                                      json=request_body,
                                      timeout=stream_timeout) as response:
                 logger.debug(f"Stream response headers received after {time.time() - start_time:.2f}s", extra={
@@ -481,12 +534,14 @@ class BaseProvider:
             raise
 
     async def chat_completions(self, request_body: Dict[str, Any], provider_model_name: str,
-                               model_config: Dict[str, Any], request_id: str = "unknown") -> Dict[str, Any]:
+                               model_config: Dict[str, Any], request_id: str = "unknown",
+                               extra_headers: Dict[str, str] = None) -> Dict[str, Any]:
         """Non-streaming chat completion. Returns the parsed provider JSON response."""
         raise NotImplementedError
 
     def chat_completions_stream(self, request_body: Dict[str, Any], provider_model_name: str,
-                                model_config: Dict[str, Any], request_id: str = "unknown") -> AsyncGenerator[bytes, None]:
+                                model_config: Dict[str, Any], request_id: str = "unknown",
+                                extra_headers: Dict[str, str] = None) -> AsyncGenerator[bytes, None]:
         """Streaming chat completion. Yields raw SSE bytes from the provider."""
         raise NotImplementedError
 

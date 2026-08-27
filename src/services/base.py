@@ -6,9 +6,12 @@ from fastapi import HTTPException, Request
 
 from ..core.config_manager import ConfigManager
 from ..core.context import RequestContext
+from ..core.opencode_identity import opencode_session_headers
+from ..core.identity_headers import compile_passthrough_spec, match_passthrough
 from ..providers import get_provider_instance
 from ..core.logging import logger
 from ..core.error_handling import ErrorType, create_error
+
 
 
 class BaseService:
@@ -42,6 +45,47 @@ class BaseService:
         if ctx is not None:
             return {"request_id": ctx.request_id, "user_id": ctx.user_id}
         return {"request_id": "unknown", "user_id": "unknown"}
+
+    def _extract_passthrough_headers(self, request: Optional[Request],
+                                     spec: Optional[Any] = None) -> Dict[str, str]:
+        """Pick whitelisted headers off the client request, canonical casing.
+
+        spec is the provider's compiled passthrough whitelist; None falls back
+        to the default set (core/identity_headers.py).
+        """
+        if request is None:
+            return {}
+        if spec is None:
+            spec = compile_passthrough_spec()
+        forwarded: Dict[str, str] = {}
+        for name, value in request.headers.items():
+            canonical = match_passthrough(name, spec)
+            if canonical is not None:
+                forwarded[canonical] = value
+        return forwarded
+
+    def _build_identity_headers(self, provider_instance: Any,
+                                request: Optional[Request]) -> Optional[Dict[str, str]]:
+        """Per-request upstream headers for providers with an identity profile.
+
+        passthrough: forward the client's whitelisted harness headers verbatim.
+        opencode: synthesize session headers (registry keyed by provider name +
+        project_name); real client headers still win over the synthetic set.
+        Returns None when the provider has no profile (behavior unchanged).
+        """
+        identity = getattr(provider_instance, "identity", None)
+        if not identity:
+            return None
+        passthrough = self._extract_passthrough_headers(
+            request, getattr(provider_instance, "passthrough_spec", None))
+        if identity == "passthrough":
+            return passthrough or None
+        if identity == "opencode":
+            ctx: Optional[RequestContext] = getattr(request.state, "request_context", None) if request else None
+            registry_key = f"{getattr(provider_instance, 'provider_name', 'unknown')}:{ctx.project_name if ctx else None}"
+            synthetic = opencode_session_headers(registry_key, self.config_manager.opencode_session_ttl)
+            return {**synthetic, **passthrough}
+        return None
 
     def _validate_and_get_config(
         self,

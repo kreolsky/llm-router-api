@@ -208,6 +208,11 @@ class ConfigManager:
     def openai_embeddings_read_timeout(self) -> float:
         return float(os.getenv("OPENAI_EMBEDDINGS_READ_TIMEOUT", "30.0"))
 
+    @property
+    def opencode_session_ttl(self) -> float:
+        # WHY: synthetic OpenCode sessions must expire after inactivity, not live forever
+        return float(os.getenv("OPENCODE_SESSION_TTL", "3600"))
+
     # --- Model capabilities auto-cache (see src/core/model_capabilities.py) ---
 
     @property
