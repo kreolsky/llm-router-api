@@ -5,7 +5,9 @@ from typing import Any, Tuple
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
+from ..core.error_handling import ErrorType, create_error
 from ..core.logging import logger
+from ..core.usage_db import schedule_record_usage
 from .base import BaseService
 
 
@@ -66,7 +68,6 @@ class EmbeddingService(BaseService):
 
             usage = response_data.get("usage", {})
             if usage:
-                from ..core.usage_db import schedule_record_usage
                 schedule_record_usage(
                     project_name=user_id,
                     model_id=requested_model,
