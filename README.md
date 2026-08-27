@@ -249,6 +249,7 @@ See [tests/README.md](tests/README.md) for details on what each test file covers
 | `MODEL_CACHE_PATH` | data/model_cache.json | Persisted capabilities cache file |
 | `SANITIZE_MESSAGES` | false | Strip service fields from messages |
 | `DEBUG` | false | Enable debug-level JSON logging |
+| `API_WORKERS` | 1 | Uvicorn worker processes. Keep at 1: session ids, capabilities cache and usage writer are process-local |
 | `LOG_LEVEL` | INFO | Logging level. `DEBUG` writes full request/response bodies to `logs/debug.log` |
 | `LOG_MAX_BYTES` | 52428800 | Size at which a log file rotates (50 MB) |
 | `LOG_BACKUP_COUNT` | 3 | Rotated log files kept per log |
