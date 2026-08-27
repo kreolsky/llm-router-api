@@ -222,13 +222,24 @@ contradicting the user's latest stated rule (stop and ask which is wrong).
 
 ## Auto-lessons
 
+**A lesson is written only when something WENT WRONG.** A feature that landed the normal
+way — planned, implemented, tested, green — produces no lesson, however large it was.
+Modern agents redo that work without help; storing it costs reading time and buys nothing.
+
 Create `lessons/YYYY-MM-DD-short-slug.md` when ANY holds:
 
-- 3+ fix iterations on the same issue category.
+- 3+ fix iterations on the same issue category — the same thing was fixed, broke again, was
+  fixed differently. The lesson names the invariant nobody was holding.
 - A production escape: a defect reached the deployed router past a green `/review` — the
   lesson must name which review check missed it.
-- A new architectural pattern established (a new provider capability, a new marker class).
-- A non-obvious workflow optimization discovered.
+- A wrong hypothesis cost real time — the investigation went down a path the evidence
+  already ruled out, and the falsifier is worth writing down.
+- **The user explicitly asks for one** — a genuinely non-obvious find (a trick, a workaround,
+  an upstream quirk) is captured on request, not by trigger.
+
+Explicitly NOT triggers: a new architectural pattern, a clean feature, a workflow tweak, a
+first-try fix. Those live in the code (`ARCH:`/`INVARIANT:`/`WHY:`) and in git history.
+When in doubt, do not write one — a lesson nobody needed is worse than a missing lesson.
 
 Structure: frontmatter (`category:`, `systems:`) · What happened · Root cause · Actionable
 rule · Code example (wrong vs right). Regenerate the index:

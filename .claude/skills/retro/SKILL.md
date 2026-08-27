@@ -11,8 +11,9 @@ Phase 5. Auto-lessons triggers live in `.claude/rules/workflow.md` — don't res
 Accomplishments this session; bugs encountered, fixes, and root causes.
 
 ## 2. Extract lessons
-Write a lesson only if a `workflow.md` Auto-lessons trigger fired (3+ fix iterations on one
-category · new architectural pattern · non-obvious workflow optimization). Otherwise skip to 4.
+Write a lesson only if a `workflow.md` Auto-lessons trigger fired — something went WRONG
+(3+ fix iterations on one category · production escape · a wrong hypothesis that cost real
+time), or the user asked for one. Work that went to plan produces NO lesson: skip to 4.
 
 ## 3. Write lesson (if triggered)
 - Check `lessons/INDEX.md` for an existing lesson on the topic — update, don't duplicate.

@@ -41,8 +41,9 @@ missed, the next move is a hook, not a firmer sentence.
   to implement is whichever the user names. Shape and content rules: `workflow.md` → Plans.
   Overwritten drafts are kept in `plans/superseded/`; plans untouched for 90 days are swept
   into `plans/archive/YYYY-MM/`.
-- **`lessons/`** — staging area for rules-in-the-making (triggers in `workflow.md` →
-  Auto-lessons); a lesson's endpoint is a rule or an in-code marker that links back to it.
+- **`lessons/`** — staging area for rules-in-the-making, written ONLY when something went
+  wrong (triggers in `workflow.md` → Auto-lessons); routine successful work produces none.
+  A lesson's endpoint is a rule or an in-code marker that links back to it.
   Categorized frontmatter + generated `lessons/INDEX.md`
   (`python3 .claude/scripts/lessons-index.py --write`).
 - **`SYSTEMS.md`** — generated subsystem catalog (`systems-index.py --write`); the discovery
