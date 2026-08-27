@@ -5,7 +5,7 @@ ARCH: `identity: passthrough` forwards ALL client headers upstream verbatim
 source of headers is now one real agent, not a synthesized profile). A full
 forward REQUIRES a denylist: without one the router would leak the client's
 own credentials upstream and forward stale transport values for a body it has
-itself re-serialized (sanitizer, model override).
+itself re-serialized (model override).
 """
 # SYSTEM: header-policy — denylist for client headers forwarded upstream
 
@@ -27,8 +27,8 @@ _CREDENTIAL_HEADERS = frozenset({
     "x-goog-api-key",
 })
 
-# Transport / hop-by-hop: the router re-serializes the body (sanitizer, model
-# override), so the client's framing values are stale and would break the
+# Transport / hop-by-hop: the router re-serializes the body (model override),
+# so the client's framing values are stale and would break the
 # request. accept-encoding: httpx would honor a client's br/zstd it cannot
 # decode.
 _TRANSPORT_HEADERS = frozenset({

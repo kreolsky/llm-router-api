@@ -33,7 +33,7 @@ curl http://localhost:8777/v1/chat/completions \
 2. **Auth** extracts the Bearer token, looks it up in `user_keys.yaml` (constant-time comparison), sets `project_name` on request state.
 3. **Service layer** validates the model: checks `allowed_models` *before* checking existence (prevents information leakage about configured models). Resolves `provider_name` and `provider_model_name` from `models.yaml`.
 4. **Provider layer** gets a cached provider instance (keyed by provider name). The provider translates the request to the backend's format and sends it via its own `httpx.AsyncClient` connection pool, optionally through a per-provider proxy.
-5. **Streaming**: `_stream_request` yields raw bytes → `StreamProcessor` either passes them through transparently or buffers UTF-8, splits on SSE `\n\n` boundaries, and sanitizes each `data:` frame.
+5. **Streaming**: `_stream_request` yields raw bytes → `StreamProcessor` forwards them byte-for-byte (no re-framing or re-encoding).
 6. **Errors**: Provider HTTP errors are extracted from the JSON response body, logged, and returned in OpenRouter-compatible format `{"error": {"code", "message", "metadata": {"provider_name", "raw"}}}`.
 7. **Rate limits**: 429 responses trigger exponential backoff retry (`min(base * 2^attempt, max)`), configurable via env vars.
 8. **Concurrency limits**: Providers can have a `max_concurrent` cap (e.g. `3`). Requests beyond the cap wait for a slot (up to `QUEUE_WAIT_TIMEOUT` seconds); on timeout they receive an immediate 503.
@@ -64,7 +64,7 @@ providers:
 `identity: passthrough` is the only identity mode: every client header is forwarded upstream verbatim — the client's own spelling, because casing is part of a harness fingerprint and the source is now one real agent, not a synthesized profile. A full forward requires a **denylist** (`src/core/header_policy.py`); it drops three groups, matched case-insensitively:
 
 * **client credentials** — `authorization`, `proxy-authorization`, `cookie`, `x-api-key`, `api-key`, `x-goog-api-key`. Only the router's own key (from `api_key_env`) reaches the upstream; Anthropic-/Azure-/Google-style agents carry their key in these names instead of `Authorization`.
-* **transport / hop-by-hop** — `host`, `content-length`, `content-type`, `content-encoding`, `connection`, `transfer-encoding`, `te`, `upgrade`, `keep-alive`, `expect`, `accept-encoding`. The router re-serializes the body (sanitizer, model override), so the client's framing values are stale; `accept-encoding` would make httpx receive `br`/`zstd` it cannot decode.
+* **transport / hop-by-hop** — `host`, `content-length`, `content-type`, `content-encoding`, `connection`, `transfer-encoding`, `te`, `upgrade`, `keep-alive`, `expect`, `accept-encoding`. The router re-serializes the body (model override), so the client's framing values are stale; `accept-encoding` would make httpx receive `br`/`zstd` it cannot decode.
 * **network topology** — `x-forwarded-*` (prefix), `x-real-ip`, `forwarded`, `true-client-ip`, `cf-connecting-ip`, `cdn-loop`. Behind a reverse proxy these would leak internal IPs of the lab.
 
 The denylist is **fail-open**: an unknown client header is forwarded. That is a deliberate trade for the scenario this router serves (a private lab with its own agents and one external server) — the consequence is that the list must be re-audited whenever a new harness or proxy is onboarded. Unknown `identity` values fail startup validation. Rollback: remove the `identity:` key and hot-reload applies it within `CONFIG_RELOAD_INTERVAL` seconds.
@@ -163,7 +163,6 @@ src/
 │   ├── auth.py            # Bearer token extraction, hmac comparison, endpoint access
 │   ├── config_manager.py  # YAML loading, hot-reload task, env-based properties
 │   ├── model_capabilities.py  # Capabilities: render/normalize/merge + auto-cache + background refresh
-│   ├── sanitizer.py       # Strip non-standard fields (done, __stream_end__, etc.)
 │   ├── error_handling/    # ErrorType enum, ErrorHandler factory, ErrorLogger
 │   └── logging/           # Logger with request/response/debug_data methods
 ├── providers/
@@ -174,7 +173,7 @@ src/
 │   ├── base.py            # Model validation (access → existence → provider), provider instantiation
 │   ├── chat_service/
 │   │   ├── chat_service.py    # Orchestrator: validation → provider → StreamingResponse/JSONResponse
-│   │   └── stream_processor.py # SSE buffering, UTF-8 split recovery, optional sanitization
+│   │   └── stream_processor.py # Byte-for-byte SSE pass-through, usage capture, reasoning remap
 │   ├── embedding_service.py
 │   ├── model_service.py   # Model listing/retrieval from merged capabilities (no network)
 │   └── transcription_service.py  # Default model fallback
@@ -186,12 +185,11 @@ src/
 
 ## Key Features
 
-- **Streaming**: SSE pass-through with UTF-8 split handling at chunk boundaries. Multi-byte characters split across TCP chunks are buffered and recovered. Supports both `\n\n` and `\r\n\r\n` SSE separators.
+- **Streaming**: SSE pass-through — provider chunks are forwarded to the client byte-for-byte, with usage peeked from the stream and OpenAI-style `reasoning` duplicated into llama.cpp-style `reasoning_content`.
 - **Rate limit retry**: Exponential backoff on 429 — `min(base_delay * 2^attempt, max_delay)`. Detects rate limits via `status_code` and `original_exception.response.status_code`.
 - **Concurrency limiting**: Per-provider `max_concurrent` (in `providers.yaml`) gates outbound requests via an `asyncio.Semaphore`. Queued requests fail fast with 503 after `QUEUE_WAIT_TIMEOUT` (default 30s).
 - **Hot-reload**: Background task polls config file mtimes. On change, reloads YAML and invokes callbacks (e.g. clearing provider cache). Partial reload (missing file) is rejected.
 - **Access control**: Per-key model and endpoint restrictions. Access check runs *before* existence check to prevent leaking information about configured models.
-- **Message sanitization**: When `SANITIZE_MESSAGES=true`, strips fields like `done`, `__stream_end__`, `__internal__` from messages and stream chunks. Disabled by default.
 - **Per-provider proxy**: Optional `proxy` key (e.g. `socks5://host:1080`) routes a provider's outbound traffic through a SOCKS5/HTTP proxy. Requires the `httpx[socks]` extra.
 - **Token usage dashboard**: `/stat/` serves an HTML dashboard of token usage per user/model over time, backed by a SQLite store (`data/usage.db`, path via `USAGE_DB_PATH`). Persist it by mounting `./data:/app/data`.
 - **Provider caching**: Provider instances cached by provider name (the `providers.yaml` key); each owns its own `httpx.AsyncClient` pool. Cache cleared on config reload, closing each client first.
@@ -236,7 +234,6 @@ See [tests/README.md](tests/README.md) for details on what each test file covers
 | `MODEL_CACHE_REFRESH_INTERVAL` | 3600 | Capabilities cache refresh interval (s) |
 | `MODEL_CACHE_TTL` | 86400 | Capabilities cache entry TTL (s) |
 | `MODEL_CACHE_PATH` | data/model_cache.json | Persisted capabilities cache file |
-| `SANITIZE_MESSAGES` | false | Strip service fields from messages |
 | `DEBUG` | false | Enable debug-level JSON logging |
 | `API_WORKERS` | 1 | Uvicorn worker processes. Keep at 1: the capabilities cache and usage writer are process-local |
 | `LOG_LEVEL` | INFO | Logging level. `DEBUG` writes full request/response bodies to `logs/debug.log` |

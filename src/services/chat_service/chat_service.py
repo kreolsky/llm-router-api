@@ -8,8 +8,6 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from ...core.config_manager import ConfigManager
 from ...core.error_handling import ErrorType, create_error
-from ...core.logging import logger
-from ...core.sanitizer import MessageSanitizer
 from ...core.usage_db import request_stats
 from ...services.base import BaseService
 from ...services.model_service import ModelService
@@ -58,20 +56,6 @@ class ChatService(BaseService):
         identity_headers = self._build_identity_headers(provider_instance, request)
 
         async with self._guard_service_errors(error_ctx):
-            if self.config_manager.should_sanitize_messages:
-                messages = request_body.get("messages", [])
-                if messages:
-                    original_count = len(messages)
-                    sanitized_messages = MessageSanitizer.sanitize_messages(messages, enabled=True)
-                    request_body["messages"] = sanitized_messages
-
-                    if len(sanitized_messages) != original_count:
-                        logger.info(
-                            f"Sanitized {original_count} messages to {len(sanitized_messages)}",
-                            request_id=request_id,
-                            user_id=user_id
-                        )
-
             if request_body.get("stream", False):
                 stats.stream = True
                 provider_stream = provider_instance.chat_completions_stream(

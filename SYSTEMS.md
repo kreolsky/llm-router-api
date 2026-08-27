@@ -19,8 +19,7 @@ and read the entry file(s). Aliases are hand-maintained in
 | provider-registry | provider instances cached by name, drained on reload | `src/providers/__init__.py:2` | кэш провайдеров, реестр |
 | request-context | the typed RequestContext carried per request | `src/core/context.py:7` | контекст запроса, request_id |
 | request-logging | pure-ASGI request id + Incoming/Outgoing bookends | `src/api/middleware.py:16` | middleware, мидлварь |
-| sanitizer | strips non-standard message/chunk fields | `src/core/sanitizer.py:2` | санитайзер, очистка сообщений |
 | service-layer | validate access, resolve provider, dispatch | `src/services/base.py:2` | сервисы, сервисный слой |
-| sse-stream | SSE frame parsing, passthrough and sanitizing bodies | `src/services/chat_service/stream_processor.py:2` | стрим, streaming, sse, чанки |
+| sse-stream | passthrough streaming body | `src/services/chat_service/stream_processor.py:2` | стрим, streaming, sse, чанки |
 | stat-dashboard | /stat/ usage page and its JSON endpoints | `src/api/stat_page.py:2` | статистика, дашборд, usage |
 | usage-stats | SQLite per-request usage rows and cost freezing | `src/core/usage_db.py:12` | статистика, usage, токены, стоимость |

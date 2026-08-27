@@ -18,7 +18,6 @@ tests/
     ├── test_base_provider.py
     ├── test_error_handling.py
     ├── test_config_manager.py
-    ├── test_sanitizer.py
     ├── test_utilities.py
     ├── test_base_service.py
     └── test_middleware.py
@@ -45,11 +44,10 @@ python -m venv .venv
 
 | File | What it covers |
 |---|---|
-| `test_stream_processor.py` | SSE parsing (`\n\n`, `\r\n\r\n`), UTF-8 split at chunk boundary, sanitization mode vs transparent pass-through, `[DONE]` sentinel, comment lines, `_format_error` |
+| `test_stream_processor.py` | Transparent pass-through, reasoning→reasoning_content remap, usage capture, per-stream usage isolation, `[DONE]` sentinel, `_format_error`, `open_provider_stream` priming |
 | `test_base_provider.py` | `retry_on_rate_limit` decorator (exponential backoff, 429 detection, config resolution), `__init__` validation (missing base_url/api_key), `_apply_model_config`, `_raise_provider_http_error` |
 | `test_error_handling.py` | `ErrorType` enum (format_message, create_error_detail, status codes), `ErrorContext.to_log_extra`, all `ErrorHandler.handle_*` methods and returned HTTP status codes |
 | `test_config_manager.py` | YAML loading (success, missing file, invalid YAML), hot-reload with callbacks, property getters with env var defaults |
-| `test_sanitizer.py` | `sanitize_messages` (SERVICE_FIELDS removal, immutability), `sanitize_stream_chunk` (delta/choice level), `_sanitize_dict` (nested dicts, lists) |
 | `test_utilities.py` | `deep_merge` (nested, immutability), `decode_unicode_escapes` (JSON roundtrip, codec, regex fallback), `generate_key` (format, uniqueness) |
 | `test_base_service.py` | `_validate_and_get_config` (access check before existence — 403 before 404), model/provider resolution, `_get_request_context` |
 | `test_middleware.py` | Request ID injection, `X-Process-Time` header, request/response logging, POST body debug logging |

@@ -347,23 +347,6 @@ class TestAssertConfigComplete:
             {"providers": {"p": {}}, "models": {"m": {}}, "user_keys": {"k": {}}}
         )
 
-class TestShouldSanitizeMessages:
-
-    def test_default_false(self):
-        """Default: sanitize_messages is False."""
-        cm = _build_config_manager()
-        assert cm.should_sanitize_messages is False
-
-    def test_env_true(self):
-        """SANITIZE_MESSAGES=true makes it True."""
-        cm = _build_config_manager(env={"SANITIZE_MESSAGES": "true"})
-        assert cm.should_sanitize_messages is True
-
-    def test_env_false(self):
-        """SANITIZE_MESSAGES=false keeps it False."""
-        cm = _build_config_manager(env={"SANITIZE_MESSAGES": "false"})
-        assert cm.should_sanitize_messages is False
-
 
 # ===================================================================
 # add_reload_callback

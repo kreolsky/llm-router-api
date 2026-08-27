@@ -32,11 +32,9 @@ OpenAI-compatible API gateway for multiple LLM providers. Routes requests to Ope
 
 **Access Control**: Per-key model restrictions. Access check runs BEFORE model existence check to prevent information leakage. Keys use `nnp-v1-<hex>` format.
 
-**Streaming**: SSE pass-through with UTF-8 split recovery at chunk boundaries. `StreamProcessor.process_stream` is an envelope over two independent bodies (`_passthrough` / `_sanitizing`); the frame parser lives in `_decode_chunks` and `_iter_sse_frames`/`_split_frame`, which handle `\n\n` and `\r\n\r\n` (earliest separator wins) and SSE comments. `open_provider_stream` primes the first chunk BEFORE the response starts, so an upstream 401/429 keeps its real HTTP status instead of arriving as a 200 with an error frame.
+**Streaming**: SSE byte-for-byte pass-through. `StreamProcessor.process_stream` forwards provider chunks unchanged, peeking (never re-framing) for `usage` and duplicating OpenAI-style `reasoning` into llama.cpp-style `reasoning_content` (best-effort, on complete `data:` lines). `open_provider_stream` primes the first chunk BEFORE the response starts, so an upstream 401/429 keeps its real HTTP status instead of arriving as a 200 with an error frame.
 
 **Error Format**: OpenRouter-compatible JSON with `error.code`, `error.message`, `error.metadata`.
-
-**Message Sanitization**: Optional stripping of non-standard fields (`done`, `__stream_end__`, `__internal__`) from messages and stream chunks. Controlled by `SANITIZE_MESSAGES` env var.
 
 **Model Capabilities**: `/v1/models` and `/v1/models/{id}` declare the full capability set per model (context, output limit, vision/modalities, supported parameters, pricing). Two layers, both in the same normalized stored shape:
 

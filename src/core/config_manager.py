@@ -53,7 +53,6 @@ class ConfigManager:
         
         self.debug = _env_bool("DEBUG", False)
         self.log_level = os.getenv("LOG_LEVEL", "INFO")
-        self.sanitize_messages = _env_bool("SANITIZE_MESSAGES", False)
         self._settings = self._read_env_settings()
 
         # Log configuration initialization
@@ -62,7 +61,6 @@ class ConfigManager:
                 "config_dir": config_dir,
                 "debug_enabled": self.debug,
                 "log_level": self.log_level,
-                "sanitize_messages": self.sanitize_messages,
                 "providers_config_exists": os.path.exists(self.providers_path),
                 "models_config_exists": os.path.exists(self.models_path),
                 "user_keys_config_exists": os.path.exists(self.user_keys_path),
@@ -216,10 +214,6 @@ class ConfigManager:
             raise AttributeError(
                 f"{type(self).__name__!r} object has no attribute {name!r}"
             ) from None
-
-    @property
-    def should_sanitize_messages(self) -> bool:
-        return self.sanitize_messages
 
     def add_reload_callback(self, callback, name: str = ""):
         """Register an async callback invoked after a successful config load.
