@@ -30,7 +30,8 @@ def _build_provider(
     """
     provider_type = provider_config.get("type")
     if provider_type == "openai":
-        return OpenAICompatibleProvider(provider_config, config_manager)
+        return OpenAICompatibleProvider(provider_config, config_manager,
+                                        provider_name=provider_name)
     raise create_error(
         ErrorType.PROVIDER_NOT_FOUND, provider_name=provider_type, model_id="unknown"
     )

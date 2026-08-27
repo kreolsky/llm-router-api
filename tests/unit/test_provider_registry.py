@@ -6,6 +6,7 @@ import pytest
 
 import src.providers as provider_registry
 from src.providers import (
+    _build_provider,
     clear_provider_cache_async,
     get_provider_instance,
     rebuild_provider_cache,
@@ -33,6 +34,26 @@ def _cm():
         httpx_read_timeout=60.0,
         httpx_pool_timeout=5.0,
     )
+
+
+class TestBuildProviderName:
+    """The factory passes the providers.yaml key down as provider_name."""
+
+    @patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False)
+    def test_instance_gets_real_provider_name(self):
+        """_build_provider("glm", ...) → provider_name "glm": logs and startup
+        errors name the actual backend, not the shared type literal."""
+        instance = _build_provider("glm", _make_config())
+        assert instance.provider_name == "glm"
+
+    @patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False)
+    def test_direct_construction_falls_back_to_class_name(self):
+        """Without provider_name the class-derived fallback applies — the same
+        literal for every provider of a type, which is why the factory passes
+        the config key explicitly."""
+        from src.providers.openai import OpenAICompatibleProvider
+        instance = OpenAICompatibleProvider(_make_config())
+        assert instance.provider_name == "openaicompatible"
 
 
 class TestGetProviderInstance:

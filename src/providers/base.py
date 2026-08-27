@@ -78,7 +78,7 @@ def retry_on_rate_limit(max_retries: int | None = None, base_delay: float | None
 # os.environ[api_key_env]. It is never replaced per-request. Client API keys
 # stay in auth.py and are not propagated to providers.
 class BaseProvider:
-    def __init__(self, config: dict[str, Any], config_manager=None):
+    def __init__(self, config: dict[str, Any], config_manager=None, provider_name: str | None = None):
         """Initialize provider from config dict.
 
         Reads API key from the env var named by config['api_key_env'].
@@ -86,7 +86,10 @@ class BaseProvider:
         come from config_manager (global env applied per pool).
         Reads an optional `proxy` URL (e.g. socks5://host:port) from config;
         when set, all of the provider's traffic is routed through that proxy.
-        Auto-derives provider_name from class name for logging.
+        provider_name is the providers.yaml dict key (used in logs and
+        startup-validation errors); without it the name is derived from the
+        class name as a fallback (all type-"openai" providers would log as
+        "openai", hiding the actual backend).
         Sets default Content-Type: application/json (subclasses may override before super().__init__).
 
         Raises:
@@ -98,7 +101,7 @@ class BaseProvider:
         self.api_key = os.environ.get(self.api_key_env) if self.api_key_env else None
         self.config_manager = config_manager
         self.proxy = config.get("proxy")
-        self.provider_name = self.__class__.__name__.replace("Provider", "").lower()
+        self.provider_name = provider_name or self.__class__.__name__.replace("Provider", "").lower()
 
         # ARCH: single identity mode. `passthrough` forwards every client
         # header upstream verbatim minus the denylist
