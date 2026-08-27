@@ -411,3 +411,43 @@ class TestRetrieveModel:
             await svc.retrieve_model("model-a", auth_data, refresh=False)
 
         mock_refresh.assert_not_called()
+
+
+# ===================================================================
+# get_pricing
+# ===================================================================
+
+class TestGetPricing:
+
+    def test_returns_stored_pricing_from_cache(self):
+        cache = _make_cache({"model-a": {"pricing": {"prompt": 1e-6, "completion": 2e-6}}})
+        svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS, cache=cache)
+        pricing = svc.get_pricing("model-a")
+        assert pricing == {"prompt": 1e-6, "completion": 2e-6}
+
+    def test_model_info_overrides_cache(self):
+        cache = _make_cache({"model-a": {"pricing": {"prompt": 9e-6}}})
+        model_info = {"model-a": {"pricing": {"prompt": 1e-6, "completion": 2e-6}}}
+        svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS,
+                             model_info=model_info, cache=cache)
+        assert svc.get_pricing("model-a") == {"prompt": 1e-6, "completion": 2e-6}
+
+    def test_unknown_model_returns_none(self):
+        svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS)
+        assert svc.get_pricing("no-such-model") is None
+
+    def test_empty_model_id_returns_none(self):
+        svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS)
+        assert svc.get_pricing("") is None
+        assert svc.get_pricing(None) is None
+
+    def test_model_without_pricing_returns_none(self):
+        cache = _make_cache({"model-a": {"context_length": 8192}})
+        svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS, cache=cache)
+        assert svc.get_pricing("model-a") is None
+
+    def test_empty_pricing_dict_returns_none(self):
+        model_info = {"model-a": {"pricing": {}}}
+        svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS,
+                             model_info=model_info)
+        assert svc.get_pricing("model-a") is None

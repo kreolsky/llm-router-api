@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 
 from ..core.error_handling import ErrorType, create_error
 from ..core.logging import logger
-from ..core.usage_db import schedule_record_usage
+from ..core.usage_db import request_stats
 from .base import BaseService
 
 
@@ -26,6 +26,8 @@ class EmbeddingService(BaseService):
                              request_id=request_id, user_id=user_id)
 
         requested_model = request_body.get("model")
+        stats = request_stats(request)
+        stats.model_id = requested_model if isinstance(requested_model, str) else ""
 
         error_ctx = dict(request_id=request_id, user_id=user_id, model_id=requested_model)
 
@@ -39,6 +41,7 @@ class EmbeddingService(BaseService):
 
         model_config, provider_name, provider_model_name, provider_config = \
             self._validate_and_get_config(requested_model, auth_data, **error_ctx)
+        stats.provider_name = provider_name
 
         provider_instance = await self._get_provider(provider_name, provider_config, **error_ctx)
 
@@ -68,16 +71,6 @@ class EmbeddingService(BaseService):
 
             usage = response_data.get("usage", {})
             if usage:
-                schedule_record_usage(
-                    project_name=user_id,
-                    model_id=requested_model,
-                    endpoint="embeddings",
-                    prompt_tokens=usage.get("prompt_tokens", 0),
-                    completion_tokens=0,
-                    cached_tokens=0,
-                    total_tokens=usage.get("total_tokens", 0),
-                    request_id=request_id,
-                    provider_name=provider_name,
-                )
+                stats.set_usage(usage)
 
             return JSONResponse(content=response_data)

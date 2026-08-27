@@ -3,29 +3,27 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Token Usage Dashboard</title>
+<title>Usage Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 <link rel="stylesheet" href="/stat/static/stat.css">
 </head>
 <body>
-<h1>Token Usage Dashboard</h1>
+<h1>Usage Dashboard</h1>
 <div class="grid">
   <div class="sidebar">
     <h2>Users</h2>
-    <div id="user-btns" style="margin-bottom:6px">
+    <div style="margin-bottom:6px">
       <button onclick="selectAll('user')">All</button>
       <button onclick="deselectAll('user')">None</button>
     </div>
-    <div id="user-list"></div>
-  </div>
-  <div class="sidebar">
-    <h2>Models</h2>
-    <div id="model-btns" style="margin-bottom:6px">
+    <div id="user-list" class="filter-list"></div>
+    <h2 style="margin-top:14px">Models</h2>
+    <div style="margin-bottom:6px">
       <button onclick="selectAll('model')">All</button>
       <button onclick="deselectAll('model')">None</button>
     </div>
-    <div id="model-list"></div>
+    <div id="model-list" class="filter-list"></div>
   </div>
   <div class="main">
     <div class="period-bar">
@@ -34,9 +32,54 @@
       <button data-days="90">90d</button>
       <button data-days="">All</button>
     </div>
-    <div class="chart-wrap">
-      <div id="status" class="loader">Loading data...</div>
-      <canvas id="chart" style="display:none"></canvas>
+
+    <div id="cards" class="cards"></div>
+
+    <div class="tables-row">
+      <div class="table-card">
+        <h3>By user</h3>
+        <table class="data-table" id="by-user-table"></table>
+      </div>
+      <div class="table-card">
+        <h3>By model</h3>
+        <table class="data-table" id="by-model-table"></table>
+      </div>
+      <div class="table-card">
+        <h3>By provider</h3>
+        <table class="data-table" id="by-provider-table"></table>
+      </div>
+    </div>
+
+    <div class="section-card">
+      <h3>Tokens per day</h3>
+      <div class="chart-wrap">
+        <div id="status" class="loader">Loading data...</div>
+        <canvas id="chart" style="display:none"></canvas>
+      </div>
+    </div>
+
+    <div class="section-card">
+      <h3>Requests</h3>
+      <div class="log-filters">
+        <select id="log-status" onchange="resetLogPage()">
+          <option value="all">all statuses</option>
+          <option value="ok">ok</option>
+          <option value="error">errors</option>
+        </select>
+        <select id="log-error-code" onchange="resetLogPage()">
+          <option value="">all error codes</option>
+        </select>
+        <input type="text" id="log-request-id" placeholder="request id"
+               oninput="resetLogPage()">
+      </div>
+      <div class="log-scroll">
+        <table class="data-table log-table" id="log-table"></table>
+      </div>
+      <div class="pager">
+        <button id="log-prev" onclick="logPrev()">&#8592; newer</button>
+        <span id="log-page"></span>
+        <button id="log-next" onclick="logNext()">older &#8594;</button>
+      </div>
     </div>
   </div>
 </div>

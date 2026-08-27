@@ -4,6 +4,7 @@ from fastapi import Request, UploadFile
 
 from ..services.model_service import ModelService
 from ..core.logging import logger
+from ..core.usage_db import request_stats
 from .base import BaseService
 
 
@@ -62,11 +63,17 @@ class TranscriptionService(BaseService):
                 default_model=model_id
             )
 
+        # Transcriptions carry no usage block: tokens stay 0 and has_usage
+        # stays False — the row still makes transcriptions visible in stats.
+        stats = request_stats(request)
+        stats.model_id = model_id
+
         error_ctx = dict(request_id=request_id, user_id=user_id, model_id=model_id)
 
         async with self._guard_service_errors(error_ctx):
             model_config, provider_name, provider_model_name, provider_config = \
                 self._validate_and_get_config(model_id, auth_data, **error_ctx)
+            stats.provider_name = provider_name
 
             provider_instance = await self._get_provider(provider_name, provider_config, **error_ctx)
 

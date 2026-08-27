@@ -11,6 +11,10 @@ env/
 .vscode/
 .idea/
 .agent/
+.playwright-mcp
+.pytest_cache
+.ruff_cache
+node_modules
 
 # Logs
 logs/

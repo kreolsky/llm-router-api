@@ -99,6 +99,7 @@ def create_provider_http_error(
             "metadata": {
                 "provider_name": provider_name,
                 "raw": raw,
+                "error_code": "provider_http_error",
             },
         }
     }

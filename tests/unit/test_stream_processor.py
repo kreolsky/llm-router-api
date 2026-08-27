@@ -516,6 +516,89 @@ class TestDecodeChunks:
 
 
 # ---------------------------------------------------------------------------
+# 11. Stats-holder enrichment (frame and row cannot drift)
+# ---------------------------------------------------------------------------
+
+from src.core.usage_db import RequestStats  # noqa: E402
+
+
+class TestStatsEnrichment:
+
+    @pytest.mark.asyncio
+    async def test_mid_stream_error_writes_error_code_and_partial_usage(self):
+        """A failure after the 200 must not read as a success."""
+        sp = StreamProcessor(config_manager=None)
+        stats = RequestStats(model_id="m", provider_name="p", stream=True)
+        usage = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+        chunks = [sse(json.dumps({"usage": usage}))]
+
+        async def gen():
+            for c in chunks:
+                yield c
+            raise HTTPException(
+                status_code=500,
+                detail={"error": {"code": 500, "message": "upstream died",
+                                  "metadata": {"error_code": "internal_server_error"}}},
+            )
+
+        result = await collect(sp.process_stream(gen(), "m", "r", "u", "p", stats=stats))
+        assert any(b"[DONE]" in r for r in result)
+        assert stats.error_code == "internal_server_error"
+        assert "upstream died" in stats.error_message
+        # Partial usage captured before the failure survives the error path
+        assert stats.prompt_tokens == 10
+        assert stats.completion_tokens == 5
+        assert stats.has_usage is True
+
+    @pytest.mark.asyncio
+    async def test_generic_exception_classified_internal_server_error(self):
+        sp = StreamProcessor(config_manager=None)
+        stats = RequestStats()
+
+        async def gen():
+            yield b"data: {}\n\n"
+            raise ValueError("kaboom")
+
+        await collect(sp.process_stream(gen(), "m", "r", "u", "p", stats=stats))
+        assert stats.error_code == "internal_server_error"
+        assert "kaboom" in stats.error_message
+
+    @pytest.mark.asyncio
+    async def test_http_exception_without_metadata_is_coarse(self):
+        sp = StreamProcessor(config_manager=None)
+        stats = RequestStats()
+
+        async def gen():
+            yield b"data: {}\n\n"
+            raise HTTPException(status_code=403, detail="forbidden")
+
+        await collect(sp.process_stream(gen(), "m", "r", "u", "p", stats=stats))
+        assert stats.error_code == "internal_server_error"
+        assert stats.error_message == "forbidden"
+
+    @pytest.mark.asyncio
+    async def test_successful_stream_keeps_usage_only(self):
+        sp = StreamProcessor(config_manager=None)
+        stats = RequestStats(model_id="m")
+        usage = {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}
+        await collect(sp.process_stream(
+            async_gen([sse(json.dumps({"usage": usage}))]), "m", "r", "u", "p", stats=stats))
+        assert stats.has_usage is True
+        assert stats.total_tokens == 10
+        assert stats.error_code is None
+        assert stats.error_message is None
+
+    @pytest.mark.asyncio
+    async def test_usage_stays_empty_when_provider_sent_no_usage_chunk(self):
+        sp = StreamProcessor(config_manager=None)
+        stats = RequestStats()
+        await collect(sp.process_stream(
+            async_gen([b"data: {}\n\n"]), "m", "r", "u", "p", stats=stats))
+        assert stats.has_usage is False
+        assert stats.total_tokens == 0
+
+
+# ---------------------------------------------------------------------------
 # 10. Eager priming: upstream errors must keep their HTTP status
 # ---------------------------------------------------------------------------
 

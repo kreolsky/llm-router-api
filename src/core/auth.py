@@ -1,4 +1,5 @@
 """Authentication and authorization for the API gateway."""
+import hashlib
 import hmac
 from fastapi import Depends, Security, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -6,6 +7,7 @@ from typing import Dict, Any, Tuple, List
 from .context import RequestContext
 from .error_handling import ErrorType, create_error
 from .logging import logger
+from .usage_db import request_stats
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -60,6 +62,9 @@ async def get_api_key(
             break
 
     if not found_project:
+        # Enrich the stats holder before raising: the row will carry a
+        # truncated SHA-256 hash of the presented (invalid) key.
+        request_stats(request).api_key_hash = hashlib.sha256(api_key.encode()).hexdigest()[:8]
         logger.warning("Authentication failed: invalid API key", extra={
             "auth": {
                 "error_type": "invalid_api_key",

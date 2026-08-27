@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Dict, Optional, Tuple
 
 from ...core.logging import logger
-from ...core.usage_db import schedule_chat_usage
+from ...core.usage_db import RequestStats
 from ...core.error_handling import ErrorType, create_error
 from ...core.sanitizer import MessageSanitizer
 from fastapi import HTTPException
@@ -114,7 +114,8 @@ class StreamProcessor:
                            model_id: str,
                            request_id: str,
                            user_id: str,
-                           provider_name: str = "") -> AsyncGenerator[bytes, None]:
+                           provider_name: str = "",
+                           stats: Optional[RequestStats] = None) -> AsyncGenerator[bytes, None]:
         """Forward a provider SSE stream, optionally sanitizing it on the way.
 
         Two independent bodies share only this envelope (logging, usage capture,
@@ -126,10 +127,19 @@ class StreamProcessor:
 
         The sanitization flag is read once per stream, and captured usage lives
         in a per-stream holder, so concurrent streams never affect each other.
+
+        The per-request RequestStats holder is enriched in place: mid-stream
+        failures write error_code/error_message from the same payload as the
+        SSE error frame (so the frame and the row cannot drift), and set_usage
+        runs in a ``finally`` so the error path and a client disconnect keep
+        partial usage.
         """
         should_sanitize = self._live_sanitization_flag()
         captured_usage: Dict[str, Any] = {}
-        stats = _StreamStats()
+        # Throwaway holder when the caller passed none (unit tests): the
+        # enrichment below stays identical, it just goes nowhere.
+        req_stats = stats if stats is not None else RequestStats()
+        chunk_stats = _StreamStats()
         start_time = time.time()
 
         logger.info("Starting stream processing", extra={
@@ -139,9 +149,9 @@ class StreamProcessor:
             "sanitization_enabled": should_sanitize
         })
 
-        body = (self._sanitizing(provider_stream, request_id, captured_usage, stats)
+        body = (self._sanitizing(provider_stream, request_id, captured_usage, chunk_stats)
                 if should_sanitize
-                else self._passthrough(provider_stream, request_id, captured_usage, stats))
+                else self._passthrough(provider_stream, request_id, captured_usage, chunk_stats))
 
         try:
             async for chunk in body:
@@ -153,28 +163,27 @@ class StreamProcessor:
                 "model": model_id,
                 "stream_processing": {
                     "duration_seconds": time.time() - start_time,
-                    "chunks_processed": stats.chunks,
+                    "chunks_processed": chunk_stats.chunks,
                     "error": str(e),
                     "error_type": type(e).__name__
                 }
             }, exc_info=True)
-            yield self._format_error(e)
+            error_payload = _error_payload(e)
+            _apply_stream_error(req_stats, error_payload)
+            yield _frame_error(error_payload)
             return
+        finally:
+            if captured_usage.get("usage"):
+                req_stats.set_usage(captured_usage["usage"])
 
         logger.info(
             "Stream completed (sanitized)" if should_sanitize else "Stream completed (transparent)",
             extra={
                 "request_id": request_id,
                 "duration": round(time.time() - start_time, 3),
-                "total_bytes": stats.bytes,
-                "sanitized_messages": stats.sanitized,
+                "total_bytes": chunk_stats.bytes,
+                "sanitized_messages": chunk_stats.sanitized,
             })
-
-        if captured_usage.get("usage"):
-            _schedule_stream_usage(
-                captured_usage["usage"], request_id, user_id, model_id,
-                start_time, provider_name
-            )
 
     async def _passthrough(self,
                            provider_stream: AsyncGenerator[bytes, None],
@@ -220,28 +229,7 @@ class StreamProcessor:
 
     def _format_error(self, error: Exception) -> bytes:
         """Format an error as an SSE data chunk (OpenRouter-compatible)."""
-        if isinstance(error, HTTPException):
-            error_detail = error.detail
-            if isinstance(error_detail, dict) and "error" in error_detail:
-                error_payload = error_detail
-            else:
-                error_payload = {
-                    "error": {
-                        "code": error.status_code,
-                        "message": str(error_detail) if error_detail else str(error)
-                    }
-                }
-        else:
-            error_payload = {
-                "error": {
-                    "code": 500,
-                    "message": f"An unexpected error occurred during streaming: {error}"
-                }
-            }
-
-        # WHY: many OpenAI-compatible clients block until they see [DONE]; an
-        # error frame alone leaves them waiting until the read timeout fires
-        return f"data: {json.dumps(error_payload)}\n\ndata: [DONE]\n\n".encode('utf-8')
+        return _frame_error(_error_payload(error))
 
 
 # Separator styles an SSE producer may use, and the one we fall back to when a
@@ -433,13 +421,50 @@ def _sanitize_sse_message(
         return message
 
 
-def _schedule_stream_usage(usage, request_id, user_id, model_id, start_time, provider_name) -> None:
-    """Schedule fire-and-forget usage recording for a completed stream."""
-    schedule_chat_usage(
-        usage,
-        project_name=user_id,
-        model_id=model_id,
-        request_id=request_id,
-        provider_name=provider_name,
-        start_time=start_time,
-    )
+def _error_payload(error: Exception) -> Dict[str, Any]:
+    """Build the OpenRouter-shaped error payload for a mid-stream failure.
+
+    Single construction point shared by the SSE error frame and the stats
+    enrichment, so the frame the client sees and the row the dashboard sees
+    cannot drift.
+    """
+    if isinstance(error, HTTPException):
+        error_detail = error.detail
+        if isinstance(error_detail, dict) and "error" in error_detail:
+            return error_detail
+        return {
+            "error": {
+                "code": error.status_code,
+                "message": str(error_detail) if error_detail else str(error)
+            }
+        }
+    return {
+        "error": {
+            "code": 500,
+            "message": f"An unexpected error occurred during streaming: {error}"
+        }
+    }
+
+
+def _frame_error(error_payload: Dict[str, Any]) -> bytes:
+    """Frame an error payload as SSE data.
+
+    WHY: many OpenAI-compatible clients block until they see [DONE]; an
+    error frame alone leaves them waiting until the read timeout fires.
+    """
+    return f"data: {json.dumps(error_payload)}\n\ndata: [DONE]\n\n".encode('utf-8')
+
+
+def _apply_stream_error(stats: RequestStats, error_payload: Dict[str, Any]) -> None:
+    """Write error_code / error_message into the stats holder.
+
+    HTTPException → its metadata.error_code (always present for errors raised
+    via create_error / create_provider_http_error). Any other exception →
+    internal_server_error, coarse by design: error_message carries the detail.
+    """
+    error = error_payload.get("error") or {}
+    metadata = error.get("metadata") or {}
+    error_code = metadata.get("error_code") if isinstance(metadata, dict) else None
+    stats.error_code = error_code or "internal_server_error"
+    message = error.get("message")
+    stats.error_message = str(message) if message is not None else None

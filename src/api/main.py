@@ -1,7 +1,8 @@
 """FastAPI application, lifespan management, and route definitions."""
 import asyncio
+import hmac
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, HTTPException, status, Depends, File, Form, UploadFile
+from fastapi import FastAPI, Request, HTTPException, status, Depends, File, Form, Header, UploadFile
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from typing import Optional
@@ -24,15 +25,15 @@ from ..core.usage_db import (
     close_db,
     get_distinct_models,
     get_distinct_users,
+    get_requests,
+    get_summary,
     get_usage_data,
     init_db,
+    request_stats,
 )
+from ..utils.client_address import client_host
 from .middleware import RequestLoggerMiddleware
 from .stat_page import stat_page
-
-
-def _client_host(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
 
 
 async def _validate_providers(config_manager: ConfigManager) -> None:
@@ -96,10 +97,32 @@ app.mount("/stat/static", StaticFiles(directory="src/static"), name="stat_static
 
 @app.exception_handler(HTTPException)
 async def custom_http_exception_handler(request: Request, exc: HTTPException):
-    # WHY: FastAPI wraps detail in {"detail": ...} by default; we return error dict directly for OpenRouter compatibility
+    """OpenRouter-compatible error shape + the single error-enrichment point.
+
+    Writes error_code / error_message / provider_name into the per-request
+    stats holder out of exc.detail (best-effort). Enrichment tolerates details
+    without metadata.error_code: a plain string detail (unmatched-route 404s)
+    writes only error_message and leaves error_code NULL — an error status
+    with NULL error_code is an expected shape, the UI groups it under "—".
+    """
+    stats = request_stats(request)
     content = exc.detail
     if isinstance(content, dict) and "error" in content:
+        error = content["error"]
+        message = error.get("message")
+        if message:
+            stats.error_message = str(message)
+        metadata = error.get("metadata")
+        if isinstance(metadata, dict):
+            error_code = metadata.get("error_code")
+            if error_code:
+                stats.error_code = str(error_code)
+            provider_name = metadata.get("provider_name")
+            if provider_name and not stats.provider_name:
+                stats.provider_name = str(provider_name)
         return JSONResponse(status_code=exc.status_code, content=content)
+    if content is not None:
+        stats.error_message = str(content)
     return JSONResponse(
         status_code=exc.status_code,
         content={"error": {"code": exc.status_code, "message": str(content)}}
@@ -211,7 +234,7 @@ async def generate_key_endpoint(
         user_id=user_id,
         method=request.method,
         url=str(request.url),
-        client_host=_client_host(request)
+        client_host=client_host(request)
     )
 
     key = generate_key()
@@ -223,27 +246,91 @@ async def generate_key_endpoint(
     return {"key": key}
 
 
+async def verify_stat_key(
+    request: Request,
+    x_stat_key: Optional[str] = Header(None, alias="X-Stat-Key"),
+) -> None:
+    """Require X-Stat-Key on /stat/api/* when STAT_API_KEY is configured.
+
+    WHY header only, never a ?stat_key= query param: the logging middleware
+    logs the full URL including the query string, so a query-param key would
+    leak into request logs. When STAT_API_KEY is unset everything stays open.
+    """
+    config_manager = getattr(request.app.state, "config_manager", None)
+    expected = getattr(config_manager, "stat_api_key", "") or ""
+    if expected and not hmac.compare_digest(
+            (x_stat_key or "").encode(), expected.encode()):
+        raise HTTPException(
+            status_code=401,
+            detail={"error": {"code": 401,
+                              "message": "Invalid or missing X-Stat-Key header"}},
+        )
+
+
 @app.get("/stat/")
 async def stat_dashboard(request: Request):
+    # The page stays open even with STAT_API_KEY set: it is what prompts for
+    # the key. /stat/static is a mount and cannot carry a dependency at all.
     return await stat_page(request)
 
 
 @app.get("/stat/api/users")
-async def stat_users():
+async def stat_users(_: None = Depends(verify_stat_key)):
     return await get_distinct_users()
 
 
 @app.get("/stat/api/models")
-async def stat_models():
+async def stat_models(_: None = Depends(verify_stat_key)):
     return await get_distinct_models()
 
 
 @app.get("/stat/api/usage")
-async def stat_usage(users: str = "", models: str = "", days: str = ""):
+async def stat_usage(
+    users: str = "",
+    models: str = "",
+    days: str = "",
+    _: None = Depends(verify_stat_key),
+):
     user_list = [u.strip() for u in users.split(",") if u.strip()] if users else []
     model_list = [m.strip() for m in models.split(",") if m.strip()] if models else []
     days_int = int(days) if days else None
     return await get_usage_data(user_list, model_list, days_int)
+
+
+@app.get("/stat/api/summary")
+async def stat_summary(
+    users: str = "",
+    models: str = "",
+    days: str = "",
+    _: None = Depends(verify_stat_key),
+):
+    user_list = [u.strip() for u in users.split(",") if u.strip()] if users else []
+    model_list = [m.strip() for m in models.split(",") if m.strip()] if models else []
+    days_int = int(days) if days else None
+    return await get_summary(user_list, model_list, days_int)
+
+
+@app.get("/stat/api/requests")
+async def stat_requests(
+    users: str = "",
+    models: str = "",
+    providers: str = "",
+    status: str = "all",
+    error_code: str = "",
+    request_id: str = "",
+    days: str = "",
+    limit: int = 50,
+    offset: int = 0,
+    _: None = Depends(verify_stat_key),
+):
+    user_list = [u.strip() for u in users.split(",") if u.strip()] if users else []
+    model_list = [m.strip() for m in models.split(",") if m.strip()] if models else []
+    provider_list = [p.strip() for p in providers.split(",") if p.strip()] if providers else []
+    days_int = int(days) if days else None
+    return await get_requests(
+        user_list, model_list, provider_list, status, error_code,
+        request_id, days_int, limit=limit, offset=offset,
+    )
 
 
 if __name__ == "__main__":

@@ -68,6 +68,18 @@ class ModelService(BaseService):
         model_info = self.config_manager.get_config().get("model_info", {}).get(model_id) or {}
         return merge_capabilities(cache_data, model_info)
 
+    def get_pricing(self, model_id: str) -> Optional[Dict[str, Any]]:
+        """Stored per-token pricing for a model, or None when unknown.
+
+        Public wrapper over _resolve_stored_capabilities for the usage-stats
+        flush. In-memory, never touches the network. Returned values follow
+        the stored form: USD per token, only the keys the sources provided.
+        """
+        if not model_id:
+            return None
+        pricing = self._resolve_stored_capabilities(model_id).get("pricing")
+        return pricing if isinstance(pricing, dict) and pricing else None
+
     def _capability_meta(self, model_id: str) -> Dict[str, Any]:
         """Provenance fields (source, fetched_at) for diagnostics, when available."""
         if self.capabilities_cache is None:

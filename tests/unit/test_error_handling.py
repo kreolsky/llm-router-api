@@ -69,22 +69,34 @@ class TestErrorTypeCreateErrorDetail:
         detail = ErrorType.MODEL_NOT_FOUND.create_error_detail(model_id="gpt-4")
         assert detail["error"]["message"] == "Model 'gpt-4' not found in configuration"
 
-    def test_includes_metadata_when_provider_name_given(self):
+    def test_always_includes_metadata_error_code(self):
+        """metadata.error_code is always emitted (string classification).
+
+        WHY: the numeric error.code carries the HTTP status; consumers that
+        need the error class (stats enrichment among them) read
+        metadata.error_code.
+        """
+        detail = ErrorType.INVALID_API_KEY.create_error_detail()
+        assert detail["error"]["metadata"]["error_code"] == "invalid_api_key"
+
+    def test_includes_provider_name_in_metadata_when_given(self):
         detail = ErrorType.PROVIDER_NOT_FOUND.create_error_detail(
             provider_name="openai", model_id="gpt-4"
         )
-        assert "metadata" in detail["error"]
         assert detail["error"]["metadata"]["provider_name"] == "openai"
+        assert detail["error"]["metadata"]["error_code"] == "provider_not_found"
 
-    def test_omits_metadata_when_provider_name_absent(self):
+    def test_metadata_without_provider_name_still_present(self):
+        """No provider_name: metadata exists but carries no provider_name."""
         detail = ErrorType.MODEL_NOT_FOUND.create_error_detail(model_id="gpt-4")
-        assert "metadata" not in detail["error"]
+        assert "metadata" in detail["error"]
+        assert "provider_name" not in detail["error"]["metadata"]
 
-    def test_omits_metadata_when_provider_name_is_none(self):
+    def test_metadata_when_provider_name_is_none(self):
         detail = ErrorType.MODEL_NOT_FOUND.create_error_detail(
             model_id="gpt-4", provider_name=None
         )
-        assert "metadata" not in detail["error"]
+        assert "provider_name" not in detail["error"]["metadata"]
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +107,22 @@ class TestErrorTypeCreateErrorDetail:
 def mock_logger():
     with patch("src.core.error_handling.error_handler.logger") as mock_log:
         yield mock_log
+
+
+class TestCreateProviderHttpError:
+    """create_provider_http_error must carry its own metadata.error_code."""
+
+    def test_metadata_contains_provider_http_error_code(self, mock_logger):
+        from src.core.error_handling.error_handler import create_provider_http_error
+
+        exc = create_provider_http_error(
+            status_code=429, message="rate limited",
+            provider_name="openai", raw="upstream said no",
+        )
+        assert exc.status_code == 429
+        assert exc.detail["error"]["metadata"]["error_code"] == "provider_http_error"
+        assert exc.detail["error"]["metadata"]["provider_name"] == "openai"
+        assert exc.detail["error"]["metadata"]["raw"] == "upstream said no"
 
 
 class TestCreateError:
