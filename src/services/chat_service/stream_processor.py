@@ -184,10 +184,6 @@ class StreamProcessor:
             if b'"usage"' in chunk and b'"prompt_tokens"' in chunk:
                 _capture_usage_from_chunk(chunk, captured_usage)
 
-    def _format_error(self, error: Exception) -> bytes:
-        """Format an error as an SSE data chunk (OpenRouter-compatible)."""
-        return _frame_error(_error_payload(error))
-
 
 @dataclass
 class _StreamStats:

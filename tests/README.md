@@ -44,7 +44,7 @@ python -m venv .venv
 
 | File | What it covers |
 |---|---|
-| `test_stream_processor.py` | Transparent pass-through, reasoning→reasoning_content remap, usage capture, per-stream usage isolation, `[DONE]` sentinel, `_format_error`, `open_provider_stream` priming |
+| `test_stream_processor.py` | Transparent pass-through, reasoning→reasoning_content remap, usage capture, per-stream usage isolation, `[DONE]` sentinel, mid-stream error frame, `open_provider_stream` priming |
 | `test_base_provider.py` | `retry_on_rate_limit` decorator (exponential backoff, 429 detection, config resolution), `__init__` validation (missing base_url/api_key), `_apply_model_config`, `_raise_provider_http_error` |
 | `test_error_handling.py` | `ErrorType` enum (format_message, create_error_detail, status codes), `ErrorContext.to_log_extra`, all `ErrorHandler.handle_*` methods and returned HTTP status codes |
 | `test_config_manager.py` | YAML loading (success, missing file, invalid YAML), hot-reload with callbacks, property getters with env var defaults |

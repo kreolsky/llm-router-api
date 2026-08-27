@@ -495,7 +495,7 @@ class TestProxySupport:
 
 
 # ===================================================================
-# list_models / get_model
+# list_models
 # ===================================================================
 
 from src.providers.openai import OpenAICompatibleProvider
@@ -528,35 +528,6 @@ class TestListModels:
         with pytest.raises(HTTPException) as exc_info:
             await provider.list_models(request_id="req-1")
         assert exc_info.value.status_code == 502
-
-
-class TestGetModel:
-
-    @pytest.mark.asyncio
-    async def test_get_model_found(self):
-        """get_model returns the matching model metadata."""
-        provider = _build_openai_provider()
-        provider.list_models = AsyncMock(return_value={
-            "data": [{"id": "gpt-4", "context_length": 8192}]
-        })
-        result = await provider.get_model("gpt-4", request_id="req-1")
-        assert result == {"id": "gpt-4", "context_length": 8192}
-
-    @pytest.mark.asyncio
-    async def test_get_model_not_found_returns_empty(self):
-        """get_model returns {} when the model is not in the provider list."""
-        provider = _build_openai_provider()
-        provider.list_models = AsyncMock(return_value={"data": [{"id": "other"}]})
-        result = await provider.get_model("gpt-4", request_id="req-1")
-        assert result == {}
-
-    @pytest.mark.asyncio
-    async def test_get_model_provider_error_propagates(self):
-        """get_model propagates errors from list_models."""
-        provider = _build_openai_provider()
-        provider.list_models = AsyncMock(side_effect=httpx.ConnectError("boom"))
-        with pytest.raises(httpx.ConnectError):
-            await provider.get_model("gpt-4", request_id="req-1")
 
 
 # ===================================================================

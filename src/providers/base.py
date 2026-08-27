@@ -586,10 +586,6 @@ class BaseProvider:
         """Return the provider's model list (raw /models response)."""
         raise NotImplementedError
 
-    async def get_model(self, provider_model_name: str, request_id: str = "unknown") -> dict[str, Any]:
-        """Return a single model's metadata, or {} if not found."""
-        raise NotImplementedError
-
     async def transcriptions(self, request_body: dict[str, Any], provider_model_name: str,
                              model_config: dict[str, Any], request_id: str = "unknown",
                              extra_headers: dict[str, str] = None) -> Any:

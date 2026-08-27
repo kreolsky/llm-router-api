@@ -58,52 +58,70 @@ class TestTransparentMode:
 
 
 # ---------------------------------------------------------------------------
-# 6. _format_error
+# 6. Mid-stream error frame (via process_stream)
 # ---------------------------------------------------------------------------
 
 def _parse_error_frame(result: bytes):
-    """Parse the first SSE data frame from _format_error output."""
+    """Parse the first SSE data frame from a stream's error output."""
     text = result.decode("utf-8")
     first_frame = text.split("\n\n", 1)[0]
     return json.loads(first_frame[len("data: "):])
 
 
-class TestFormatError:
+def raising_gen(exc):
+    """A provider stream that fails on its first read."""
+    async def gen():
+        raise exc
+        yield b""  # pragma: no cover
+    return gen()
 
-    def test_generic_exception(self):
+
+class TestErrorFrame:
+
+    @pytest.mark.asyncio
+    async def test_generic_exception(self):
         sp = StreamProcessor(config_manager=None)
-        result = sp._format_error(ValueError("oops"))
+        result = b"".join(await collect(
+            sp.process_stream(raising_gen(ValueError("oops")), "m", "r", "u")))
         decoded = _parse_error_frame(result)
         assert decoded["error"]["code"] == 500
         assert "oops" in decoded["error"]["message"]
 
-    def test_http_exception_string_detail(self):
+    @pytest.mark.asyncio
+    async def test_http_exception_string_detail(self):
         sp = StreamProcessor(config_manager=None)
         exc = HTTPException(status_code=403, detail="forbidden")
-        result = sp._format_error(exc)
+        result = b"".join(await collect(
+            sp.process_stream(raising_gen(exc), "m", "r", "u")))
         decoded = _parse_error_frame(result)
         assert decoded["error"]["code"] == 403
         assert "forbidden" in decoded["error"]["message"]
 
-    def test_http_exception_dict_detail(self):
+    @pytest.mark.asyncio
+    async def test_http_exception_dict_detail(self):
         sp = StreamProcessor(config_manager=None)
         detail = {"error": {"code": 429, "message": "rate limited"}}
         exc = HTTPException(status_code=429, detail=detail)
-        result = sp._format_error(exc)
+        result = b"".join(await collect(
+            sp.process_stream(raising_gen(exc), "m", "r", "u")))
         decoded = _parse_error_frame(result)
         assert decoded["error"]["code"] == 429
         assert decoded["error"]["message"] == "rate limited"
 
-    def test_returns_bytes_with_sse_framing(self):
+    @pytest.mark.asyncio
+    async def test_returns_bytes_with_sse_framing(self):
         sp = StreamProcessor(config_manager=None)
-        result = sp._format_error(RuntimeError("x"))
+        result = b"".join(await collect(
+            sp.process_stream(raising_gen(RuntimeError("x")), "m", "r", "u")))
         assert isinstance(result, bytes)
         assert result.startswith(b"data: ")
         assert result.endswith(b"\n\n")
 
-    def test_ends_with_done_sentinel(self):
+    @pytest.mark.asyncio
+    async def test_ends_with_done_sentinel(self):
         sp = StreamProcessor(config_manager=None)
-        result = sp._format_error(RuntimeError("x"))
+        result = b"".join(await collect(
+            sp.process_stream(raising_gen(RuntimeError("x")), "m", "r", "u")))
         assert result.endswith(b"data: [DONE]\n\n")
 
 

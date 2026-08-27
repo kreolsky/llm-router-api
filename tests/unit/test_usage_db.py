@@ -26,15 +26,13 @@ def reset_tasks():
 
 
 @pytest.fixture
-def db_path(tmp_path, monkeypatch):
-    path = str(tmp_path / "usage.db")
-    monkeypatch.setattr(usage_db, "DB_PATH", path)
-    return path
+def db_path(tmp_path):
+    return str(tmp_path / "usage.db")
 
 
 @asyncio_fixture
 async def db(db_path):
-    await usage_db.init_db()
+    await usage_db.init_db(db_path)
     yield usage_db.get_connection()
     await usage_db.close_db()
 
@@ -108,7 +106,7 @@ class TestMigration:
         await conn.commit()
         await conn.close()
 
-        await usage_db.init_db()
+        await usage_db.init_db(db_path)
         conn = usage_db.get_connection()
         cursor = await conn.execute("PRAGMA table_info(usage_events)")
         columns = {row[1] for row in await cursor.fetchall()}
@@ -127,7 +125,7 @@ class TestMigration:
         await conn.commit()
         await conn.close()
 
-        await usage_db.init_db()
+        await usage_db.init_db(db_path)
         rows = await fetch_rows(usage_db.get_connection())
         assert len(rows) == 1
         row = rows[0]
@@ -152,7 +150,7 @@ class TestMigration:
         await conn.commit()
         await conn.close()
 
-        await usage_db.init_db()
+        await usage_db.init_db(db_path)
         cursor = await usage_db.get_connection().execute(
             "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_usage_ts'"
         )

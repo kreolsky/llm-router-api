@@ -9,7 +9,7 @@ and read the entry file(s). Aliases are hand-maintained in
 | System | Description | Entry file(s) | Aliases |
 |--------|-------------|---------------|---------|
 | api-app | FastAPI app, lifespan, routes, eager provider validation | `src/api/main.py:2` | startup, lifespan, роуты, приложение |
-| auth | bearer/HMAC authentication and per-key model access control | `src/core/auth.py:2` | ключи, доступ, авторизация, user_keys, api key |
+| auth | bearer authentication (constant-time key comparison) and per-key model access control | `src/core/auth.py:2` | ключи, доступ, авторизация, user_keys, api key |
 | config | YAML load, 5s hot reload, env-backed settings | `src/core/config_manager.py:2` | конфиг, yaml, hot reload, перезагрузка конфига |
 | error-format | OpenRouter-compatible error envelope | `src/core/error_handling/error_handler.py:2` | ошибки, error |
 | header-policy | denylist for client headers forwarded upstream | `src/core/header_policy.py:10` |  |

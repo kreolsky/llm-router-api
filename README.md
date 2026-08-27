@@ -160,7 +160,7 @@ src/
 │   ├── main.py            # FastAPI app, lifespan, routes
 │   └── middleware.py       # Request ID injection, request/response logging
 ├── core/
-│   ├── auth.py            # Bearer token extraction, hmac comparison, endpoint access
+│   ├── auth.py            # Bearer token extraction, constant-time comparison, endpoint access
 │   ├── config_manager.py  # YAML loading, hot-reload task, env-based properties
 │   ├── model_capabilities.py  # Capabilities: render/normalize/merge + auto-cache + background refresh
 │   ├── error_handling/    # ErrorType enum, ErrorHandler factory, ErrorLogger

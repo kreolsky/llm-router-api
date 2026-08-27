@@ -21,8 +21,6 @@ import aiosqlite
 
 from .logging import logger
 
-DB_PATH = os.environ.get("USAGE_DB_PATH", "data/usage.db")
-
 _connection: aiosqlite.Connection | None = None
 
 # ARCH: fire-and-forget flush tasks are tracked here so they are not
@@ -121,12 +119,12 @@ def request_stats(request: object | None) -> RequestStats:
 # Schema
 # ---------------------------------------------------------------------------
 
-async def init_db() -> None:
+async def init_db(db_path: str) -> None:
     global _connection
-    db_dir = os.path.dirname(DB_PATH)
+    db_dir = os.path.dirname(db_path)
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
-    _connection = await aiosqlite.connect(DB_PATH)
+    _connection = await aiosqlite.connect(db_path)
     await _connection.execute("PRAGMA journal_mode=WAL")
     # WHY: WAL allows one writer at a time. Without a busy timeout a concurrent
     # writer (another uvicorn worker, or the sqlite3 CLI during an inspection)

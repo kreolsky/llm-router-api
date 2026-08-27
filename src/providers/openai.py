@@ -96,16 +96,3 @@ class OpenAICompatibleProvider(BaseProvider):
             path="/models",
             request_id=request_id
         )
-
-    async def get_model(self, provider_model_name: str, request_id: str = "unknown") -> dict[str, Any]:
-        """Return a single model's metadata from the provider's /models list.
-
-        Returns {} when the model is not present in the list. Provider errors
-        propagate to the caller (ModelService treats them as non-fatal).
-        """
-        models_data = await self.list_models(request_id=request_id)
-        for model in models_data.get("data", []):
-            if model.get("id") == provider_model_name:
-                return model
-        return {}
-

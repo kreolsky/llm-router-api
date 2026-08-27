@@ -1,5 +1,5 @@
 """Authentication and authorization for the API gateway."""
-# SYSTEM: auth — bearer/HMAC authentication and per-key model access control
+# SYSTEM: auth — bearer authentication (constant-time key comparison) and per-key model access control
 import hashlib
 import hmac
 

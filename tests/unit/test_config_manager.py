@@ -298,6 +298,14 @@ class TestPropertyGetters:
         assert cm.model_cache_enabled is False
         assert cm.model_cache_path == "/tmp/c.json"
 
+    def test_usage_db_path_settings(self):
+        """usage_db_path resolves from env with the documented default."""
+        cm = self._cm_with_env({})
+        assert cm.usage_db_path == "data/usage.db"
+
+        cm = self._cm_with_env({"USAGE_DB_PATH": "/tmp/usage.db"})
+        assert cm.usage_db_path == "/tmp/usage.db"
+
 
 class TestEnvSettingsResolvedOnce:
     """Values are frozen at construction and malformed input degrades gracefully."""

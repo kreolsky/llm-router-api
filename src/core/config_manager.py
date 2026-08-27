@@ -196,6 +196,7 @@ class ConfigManager:
         settings["default_stt_model"] = os.getenv("DEFAULT_STT_MODEL", "stt/dummy")
         settings["model_cache_enabled"] = _env_bool("MODEL_CACHE_ENABLED", True)
         settings["model_cache_path"] = os.getenv("MODEL_CACHE_PATH", "data/model_cache.json")
+        settings["usage_db_path"] = os.getenv("USAGE_DB_PATH", "data/usage.db")
         # Optional key protecting the /stat/api/* JSON endpoints (X-Stat-Key
         # header). Empty (unset) keeps the stats API open as before.
         settings["stat_api_key"] = os.getenv("STAT_API_KEY", "")
