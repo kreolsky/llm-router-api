@@ -7,8 +7,28 @@ instead of JSON, maintaining all functionality while reducing complexity.
 
 import logging
 import os
+from logging.handlers import RotatingFileHandler
 
 from ...utils.unicode import decode_unicode_escapes
+
+# WHY: plain FileHandler grows without bound. debug.log carries full request and
+# response bodies, so on a busy router it fills the disk — and the disk it fills
+# is the one holding data/usage.db. Sizes are env-tunable per deployment.
+_DEFAULT_MAX_BYTES = 50 * 1024 * 1024
+_DEFAULT_BACKUP_COUNT = 3
+
+
+def _rotating_handler(path: str, level: int, formatter: logging.Formatter) -> RotatingFileHandler:
+    """Build a size-rotating file handler (LOG_MAX_BYTES / LOG_BACKUP_COUNT)."""
+    handler = RotatingFileHandler(
+        path,
+        maxBytes=int(os.environ.get("LOG_MAX_BYTES", _DEFAULT_MAX_BYTES)),
+        backupCount=int(os.environ.get("LOG_BACKUP_COUNT", _DEFAULT_BACKUP_COUNT)),
+        encoding="utf-8",
+    )
+    handler.setFormatter(formatter)
+    handler.setLevel(level)
+    return handler
 
 
 class UnicodeFormatter(logging.Formatter):
@@ -41,16 +61,14 @@ def setup_logging():
         datefmt="%Y-%m-%dT%H:%M:%S%z"
     )
 
-    file_handler = logging.FileHandler(os.path.join(LOG_DIR, "app.log"))
-    file_handler.setFormatter(formatter)
-    file_handler.setLevel(logging.INFO)
-    logger.addHandler(file_handler)
+    logger.addHandler(
+        _rotating_handler(os.path.join(LOG_DIR, "app.log"), logging.INFO, formatter)
+    )
 
     if log_level == "DEBUG":
-        debug_handler = logging.FileHandler(os.path.join(LOG_DIR, "debug.log"))
-        debug_handler.setFormatter(formatter)
-        debug_handler.setLevel(logging.DEBUG)
-        logger.addHandler(debug_handler)
+        logger.addHandler(
+            _rotating_handler(os.path.join(LOG_DIR, "debug.log"), logging.DEBUG, formatter)
+        )
 
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
