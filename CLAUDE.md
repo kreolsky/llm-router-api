@@ -26,7 +26,7 @@ OpenAI-compatible API gateway for multiple LLM providers. Routes requests to Ope
 
 **Startup Validation**: Eager fail-fast — on startup every configured provider is instantiated (validating `base_url` + env API key). Any failure (collected, all reported) refuses to start.
 
-**Request Context**: A typed `RequestContext` (`request_id`, `project_name`) frozen dataclass is stored on `request.state.request_context` by middleware and rebuilt by auth (to attach `project_name`). Services read it via `BaseService._get_request_context(request)` — no raw `request.state.request_id`/`project_name` keys.
+**Request Context**: A typed `RequestContext` (`request_id`, `project_name`) frozen dataclass is stored on `request.state.request_context` by middleware and rebuilt by auth (to attach `project_name`). `core.context.request_context(request)` is the single accessor (services reach it via `BaseService._get_request_context`), and it returns the dataclass — no raw `request.state.request_id`/`project_name` keys, and no dict-shaped copy of the context.
 
 **Configuration (YAML)**: Three files in `config/` — `providers.yaml` (connections), `models.yaml` (model registry), `user_keys.yaml` (API key access control). Hot-reloaded via background task.
 

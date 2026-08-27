@@ -76,7 +76,7 @@ If `plan_lines / implementation_lines > 2`, the plan is bloated. Cut it.
 * Services validate access BEFORE checking model existence (prevents info leakage).
 * Services orchestrate: validate → resolve provider → call provider → return response.
 * No direct HTTP calls from services — always go through providers (ModelService enrichment uses `provider.list_models()`/`provider.get_model()`).
-* Request context is read from the typed `RequestContext` on `request.state.request_context`, never raw `request.state.request_id`/`project_name`.
+* Request context is read via `core.context.request_context(request)`, which returns the typed `RequestContext`. Never read raw `request.state.request_id`/`project_name`, and never re-shape the context into a dict.
 * Streaming responses must use `StreamingResponse` with the service's async generator.
 
 ## Logging Convention

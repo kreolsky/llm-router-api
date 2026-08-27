@@ -25,9 +25,9 @@ class ChatService(BaseService):
     
     async def chat_completions(self, request: Request, auth_data: Tuple[str, str, list, list]) -> Any:
         """Process a chat completion request, returning StreamingResponse or JSONResponse."""
-        context_dict = self._get_request_context(request)
-        request_id = context_dict["request_id"]
-        user_id = context_dict["user_id"]
+        ctx = self._get_request_context(request)
+        request_id = ctx.request_id
+        user_id = ctx.user_id
 
         start_time = time.time()
 

@@ -27,3 +27,21 @@ class RequestContext:
         """Return a copy with project_name set."""
         return replace(self, project_name=project_name)
 
+
+# INVARIANT: the single way to read the context off a request. Routes and
+# services used to each carry their own accessor (one returning the dataclass,
+# one a plain dict), which is how the typed context leaked back into strings.
+_UNKNOWN = RequestContext(request_id="unknown")
+
+
+def request_context(request: Optional[object]) -> RequestContext:
+    """Read the RequestContext set by middleware, or an 'unknown' placeholder.
+
+    Tolerates a missing request and a request that never passed through the
+    middleware (unit tests, ASGI lifespan), so callers never branch on it.
+    """
+    if request is None:
+        return _UNKNOWN
+    ctx = getattr(getattr(request, "state", None), "request_context", None)
+    return ctx if isinstance(ctx, RequestContext) else _UNKNOWN
+

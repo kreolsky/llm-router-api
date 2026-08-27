@@ -59,29 +59,44 @@ class TestGetRequestContext:
         svc = _build_service()
         request = _make_request("req-42", project_name="my-project")
         ctx = svc._get_request_context(request)
-        assert ctx["request_id"] == "req-42"
-        assert ctx["user_id"] == "my-project"
+        assert ctx.request_id == "req-42"
+        assert ctx.user_id == "my-project"
 
     def test_without_request_returns_unknown(self):
         """Without request, request_id is 'unknown'."""
         svc = _build_service()
         ctx = svc._get_request_context(None)
-        assert ctx["request_id"] == "unknown"
-        assert ctx["user_id"] == "unknown"
+        assert ctx.request_id == "unknown"
+        assert ctx.user_id == "unknown"
 
     def test_extracts_user_id_from_project_name(self):
         """user_id matches the project_name from the typed context."""
         svc = _build_service()
         request = _make_request("req-1", project_name="acme-corp")
         ctx = svc._get_request_context(request)
-        assert ctx["user_id"] == "acme-corp"
+        assert ctx.user_id == "acme-corp"
 
     def test_user_id_unknown_when_project_name_none(self):
         """user_id is 'unknown' when project_name is not yet set."""
         svc = _build_service()
         request = _make_request("req-1", project_name=None)
         ctx = svc._get_request_context(request)
-        assert ctx["user_id"] == "unknown"
+        assert ctx.user_id == "unknown"
+
+    def test_returns_typed_context(self):
+        """The accessor returns the dataclass, not a stringly-typed dict."""
+        svc = _build_service()
+        ctx = svc._get_request_context(_make_request("req-9", project_name="p"))
+        assert isinstance(ctx, RequestContext)
+
+    def test_request_without_middleware_context(self):
+        """A request that never passed through the middleware degrades to 'unknown'."""
+        svc = _build_service()
+        request = MagicMock()
+        request.state = SimpleNamespace()
+        ctx = svc._get_request_context(request)
+        assert ctx.request_id == "unknown"
+        assert ctx.user_id == "unknown"
 
 
 # ===================================================================

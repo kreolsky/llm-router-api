@@ -31,9 +31,9 @@ class TranscriptionService(BaseService):
         return_timestamps: bool = False,
     ) -> Any:
         """Create a transcription from an audio file using the specified or default model."""
-        context_dict = self._get_request_context(request)
-        request_id = context_dict["request_id"]
-        user_id = context_dict["user_id"]
+        ctx = self._get_request_context(request)
+        request_id = ctx.request_id
+        user_id = ctx.user_id
 
         audio_data = await audio_file.read()
 

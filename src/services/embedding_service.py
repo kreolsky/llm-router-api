@@ -15,9 +15,9 @@ class EmbeddingService(BaseService):
 
     async def create_embeddings(self, request: Request, auth_data: Tuple[str, str, list, list]) -> Any:
         """Validate, dispatch, and return an embedding creation request."""
-        context_dict = self._get_request_context(request)
-        request_id = context_dict["request_id"]
-        user_id = context_dict["user_id"]
+        ctx = self._get_request_context(request)
+        request_id = ctx.request_id
+        user_id = ctx.user_id
         
         try:
             request_body = await request.json()

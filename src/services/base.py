@@ -5,7 +5,7 @@ from typing import Dict, Any, Optional, Tuple
 from fastapi import HTTPException, Request
 
 from ..core.config_manager import ConfigManager
-from ..core.context import RequestContext
+from ..core.context import RequestContext, request_context
 from ..core.opencode_identity import opencode_session_headers
 from ..core.identity_headers import compile_passthrough_spec, match_passthrough
 from ..providers import get_provider_instance
@@ -39,12 +39,9 @@ class BaseService:
                 **error_ctx,
             )
 
-    def _get_request_context(self, request: Optional[Request]) -> Dict[str, str]:
-        """Extract request_id and user_id from the typed RequestContext."""
-        ctx: Optional[RequestContext] = getattr(request.state, "request_context", None) if request else None
-        if ctx is not None:
-            return {"request_id": ctx.request_id, "user_id": ctx.user_id}
-        return {"request_id": "unknown", "user_id": "unknown"}
+    def _get_request_context(self, request: Optional[Request]) -> RequestContext:
+        """Return the typed RequestContext carried by the request."""
+        return request_context(request)
 
     def _extract_passthrough_headers(self, request: Optional[Request],
                                      spec: Optional[Any] = None) -> Dict[str, str]:
@@ -81,8 +78,8 @@ class BaseService:
         if identity == "passthrough":
             return passthrough or None
         if identity == "opencode":
-            ctx: Optional[RequestContext] = getattr(request.state, "request_context", None) if request else None
-            registry_key = f"{getattr(provider_instance, 'provider_name', 'unknown')}:{ctx.project_name if ctx else None}"
+            ctx = request_context(request)
+            registry_key = f"{getattr(provider_instance, 'provider_name', 'unknown')}:{ctx.project_name}"
             synthetic = opencode_session_headers(registry_key, self.config_manager.opencode_session_ttl)
             return {**synthetic, **passthrough}
         return None

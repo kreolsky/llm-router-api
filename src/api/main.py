@@ -10,7 +10,7 @@ from typing import Dict, Any
 
 from ..core.config_manager import ConfigManager
 from ..core.auth import get_api_key, check_endpoint_access
-from ..core.context import RequestContext
+from ..core.context import request_context
 from ..core.error_handling import ErrorType, create_error
 from ..core.model_capabilities import CapabilitiesCache, capabilities_refresh_loop
 from ..services.chat_service.chat_service import ChatService
@@ -25,14 +25,6 @@ from .middleware import RequestLoggerMiddleware
 
 def _client_host(request: Request) -> str:
     return request.client.host if request.client else "unknown"
-
-
-# Strong references for in-flight reload-rebuild tasks (prevents GC before completion).
-
-
-def _request_context(request: Request) -> RequestContext:
-    """Read the typed RequestContext set by middleware/auth."""
-    return getattr(request.state, "request_context", None) or RequestContext(request_id="unknown")
 
 
 async def _validate_providers(config_manager: ConfigManager) -> None:
@@ -156,7 +148,7 @@ async def create_transcription(
     return_timestamps: Optional[bool] = Form(False),
     auth_data: tuple = Depends(check_endpoint_access("/v1/audio/transcriptions"))
 ):
-    ctx = _request_context(request)
+    ctx = request_context(request)
     request_id = ctx.request_id
     user_id = ctx.user_id
 
@@ -202,7 +194,7 @@ async def generate_key_endpoint(
     request: Request,
     auth_data: tuple = Depends(check_endpoint_access("/tools/generate_key"))
 ):
-    ctx = _request_context(request)
+    ctx = request_context(request)
     request_id = ctx.request_id
     user_id = ctx.user_id
 
