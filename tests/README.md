@@ -27,9 +27,16 @@ tests/
 ## Run
 
 ```bash
-python -m pytest tests/unit/ -v   # unit tests (fast, no service needed)
-python -m pytest tests/api/ -v    # integration tests (service on localhost:8777)
-python -m pytest tests/ -v        # all
+# One-time: a project venv matching requirements.txt. Do not rely on a shared
+# interpreter — a stale httpx there fails tests over features Docker has.
+python -m venv .venv
+.venv/bin/pip install -r requirements.txt -r requirements-dev.txt
+```
+
+```bash
+.venv/bin/python -m pytest tests/unit/ -v   # unit tests (fast, no service needed)
+.venv/bin/python -m pytest tests/api/ -v    # integration tests (service on localhost:8777)
+.venv/bin/python -m pytest tests/ -v        # all
 ```
 
 ## Unit Tests

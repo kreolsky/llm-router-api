@@ -218,8 +218,15 @@ src/
 ## Tests
 
 ```bash
-python -m pytest tests/unit/ -v   # full unit test suite (fast, no service needed)
-python -m pytest tests/api/ -v    # integration tests (service on :8777)
+# One-time: a project venv matching requirements.txt. Do not rely on a shared
+# interpreter — a stale httpx there fails tests over features Docker has.
+python -m venv .venv
+.venv/bin/pip install -r requirements.txt -r requirements-dev.txt
+```
+
+```bash
+.venv/bin/python -m pytest tests/unit/ -v   # full unit suite (fast, no service needed)
+.venv/bin/python -m pytest tests/api/ -v    # integration tests (service on :8777)
 ```
 
 See [tests/README.md](tests/README.md) for details on what each test file covers.
