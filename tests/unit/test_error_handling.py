@@ -1,12 +1,12 @@
 """Unit tests for the error handling system (ErrorType, create_error)."""
 
-import pytest
 from unittest.mock import patch
+
+import pytest
 from fastapi import HTTPException
 
-from src.core.error_handling.error_types import ErrorType
 from src.core.error_handling.error_handler import create_error
-
+from src.core.error_handling.error_types import ErrorType
 
 # ---------------------------------------------------------------------------
 # ErrorType enum

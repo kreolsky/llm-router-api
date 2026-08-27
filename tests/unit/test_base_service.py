@@ -2,16 +2,14 @@
 
 import re
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
+from src.core.context import RequestContext
 from src.core.identity_headers import compile_passthrough_spec
 from src.services.base import BaseService
-from src.core.context import RequestContext
-from src.core.error_handling import ErrorType, create_error
-
 
 # ---------------------------------------------------------------------------
 # Helpers

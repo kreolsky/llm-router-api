@@ -1,6 +1,6 @@
 """Embedding creation service proxying requests to configured providers."""
 import json
-from typing import Any, Tuple
+from typing import Any
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -13,7 +13,7 @@ from .base import BaseService
 
 class EmbeddingService(BaseService):
 
-    async def create_embeddings(self, request: Request, auth_data: Tuple[str, str, list, list]) -> Any:
+    async def create_embeddings(self, request: Request, auth_data: tuple[str, str, list, list]) -> Any:
         """Validate, dispatch, and return an embedding creation request."""
         ctx = self._get_request_context(request)
         request_id = ctx.request_id

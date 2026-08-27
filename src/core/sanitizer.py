@@ -1,7 +1,7 @@
 """Message sanitization to strip non-standard fields that break strict providers."""
 # SYSTEM: sanitizer — strips non-standard message/chunk fields
 
-from typing import Dict, Any, List, Tuple
+from typing import Any
 
 from .logging import logger
 
@@ -12,7 +12,7 @@ class MessageSanitizer:
     SERVICE_FIELDS = ['done', '__stream_end__', '__internal__', 'stream_end']
     
     @classmethod
-    def sanitize_messages(cls, messages: List[Dict[str, Any]], enabled: bool = True) -> List[Dict[str, Any]]:
+    def sanitize_messages(cls, messages: list[dict[str, Any]], enabled: bool = True) -> list[dict[str, Any]]:
         """Remove SERVICE_FIELDS from each message dict when sanitization is enabled."""
         if not enabled:
             logger.debug("Message sanitization is disabled")
@@ -43,7 +43,7 @@ class MessageSanitizer:
         return sanitized
     
     @classmethod
-    def sanitize_stream_chunk(cls, chunk: Dict[str, Any], enabled: bool = True) -> Dict[str, Any]:
+    def sanitize_stream_chunk(cls, chunk: dict[str, Any], enabled: bool = True) -> dict[str, Any]:
         """Remove SERVICE_FIELDS from a streaming chunk when enabled.
 
         _sanitize_dict already rebuilds every nested dict and list it walks, so
@@ -68,7 +68,7 @@ class MessageSanitizer:
         return clean_chunk
 
     @classmethod
-    def _sanitize_dict(cls, data: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
+    def _sanitize_dict(cls, data: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
         """Recursively remove SERVICE_FIELDS from a dict, returning (cleaned, removed_list)."""
         if not isinstance(data, dict):
             return data, []

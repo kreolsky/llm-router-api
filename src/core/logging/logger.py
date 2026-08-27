@@ -6,9 +6,10 @@ effective debugging capabilities when LOG_LEVEL=DEBUG.
 """
 # SYSTEM: logging — the kwargs-style Logger used everywhere
 
-import logging
 import json
-from typing import Dict, Any, Optional, Tuple
+import logging
+from typing import Any
+
 from .config import setup_logging
 
 
@@ -26,7 +27,7 @@ class Logger:
     def is_debug_enabled(self) -> bool:
         return self._logger.isEnabledFor(logging.DEBUG)
 
-    def _process_kwargs(self, kwargs: Dict[str, Any]) -> Tuple[Dict[str, Any], Any]:
+    def _process_kwargs(self, kwargs: dict[str, Any]) -> tuple[dict[str, Any], Any]:
         """Extract extra/exc_info from kwargs and prefix reserved logging keys with ctx_.
 
         The stdlib logging module reserves certain keys in the extra dict (e.g. 'args',

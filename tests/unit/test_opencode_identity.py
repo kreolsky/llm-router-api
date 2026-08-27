@@ -2,8 +2,6 @@
 
 import re
 
-import pytest
-
 from src.core.opencode_identity import (
     SessionRegistry,
     new_session_id,

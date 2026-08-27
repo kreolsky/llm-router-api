@@ -1,10 +1,9 @@
 """Header masking helpers for safe debug logging."""
-from typing import Dict
 
 _SENSITIVE_HEADERS = {"authorization", "x-api-key", "api-key"}
 
 
-def mask_headers(headers: Dict[str, str]) -> Dict[str, str]:
+def mask_headers(headers: dict[str, str]) -> dict[str, str]:
     """Return a copy of headers with sensitive values masked.
 
     Sensitive headers (case-insensitive: Authorization, x-api-key, api-key)

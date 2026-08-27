@@ -11,11 +11,11 @@ rows do not drift when tariffs change.
 """
 # SYSTEM: usage-stats — SQLite per-request usage rows and cost freezing
 
+import asyncio
 import os
 import time
-import asyncio
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import aiosqlite
 
@@ -43,7 +43,7 @@ _ERR_SQL = "(status_code >= 400 OR error_code IS NOT NULL)"
 
 # Additive migration: columns added by the usage-stats redesign, applied over
 # an existing DB via ALTER TABLE (driven by PRAGMA table_info in init_db).
-_MIGRATIONS: Dict[str, str] = {
+_MIGRATIONS: dict[str, str] = {
     "error_code": "TEXT",
     "error_message": "TEXT",
     "api_key_hash": "TEXT",
@@ -82,11 +82,11 @@ class RequestStats:
     cached_tokens: int = 0
     reasoning_tokens: int = 0
     total_tokens: int = 0
-    error_code: Optional[str] = None
-    error_message: Optional[str] = None
-    api_key_hash: Optional[str] = None
+    error_code: str | None = None
+    error_message: str | None = None
+    api_key_hash: str | None = None
 
-    def set_usage(self, usage: Dict[str, Any]) -> None:
+    def set_usage(self, usage: dict[str, Any]) -> None:
         """Single token-extraction point for the provider usage shape.
 
         The only place that reads ``prompt_tokens_details.cached_tokens`` and
@@ -103,7 +103,7 @@ class RequestStats:
         self.has_usage = True
 
 
-def request_stats(request: Optional[object]) -> RequestStats:
+def request_stats(request: object | None) -> RequestStats:
     """Read the RequestStats set by middleware, or a fresh throwaway holder.
 
     Tolerates a missing request and a request that never passed through the
@@ -134,7 +134,7 @@ async def init_db() -> None:
     # failure is swallowed by _flush_row, so usage events would vanish in
     # silence.
     await _connection.execute("PRAGMA busy_timeout=5000")
-    await _connection.execute(f"""
+    await _connection.execute("""
         CREATE TABLE IF NOT EXISTS usage_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             request_id TEXT NOT NULL,
@@ -181,7 +181,7 @@ async def close_db() -> None:
         _connection = None
 
 
-def get_connection() -> Optional[aiosqlite.Connection]:
+def get_connection() -> aiosqlite.Connection | None:
     return _connection
 
 
@@ -193,7 +193,7 @@ def get_connection() -> Optional[aiosqlite.Connection]:
 # model_info.yaml is hand-curated — a "per 1M tokens" value would silently
 # inflate every recorded cost by 10^6, and costs are frozen at write time so
 # the error would be invisible and permanent. Pinned by tests.
-def _compute_cost_usd(stats: RequestStats, app_state: Optional[Any]) -> Optional[float]:
+def _compute_cost_usd(stats: RequestStats, app_state: Any | None) -> float | None:
     """Write-time cost from merged capabilities pricing; None when unpriced.
 
     (prompt - cached) * prompt + cached * input_cache_read + completion * completion.
@@ -231,7 +231,7 @@ async def _flush_row(
     project_name: str,
     duration_ms: float,
     status_code: int,
-    app_state: Optional[Any],
+    app_state: Any | None,
 ) -> None:
     """Insert the single usage_events row for a finished request.
 
@@ -326,8 +326,8 @@ def schedule_flush(
     project_name: str,
     duration_ms: float,
     status_code: int,
-    app_state: Optional[Any],
-) -> Optional[asyncio.Task]:
+    app_state: Any | None,
+) -> asyncio.Task | None:
     """Fire-and-forget single-row flush (tracked in _usage_tasks).
 
     Returns the created task, or None when no event loop is running. Flush
@@ -356,11 +356,11 @@ def schedule_flush(
 # ---------------------------------------------------------------------------
 
 def _filter_where(
-    users: List[str],
-    models: List[str],
-    days: Optional[int],
-    extra_conditions: Optional[List[str]] = None,
-    extra_params: Optional[list] = None,
+    users: list[str],
+    models: list[str],
+    days: int | None,
+    extra_conditions: list[str] | None = None,
+    extra_params: list | None = None,
 ) -> tuple[str, list]:
     """Build the shared WHERE clause (users/models/days + extras)."""
     conditions = list(extra_conditions or [])
@@ -384,7 +384,7 @@ def _filter_where(
     return where, params
 
 
-async def get_distinct_users() -> List[str]:
+async def get_distinct_users() -> list[str]:
     conn = get_connection()
     if conn is None:
         return []
@@ -395,7 +395,7 @@ async def get_distinct_users() -> List[str]:
     return [r[0] for r in rows]
 
 
-async def get_distinct_models() -> List[str]:
+async def get_distinct_models() -> list[str]:
     conn = get_connection()
     if conn is None:
         return []
@@ -407,9 +407,9 @@ async def get_distinct_models() -> List[str]:
 
 
 async def get_usage_data(
-    users: List[str],
-    models: List[str],
-    days: Optional[int],
+    users: list[str],
+    models: list[str],
+    days: int | None,
 ) -> dict:
     conn = get_connection()
     if conn is None:
@@ -507,7 +507,7 @@ def _empty_summary() -> dict:
     }
 
 
-async def get_summary(users: List[str], models: List[str], days: Optional[int]) -> dict:
+async def get_summary(users: list[str], models: list[str], days: int | None) -> dict:
     """Totals plus breakdowns for the dashboard.
 
     cache_hit_rate = Σcached / Σprompt; rows with has_usage = 0 contribute 0
@@ -542,7 +542,7 @@ async def get_summary(users: List[str], models: List[str], days: Optional[int]) 
     reasoning = reasoning or 0
     total = total or 0
 
-    async def _breakdown(dimension: str, label: str) -> List[dict]:
+    async def _breakdown(dimension: str, label: str) -> list[dict]:
         cursor = await conn.execute(f"""
             SELECT {dimension} AS dim,
                    COUNT(*),
@@ -626,13 +626,13 @@ async def get_summary(users: List[str], models: List[str], days: Optional[int]) 
 
 
 async def get_requests(
-    users: List[str],
-    models: List[str],
-    providers: List[str],
+    users: list[str],
+    models: list[str],
+    providers: list[str],
     status: str,
     error_code: str,
     request_id: str,
-    days: Optional[int],
+    days: int | None,
     limit: int = 50,
     offset: int = 0,
 ) -> dict:
@@ -641,7 +641,7 @@ async def get_requests(
     if conn is None:
         return {"requests": [], "total": 0}
 
-    conditions: List[str] = []
+    conditions: list[str] = []
     params: list = []
 
     if status == "ok":

@@ -1,7 +1,8 @@
 """Standardized error types for the LLM Router."""
 
 from enum import Enum
-from typing import Dict, Any, Optional
+from typing import Any
+
 from fastapi import status
 
 
@@ -34,7 +35,7 @@ class ErrorType(Enum):
     SERVICE_UNAVAILABLE = ("service_unavailable", status.HTTP_503_SERVICE_UNAVAILABLE, "Could not connect to service: {error_details}")
     PROVIDER_CONCURRENCY_LIMIT = ("provider_concurrency_limit", status.HTTP_503_SERVICE_UNAVAILABLE, "Concurrency limit reached for provider '{provider_name}'; retry later.")
 
-    def __init__(self, code: str, status_code: Optional[int], message_template: str):
+    def __init__(self, code: str, status_code: int | None, message_template: str):
         self.code = code
         self.status_code = status_code
         self.message_template = message_template
@@ -46,14 +47,14 @@ class ErrorType(Enum):
         except KeyError:
             return self.message_template
 
-    def create_error_detail(self, **kwargs) -> Dict[str, Any]:
+    def create_error_detail(self, **kwargs) -> dict[str, Any]:
         """Create standardized error detail dictionary in OpenRouter format.
 
         metadata.error_code (the string classification) is always emitted:
         the numeric error.code carries the HTTP status, and consumers such as
         the usage-stats enrichment read the class from metadata.error_code.
         """
-        metadata: Dict[str, Any] = {"error_code": self.code}
+        metadata: dict[str, Any] = {"error_code": self.code}
         if kwargs.get("provider_name"):
             metadata["provider_name"] = kwargs["provider_name"]
         return {

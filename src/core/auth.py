@@ -2,9 +2,10 @@
 # SYSTEM: auth — bearer/HMAC authentication and per-key model access control
 import hashlib
 import hmac
-from fastapi import Depends, Security, HTTPException, status, Request
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from typing import Dict, Any, Tuple, List
+
+from fastapi import Depends, Request, Security
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
 from .context import RequestContext
 from .error_handling import ErrorType, create_error
 from .logging import logger
@@ -15,7 +16,7 @@ bearer_scheme = HTTPBearer(auto_error=False)
 async def get_api_key(
     request: Request,
     credentials: HTTPAuthorizationCredentials = Security(bearer_scheme)
-) -> Tuple[str, str, List[str], List[str]]:
+) -> tuple[str, str, list[str], list[str]]:
     """Authenticate request and return (project_name, api_key, allowed_models, allowed_endpoints).
 
     Uses HTTPBearer scheme to extract token from Authorization header.
@@ -105,7 +106,7 @@ def check_endpoint_access(endpoint_path: str):
     """
     async def endpoint_checker(
         request: Request,
-        auth_data: Tuple[str, str, List[str], List[str]] = Depends(get_api_key)
+        auth_data: tuple[str, str, list[str], list[str]] = Depends(get_api_key)
     ):
         user_id, _, _, allowed_endpoints = auth_data
         

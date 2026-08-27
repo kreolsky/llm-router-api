@@ -2,6 +2,7 @@
 # SYSTEM: stat-dashboard — /stat/ usage page and its JSON endpoints
 
 import os
+
 from fastapi import Request
 from fastapi.responses import HTMLResponse
 

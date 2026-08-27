@@ -1,0 +1,25 @@
+# Ruff configuration. There is no packaging metadata here on purpose — the service is
+# deployed as a container that copies `src/`, not as an installable distribution.
+#
+# The rule set is explicit rather than inherited: `ruff check` with no config resolves a
+# moving default (526 findings on this tree at 0.16), so the set that CI and a developer
+# see would drift with the binary. `requirements-dev.txt` pins the version for the same
+# reason — a gate whose rules depend on who runs it is not a gate.
+#
+# Deliberately NOT selected:
+#   E501 — line length is not enforced; `line-length` below only shapes the formatter.
+#   G    — the logging rules assume stdlib `logging` %-formatting. This project uses its
+#          own kwargs-style Logger (`src/core/logging/logger.py`), where an f-string in
+#          the message is the intended call shape, so all 44 findings were false.
+#   S    — flake8-bandit flags every `assert` in `tests/` (1146 findings).
+#   TRY  — tryceratops fires mostly on the error envelope's deliberate re-raise shape.
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+exclude = [".venv", "data", "logs", ".kilo"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B", "SIM", "ASYNC", "C4"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]

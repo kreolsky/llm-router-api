@@ -3,15 +3,18 @@ Chat completion tests for NNP LLM Router API.
 Tests both streaming and non-streaming responses for all test models.
 """
 
-import pytest
-import httpx
-import json
-import time
 import asyncio
 import logging
+import time
+
+import httpx
+import pytest
+
 from tests.test_utils import (
-    TestTimer, StreamingResponseParser, ResponseValidator,
-    TestDataGenerator, calculate_ttft_metrics, assert_performance_thresholds
+    StreamingResponseParser,
+    TestTimer,
+    assert_performance_thresholds,
+    calculate_ttft_metrics,
 )
 
 logger = logging.getLogger(__name__)
@@ -115,17 +118,16 @@ class TestChatCompletions:
         
         start_time = time.time()
         
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            async with client.stream(
-                "POST",
-                f"{base_url}/v1/chat/completions",
-                headers={"Authorization": f"Bearer {api_keys['full_access']}", "Accept": "text/event-stream"},
-                json=payload
-            ) as response:
-                assert response.status_code == 200
-                
-                # Collect streaming data
-                stream_data = await StreamingResponseParser.collect_stream_content(response)
+        async with httpx.AsyncClient(timeout=30.0) as client, client.stream(
+            "POST",
+            f"{base_url}/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_keys['full_access']}", "Accept": "text/event-stream"},
+            json=payload
+        ) as response:
+            assert response.status_code == 200
+            
+            # Collect streaming data
+            stream_data = await StreamingResponseParser.collect_stream_content(response)
         
         end_time = time.time()
         total_time = end_time - start_time
@@ -574,25 +576,24 @@ class TestChatCompletions:
             "max_tokens": 30
         }
         
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            async with client.stream(
-                "POST",
-                f"{base_url}/v1/chat/completions",
-                headers={"Authorization": f"Bearer {api_keys['full_access']}", "Accept": "text/event-stream"},
-                json=payload
-            ) as response:
-                assert response.status_code == 200
-                
-                # Check response headers for streaming format
-                content_type = response.headers.get("content-type", "")
-                assert "text/event-stream" in content_type or "application/json" in content_type
-                
-                # Parse streaming response
-                stream_data = await StreamingResponseParser.collect_stream_content(response)
-                
-                # Should receive proper streaming format
-                assert stream_data["chunk_count"] > 0, "Should receive streaming chunks"
-                assert len(stream_data["content"]) > 0, "Should receive content"
+        async with httpx.AsyncClient(timeout=30.0) as client, client.stream(
+            "POST",
+            f"{base_url}/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_keys['full_access']}", "Accept": "text/event-stream"},
+            json=payload
+        ) as response:
+            assert response.status_code == 200
+            
+            # Check response headers for streaming format
+            content_type = response.headers.get("content-type", "")
+            assert "text/event-stream" in content_type or "application/json" in content_type
+            
+            # Parse streaming response
+            stream_data = await StreamingResponseParser.collect_stream_content(response)
+            
+            # Should receive proper streaming format
+            assert stream_data["chunk_count"] > 0, "Should receive streaming chunks"
+            assert len(stream_data["content"]) > 0, "Should receive content"
     
     @pytest.mark.asyncio
     async def test_chat_completion_response_consistency(
@@ -658,54 +659,53 @@ class TestChatCompletionStreamingSpecific:
             "max_tokens": 20
         }
         
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            async with client.stream(
-                "POST",
-                f"{base_url}/v1/chat/completions",
-                headers={"Authorization": f"Bearer {api_keys['full_access']}", "Accept": "text/event-stream"},
-                json=payload
-            ) as response:
-                assert response.status_code == 200
+        async with httpx.AsyncClient(timeout=30.0) as client, client.stream(
+            "POST",
+            f"{base_url}/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_keys['full_access']}", "Accept": "text/event-stream"},
+            json=payload
+        ) as response:
+            assert response.status_code == 200
+            
+            chunk_count = 0
+            async for chunk in StreamingResponseParser.parse_sse_stream(response):
+                chunk_count += 1
                 
-                chunk_count = 0
-                async for chunk in StreamingResponseParser.parse_sse_stream(response):
-                    chunk_count += 1
-                    
-                    # Verify chunk structure
-                    assert "id" in chunk
-                    assert "object" in chunk
-                    assert "created" in chunk
-                    assert "model" in chunk
-                    assert "choices" in chunk
-                    
-                    # Verify streaming-specific fields
-                    assert chunk["object"] == "chat.completion.chunk"
-                    assert isinstance(chunk["model"], str), "Model should be a string"
-                    
-                    # Verify choices structure
-                    choices = chunk["choices"]
-                    assert len(choices) > 0
-                    
-                    choice = choices[0]
-                    assert "index" in choice
-                    assert "delta" in choice
-                    
-                    # First chunk should have role in delta
-                    if chunk_count == 1:
-                        delta = choice["delta"]
-                        assert "role" in delta
-                        assert delta["role"] == "assistant"
-                    else:
-                        # Subsequent chunks should have content
-                        delta = choice["delta"]
-                        if "content" in delta:
-                            assert isinstance(delta["content"], str)
-                    
-                    # Break after a few chunks to avoid long test
-                    if chunk_count >= 5:
-                        break
+                # Verify chunk structure
+                assert "id" in chunk
+                assert "object" in chunk
+                assert "created" in chunk
+                assert "model" in chunk
+                assert "choices" in chunk
                 
-                assert chunk_count > 0, "Should receive at least one chunk"
+                # Verify streaming-specific fields
+                assert chunk["object"] == "chat.completion.chunk"
+                assert isinstance(chunk["model"], str), "Model should be a string"
+                
+                # Verify choices structure
+                choices = chunk["choices"]
+                assert len(choices) > 0
+                
+                choice = choices[0]
+                assert "index" in choice
+                assert "delta" in choice
+                
+                # First chunk should have role in delta
+                if chunk_count == 1:
+                    delta = choice["delta"]
+                    assert "role" in delta
+                    assert delta["role"] == "assistant"
+                else:
+                    # Subsequent chunks should have content
+                    delta = choice["delta"]
+                    if "content" in delta:
+                        assert isinstance(delta["content"], str)
+                
+                # Break after a few chunks to avoid long test
+                if chunk_count >= 5:
+                    break
+            
+            assert chunk_count > 0, "Should receive at least one chunk"
     
     @pytest.mark.asyncio
     async def test_streaming_finish_reasons(
@@ -727,22 +727,21 @@ class TestChatCompletionStreamingSpecific:
         
         finish_reasons = []
         
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            async with client.stream(
-                "POST",
-                f"{base_url}/v1/chat/completions",
-                headers={"Authorization": f"Bearer {api_keys['full_access']}", "Accept": "text/event-stream"},
-                json=payload
-            ) as response:
-                assert response.status_code == 200
-                
-                async for chunk in StreamingResponseParser.parse_sse_stream(response):
-                    choices = chunk["choices"]
-                    if choices:
-                        choice = choices[0]
-                        if "finish_reason" in choice and choice["finish_reason"] is not None:
-                            finish_reasons.append(choice["finish_reason"])
-                            break
+        async with httpx.AsyncClient(timeout=30.0) as client, client.stream(
+            "POST",
+            f"{base_url}/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_keys['full_access']}", "Accept": "text/event-stream"},
+            json=payload
+        ) as response:
+            assert response.status_code == 200
+            
+            async for chunk in StreamingResponseParser.parse_sse_stream(response):
+                choices = chunk["choices"]
+                if choices:
+                    choice = choices[0]
+                    if "finish_reason" in choice and choice["finish_reason"] is not None:
+                        finish_reasons.append(choice["finish_reason"])
+                        break
         
         # Should have a finish reason
         assert len(finish_reasons) > 0, "Should receive finish reason"
@@ -773,25 +772,24 @@ class TestChatCompletionStreamingSpecific:
         accumulated_content = ""
         chunk_contents = []
         
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            async with client.stream(
-                "POST",
-                f"{base_url}/v1/chat/completions",
-                headers={"Authorization": f"Bearer {api_keys['full_access']}", "Accept": "text/event-stream"},
-                json=payload
-            ) as response:
-                assert response.status_code == 200
-                
-                async for chunk in StreamingResponseParser.parse_sse_stream(response):
-                    choices = chunk["choices"]
-                    if choices:
-                        choice = choices[0]
-                        delta = choice["delta"]
-                        
-                        if "content" in delta and delta["content"] is not None:
-                            content = delta["content"]
-                            chunk_contents.append(content)
-                            accumulated_content += content
+        async with httpx.AsyncClient(timeout=30.0) as client, client.stream(
+            "POST",
+            f"{base_url}/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_keys['full_access']}", "Accept": "text/event-stream"},
+            json=payload
+        ) as response:
+            assert response.status_code == 200
+            
+            async for chunk in StreamingResponseParser.parse_sse_stream(response):
+                choices = chunk["choices"]
+                if choices:
+                    choice = choices[0]
+                    delta = choice["delta"]
+                    
+                    if "content" in delta and delta["content"] is not None:
+                        content = delta["content"]
+                        chunk_contents.append(content)
+                        accumulated_content += content
         
         # Verify content accumulation
         assert len(accumulated_content) > 0, "Should accumulate content"

@@ -22,10 +22,10 @@ import os
 import tempfile
 import time
 from decimal import Decimal, InvalidOperation
-from typing import Any, Dict, Optional
+from typing import Any
 
-from .logging import logger
 from ..providers import get_provider_instance
+from .logging import logger
 
 # Full set of OpenRouter pricing keys emitted in responses; missing -> "0".
 _PRICING_KEYS = (
@@ -60,9 +60,9 @@ def _format_price(value: Any) -> str:
     return s if s else "0"
 
 
-def _render_pricing(pricing: Dict[str, Any]) -> Dict[str, str]:
+def _render_pricing(pricing: dict[str, Any]) -> dict[str, str]:
     """Render a stored pricing dict (numbers) into the full OpenRouter key set (strings)."""
-    result: Dict[str, str] = {}
+    result: dict[str, str] = {}
     for key in _PRICING_KEYS:
         result[key] = _format_price(pricing.get(key, 0))
     return result
@@ -77,7 +77,7 @@ def _build_modality(input_modalities, output_modalities) -> str:
     return inp or out or ""
 
 
-def render_capabilities(stored: Dict[str, Any]) -> Dict[str, Any]:
+def render_capabilities(stored: dict[str, Any]) -> dict[str, Any]:
     """Serialize the STORED capability form into the response shape.
 
     Single source of truth for all derived fields:
@@ -107,7 +107,7 @@ def render_capabilities(stored: Dict[str, Any]) -> Dict[str, Any]:
         out["supports_vision"] = "image" in in_mods
 
     # top_provider mirrors the flat fields (OpenRouter canonical location).
-    top_provider: Dict[str, Any] = {}
+    top_provider: dict[str, Any] = {}
     if out.get("context_length") is not None:
         top_provider["context_length"] = out["context_length"]
     if out.get("max_completion_tokens") is not None:
@@ -129,14 +129,14 @@ def render_capabilities(stored: Dict[str, Any]) -> Dict[str, Any]:
 # Merge (cache + manual override)
 # ---------------------------------------------------------------------------
 
-def merge_capabilities(base: Optional[Dict[str, Any]], override: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def merge_capabilities(base: dict[str, Any] | None, override: dict[str, Any] | None) -> dict[str, Any]:
     """Deep-merge two STORED-form dicts where ``override`` wins.
 
     Nested dicts recurse; lists and scalars are *replaced* by override (NOT
     concatenated — contrast with utils.deep_merge). This lets a manual
     ``architecture.input_modalities`` override the cache without duplication.
     """
-    result: Dict[str, Any] = dict(base) if isinstance(base, dict) else {}
+    result: dict[str, Any] = dict(base) if isinstance(base, dict) else {}
     for key, value in (override or {}).items():
         if isinstance(value, dict) and isinstance(result.get(key), dict):
             result[key] = merge_capabilities(result[key], value)
@@ -157,7 +157,7 @@ def _parse_price(value: Any) -> float:
         return 0.0
 
 
-def _is_openrouter_shape(raw: Dict[str, Any]) -> bool:
+def _is_openrouter_shape(raw: dict[str, Any]) -> bool:
     """Detect an OpenRouter /models entry (rich metadata)."""
     return (
         isinstance(raw.get("context_length"), int)
@@ -167,7 +167,7 @@ def _is_openrouter_shape(raw: Dict[str, Any]) -> bool:
     )
 
 
-def _has_llama_server_meta(raw: Dict[str, Any]) -> bool:
+def _has_llama_server_meta(raw: dict[str, Any]) -> bool:
     """Detect a llama-server /models entry (meta.n_ctx / n_ctx_train, or capabilities)."""
     meta = raw.get("meta")
     if isinstance(meta, dict) and (
@@ -177,9 +177,9 @@ def _has_llama_server_meta(raw: Dict[str, Any]) -> bool:
     return isinstance(raw.get("capabilities"), list)
 
 
-def _normalize_openrouter(raw: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_openrouter(raw: dict[str, Any]) -> dict[str, Any]:
     """Normalize an OpenRouter /models entry into the STORED form."""
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     if isinstance(raw.get("context_length"), int):
         out["context_length"] = raw["context_length"]
 
@@ -193,7 +193,7 @@ def _normalize_openrouter(raw: Dict[str, Any]) -> Dict[str, Any]:
 
     arch = raw.get("architecture")
     if isinstance(arch, dict):
-        new_arch: Dict[str, Any] = {}
+        new_arch: dict[str, Any] = {}
         if arch.get("input_modalities"):
             new_arch["input_modalities"] = list(arch["input_modalities"])
         if arch.get("output_modalities"):
@@ -210,7 +210,7 @@ def _normalize_openrouter(raw: Dict[str, Any]) -> Dict[str, Any]:
 
     pricing = raw.get("pricing")
     if isinstance(pricing, dict):
-        new_pricing: Dict[str, float] = {}
+        new_pricing: dict[str, float] = {}
         for key in _PRICING_KEYS:
             if pricing.get(key) is not None:
                 new_pricing[key] = _parse_price(pricing[key])
@@ -224,7 +224,7 @@ def _normalize_openrouter(raw: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def _normalize_llama_server(raw: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_llama_server(raw: dict[str, Any]) -> dict[str, Any]:
     """Normalize a llama-server /models entry into the STORED form.
 
     Reads context from meta.n_ctx (the runtime window) falling back to
@@ -232,7 +232,7 @@ def _normalize_llama_server(raw: Dict[str, Any]) -> Dict[str, Any]:
     lists "multimodal" when an mmproj is loaded). The non-standard /props
     endpoint (modalities.video/audio) is not scraped — /models is enough.
     """
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     meta = raw.get("meta") or {}
     n_ctx = meta.get("n_ctx")
     if isinstance(n_ctx, int):
@@ -249,7 +249,7 @@ def _normalize_llama_server(raw: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def normalize_provider_model(raw: Dict[str, Any]) -> Dict[str, Any]:
+def normalize_provider_model(raw: dict[str, Any]) -> dict[str, Any]:
     """Normalize a raw upstream /models entry into the STORED schema.
 
     Dispatches on response SHAPE (not provider name) so any OpenAI-compatible
@@ -284,12 +284,12 @@ class CapabilitiesCache:
 
     def __init__(self, path: str = "data/model_cache.json"):
         self._path = path
-        self._data: Dict[str, Dict[str, Any]] = {}
+        self._data: dict[str, dict[str, Any]] = {}
 
     def load(self) -> None:
         """Read the cache from disk; ignore missing or corrupt files."""
         try:
-            with open(self._path, "r") as f:
+            with open(self._path) as f:
                 raw = json.load(f)
         except FileNotFoundError:
             return
@@ -301,7 +301,7 @@ class CapabilitiesCache:
             return
         if not isinstance(raw, dict):
             return
-        cleaned: Dict[str, Dict[str, Any]] = {}
+        cleaned: dict[str, dict[str, Any]] = {}
         for model_id, entry in raw.items():
             if isinstance(entry, dict) and isinstance(entry.get("data"), dict):
                 cleaned[model_id] = entry
@@ -311,19 +311,19 @@ class CapabilitiesCache:
             extra={"config": {"model_cache_entries": len(cleaned)}},
         )
 
-    def get(self, model_id: str) -> Optional[Dict[str, Any]]:
+    def get(self, model_id: str) -> dict[str, Any] | None:
         """Return the STORED-form data for a model, or None if absent."""
         entry = self._data.get(model_id)
         return None if entry is None else entry.get("data")
 
-    def get_meta(self, model_id: str) -> Optional[Dict[str, Any]]:
+    def get_meta(self, model_id: str) -> dict[str, Any] | None:
         """Return provenance (source, fetched_at) for a model, or None."""
         entry = self._data.get(model_id)
         if entry is None:
             return None
         return {"source": entry.get("source"), "fetched_at": entry.get("fetched_at")}
 
-    def upsert(self, model_id: str, data: Dict[str, Any], source: str) -> None:
+    def upsert(self, model_id: str, data: dict[str, Any], source: str) -> None:
         """Insert/replace a model's stored capabilities with a fresh timestamp."""
         self._data[model_id] = {
             "data": data or {},
@@ -363,7 +363,7 @@ async def refresh_provider_capabilities(
     config_manager,
     cache: CapabilitiesCache,
     provider_name: str,
-    models_config: Optional[Dict[str, Any]] = None,
+    models_config: dict[str, Any] | None = None,
 ) -> None:
     """Refresh capabilities for every model_id backed by ``provider_name``.
 
@@ -404,7 +404,7 @@ async def refresh_provider_capabilities(
     # array; the OpenAI-compatible "data" array has meta.n_ctx but not
     # capabilities. Merge them (keyed by name/id/path) so the normalizer sees
     # both context and vision from one entry.
-    native_caps: Dict[str, Any] = {}
+    native_caps: dict[str, Any] = {}
     for n in (models_data.get("models") or []):
         if isinstance(n, dict) and isinstance(n.get("capabilities"), list):
             for key in ("model", "name", "id"):
@@ -416,7 +416,7 @@ async def refresh_provider_capabilities(
             if caps:
                 m["capabilities"] = caps
 
-    raw_by_id: Dict[str, Dict[str, Any]] = {}
+    raw_by_id: dict[str, dict[str, Any]] = {}
     for model in models_list:
         if model.get("id"):
             raw_by_id[model["id"]] = model

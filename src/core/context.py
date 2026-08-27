@@ -6,7 +6,6 @@ without mutating the middleware-created instance.
 """
 # SYSTEM: request-context — the typed RequestContext carried per request
 from dataclasses import dataclass, replace
-from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -17,7 +16,7 @@ class RequestContext:
     project_name: resolved by auth from the API key (None until authenticated).
     """
     request_id: str
-    project_name: Optional[str] = None
+    project_name: str | None = None
 
     @property
     def user_id(self) -> str:
@@ -35,7 +34,7 @@ class RequestContext:
 _UNKNOWN = RequestContext(request_id="unknown")
 
 
-def request_context(request: Optional[object]) -> RequestContext:
+def request_context(request: object | None) -> RequestContext:
     """Read the RequestContext set by middleware, or an 'unknown' placeholder.
 
     Tolerates a missing request and a request that never passed through the

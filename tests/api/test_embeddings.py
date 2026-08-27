@@ -2,11 +2,13 @@
 Embedding functionality tests for NNP LLM Router API.
 """
 
-import pytest
+import asyncio
+
 import httpx
 import numpy as np
-import asyncio
-from tests.test_utils import TestTimer, ResponseValidator
+import pytest
+
+from tests.test_utils import TestTimer
 
 
 class TestEmbeddings:

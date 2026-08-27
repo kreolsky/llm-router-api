@@ -1,11 +1,12 @@
 """YAML-based configuration management with hot-reload support."""
 # SYSTEM: config — YAML load, 5s hot reload, env-backed settings
-import yaml
-import os
 import asyncio
-from typing import Dict, Any
-from .logging import logger
+import os
+from typing import Any
 
+import yaml
+
+from .logging import logger
 
 # ---------------------------------------------------------------------------
 # Env-backed settings
@@ -69,7 +70,7 @@ class ConfigManager:
             }
         })
 
-    def _load_config(self, fail_on_error: bool = False) -> Dict[str, Any]:
+    def _load_config(self, fail_on_error: bool = False) -> dict[str, Any]:
         """Load and merge all YAML config files."""
         config = {}
         file_map = [
@@ -80,7 +81,7 @@ class ConfigManager:
         ]
         for path, key, required in file_map:
             try:
-                with open(path, 'r') as f:
+                with open(path) as f:
                     loaded = yaml.safe_load(f) or {}
                 # WHY: a flat YAML (missing the top-level wrapper key) would silently
                 # coerce to {} and only fail later at startup assert (and not at reload).
@@ -114,7 +115,7 @@ class ConfigManager:
     }
 
     @staticmethod
-    def _validate_model_info(config: Dict[str, Any]) -> None:
+    def _validate_model_info(config: dict[str, Any]) -> None:
         """Soft-validate model_info: warn on unknown keys and orphan entries.
 
         Non-fatal (model_info is required=False). Warns when an entry has no
@@ -152,11 +153,11 @@ class ConfigManager:
                         extra={"config": {"model_info_key": model_id, "unknown_keys": sorted(arch_unknown)}},
                     )
 
-    def get_config(self) -> Dict[str, Any]:
+    def get_config(self) -> dict[str, Any]:
         return self.config
 
     @staticmethod
-    def _assert_config_complete(config: Dict[str, Any]) -> None:
+    def _assert_config_complete(config: dict[str, Any]) -> None:
         """Fail-fast: every config section must be present and non-empty."""
         for section in ("providers", "models", "user_keys"):
             if not config.get(section):
@@ -190,9 +191,9 @@ class ConfigManager:
         ("model_cache_ttl", "MODEL_CACHE_TTL", 86400, int),
     )
 
-    def _read_env_settings(self) -> Dict[str, Any]:
+    def _read_env_settings(self) -> dict[str, Any]:
         """Resolve every env-backed setting once (see the module header)."""
-        settings: Dict[str, Any] = {
+        settings: dict[str, Any] = {
             name: _env_number(env_var, default, cast)
             for name, env_var, default, cast in self._ENV_SETTINGS
         }
@@ -253,7 +254,7 @@ class ConfigManager:
             for name, cb in self._on_reload_callbacks:
                 try:
                     await cb(new_config)
-                except Exception as e:
+                except Exception:
                     logger.error(
                         f"Config reload callback failed: {name or '(unnamed)'}",
                         extra={"config": {"operation": "reload_callback_error", "callback_name": name}},
@@ -283,7 +284,7 @@ class ConfigManager:
             self.model_info_path,
         ]
 
-    def _current_mtimes(self) -> Dict[str, float]:
+    def _current_mtimes(self) -> dict[str, float]:
         """Read mtimes of the watched files, skipping the ones that are absent."""
         mtimes = {}
         for fpath in self._watched_files:

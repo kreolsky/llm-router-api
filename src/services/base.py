@@ -2,17 +2,17 @@
 # SYSTEM: service-layer — validate access, resolve provider, dispatch
 
 import contextlib
-from typing import Dict, Any, Optional, Tuple
+from typing import Any
+
 from fastapi import HTTPException, Request
 
 from ..core.config_manager import ConfigManager
 from ..core.context import RequestContext, request_context
-from ..core.opencode_identity import opencode_session_headers
-from ..core.identity_headers import compile_passthrough_spec, match_passthrough
-from ..providers import get_provider_instance
-from ..core.logging import logger
 from ..core.error_handling import ErrorType, create_error
-
+from ..core.identity_headers import compile_passthrough_spec, match_passthrough
+from ..core.logging import logger
+from ..core.opencode_identity import opencode_session_headers
+from ..providers import get_provider_instance
 
 
 class BaseService:
@@ -22,7 +22,7 @@ class BaseService:
         self.config_manager = config_manager
 
     @contextlib.asynccontextmanager
-    async def _guard_service_errors(self, error_ctx: Dict[str, Any]):
+    async def _guard_service_errors(self, error_ctx: dict[str, Any]):
         """Wrap a service block: re-raise HTTPException as-is, wrap other errors.
 
         De-duplicates the identical try/except error-wrapping pattern across
@@ -40,12 +40,12 @@ class BaseService:
                 **error_ctx,
             )
 
-    def _get_request_context(self, request: Optional[Request]) -> RequestContext:
+    def _get_request_context(self, request: Request | None) -> RequestContext:
         """Return the typed RequestContext carried by the request."""
         return request_context(request)
 
-    def _extract_passthrough_headers(self, request: Optional[Request],
-                                     spec: Optional[Any] = None) -> Dict[str, str]:
+    def _extract_passthrough_headers(self, request: Request | None,
+                                     spec: Any | None = None) -> dict[str, str]:
         """Pick whitelisted headers off the client request, canonical casing.
 
         spec is the provider's compiled passthrough whitelist; None falls back
@@ -55,7 +55,7 @@ class BaseService:
             return {}
         if spec is None:
             spec = compile_passthrough_spec()
-        forwarded: Dict[str, str] = {}
+        forwarded: dict[str, str] = {}
         for name, value in request.headers.items():
             canonical = match_passthrough(name, spec)
             if canonical is not None:
@@ -63,7 +63,7 @@ class BaseService:
         return forwarded
 
     def _build_identity_headers(self, provider_instance: Any,
-                                request: Optional[Request]) -> Optional[Dict[str, str]]:
+                                request: Request | None) -> dict[str, str] | None:
         """Per-request upstream headers for providers with an identity profile.
 
         passthrough: forward the client's whitelisted harness headers verbatim.
@@ -88,9 +88,9 @@ class BaseService:
     def _validate_and_get_config(
         self,
         requested_model: str,
-        auth_data: Tuple[str, str, list, list],
+        auth_data: tuple[str, str, list, list],
         **error_context
-    ) -> Tuple[Dict[str, Any], str, str, Dict[str, Any]]:
+    ) -> tuple[dict[str, Any], str, str, dict[str, Any]]:
         """Validate model access and return (model_config, provider_name, provider_model_name, provider_config)."""
         project_name, api_key, allowed_models, _ = auth_data
 
@@ -121,7 +121,7 @@ class BaseService:
     async def _get_provider(
         self,
         provider_name: str,
-        provider_config: Dict[str, Any],
+        provider_config: dict[str, Any],
         **error_context
     ) -> Any:
         """Instantiate a provider from config (cache lookup under lock), raising on invalid type."""

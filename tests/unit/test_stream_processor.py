@@ -1,14 +1,12 @@
 """Unit tests for StreamProcessor."""
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
-
-from src.services.chat_service.stream_processor import StreamProcessor, duplicate_reasoning_field
-from src.core.sanitizer import MessageSanitizer
 from fastapi import HTTPException
 
+from src.services.chat_service.stream_processor import StreamProcessor, duplicate_reasoning_field
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -24,7 +22,7 @@ async def collect(agen):
 
 
 def sse(data_str, sep="\n\n"):
-    return f"data: {data_str}{sep}".encode("utf-8")
+    return f"data: {data_str}{sep}".encode()
 
 
 def make_processor(sanitize=False):
@@ -106,7 +104,7 @@ class TestSanitizationMode:
         sp = make_processor(sanitize=True)
         p1 = json.dumps({"id": "1"})
         p2 = json.dumps({"id": "2"})
-        chunk = f"data: {p1}\n\ndata: {p2}\n\n".encode("utf-8")
+        chunk = f"data: {p1}\n\ndata: {p2}\n\n".encode()
         result = await collect(sp.process_stream(async_gen([chunk]), "m", "r", "u"))
         combined = b"".join(result).decode("utf-8")
         assert "1" in combined
@@ -428,10 +426,10 @@ class TestReasoningFieldDuplication:
 # ---------------------------------------------------------------------------
 
 from src.services.chat_service.stream_processor import (  # noqa: E402
-    _StreamStats,
     _decode_chunks,
     _iter_sse_frames,
     _split_frame,
+    _StreamStats,
 )
 
 
@@ -501,7 +499,7 @@ class TestDecodeChunks:
 
     @pytest.mark.asyncio
     async def test_split_multibyte_char_healed(self):
-        encoded = "üx".encode("utf-8")
+        encoded = "üx".encode()
         stats = _StreamStats()
         stream = async_gen([encoded[:1], encoded[1:]])
         texts = [t async for t in _decode_chunks(stream, "r", stats)]

@@ -3,11 +3,13 @@ Test utilities and helper functions for NNP LLM Router test suite.
 """
 
 import asyncio
-import time
 import json
-import httpx
-from typing import Dict, Any, List, Optional, AsyncGenerator
+import time
+from collections.abc import AsyncGenerator
 from pathlib import Path
+from typing import Any
+
+import httpx
 
 
 class TestTimer:
@@ -41,7 +43,7 @@ class StreamingResponseParser:
     """Parser for streaming API responses."""
     
     @staticmethod
-    async def parse_sse_stream(response: httpx.Response) -> AsyncGenerator[Dict[str, Any], None]:
+    async def parse_sse_stream(response: httpx.Response) -> AsyncGenerator[dict[str, Any], None]:
         """Parse Server-Sent Events (SSE) stream."""
         async for line in response.aiter_lines():
             if line.startswith('data: '):
@@ -58,7 +60,7 @@ class StreamingResponseParser:
     @staticmethod
     async def collect_stream_content(
         response: httpx.Response
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Collect all content from a streaming response."""
         chunks = []
         full_content = ""
@@ -120,7 +122,7 @@ class ResponseValidator:
     """Validator for API responses."""
     
     @staticmethod
-    def validate_chat_completion_response(response_data: Dict[str, Any]) -> bool:
+    def validate_chat_completion_response(response_data: dict[str, Any]) -> bool:
         """Validate chat completion response structure."""
         required_fields = ["id", "object", "created", "model", "choices", "usage"]
         
@@ -152,7 +154,7 @@ class ResponseValidator:
         return True
     
     @staticmethod
-    def validate_embedding_response(response_data: Dict[str, Any]) -> bool:
+    def validate_embedding_response(response_data: dict[str, Any]) -> bool:
         """Validate embedding response structure."""
         required_fields = ["data", "model", "usage"]
         
@@ -182,7 +184,7 @@ class ResponseValidator:
         return True
     
     @staticmethod
-    def validate_model_list_response(response_data: Dict[str, Any]) -> bool:
+    def validate_model_list_response(response_data: dict[str, Any]) -> bool:
         """Validate model list response structure."""
         required_fields = ["data", "object"]
         
@@ -204,7 +206,7 @@ class ResponseValidator:
         return True
     
     @staticmethod
-    def validate_transcription_response(response_data: Dict[str, Any]) -> bool:
+    def validate_transcription_response(response_data: dict[str, Any]) -> bool:
         """Validate transcription response structure."""
         if "text" not in response_data:
             return False
@@ -224,7 +226,7 @@ class TestDataGenerator:
         count: int = 1,
         include_system: bool = False,
         include_unicode: bool = False
-    ) -> List[Dict[str, str]]:
+    ) -> list[dict[str, str]]:
         """Generate chat messages for testing."""
         messages = []
         
@@ -260,7 +262,7 @@ class TestDataGenerator:
         return messages
     
     @staticmethod
-    def generate_embedding_texts(count: int = 3, include_unicode: bool = False) -> List[str]:
+    def generate_embedding_texts(count: int = 3, include_unicode: bool = False) -> list[str]:
         """Generate texts for embedding testing."""
         base_texts = [
             "Hello, world!",
@@ -310,11 +312,11 @@ class PerformanceMonitor:
                 self.metrics[operation]["end_time"] - self.metrics[operation]["start_time"]
             )
     
-    def get_duration(self, operation: str) -> Optional[float]:
+    def get_duration(self, operation: str) -> float | None:
         """Get duration of an operation."""
         return self.metrics.get(operation, {}).get("duration")
     
-    def get_all_metrics(self) -> Dict[str, Dict[str, Any]]:
+    def get_all_metrics(self) -> dict[str, dict[str, Any]]:
         """Get all collected metrics."""
         return self.metrics.copy()
 
@@ -373,7 +375,7 @@ async def check_service_health(base_url: str, timeout: float = 5.0) -> bool:
         return False
 
 
-def calculate_ttft_metrics(stream_data: Dict[str, Any]) -> Dict[str, float]:
+def calculate_ttft_metrics(stream_data: dict[str, Any]) -> dict[str, float]:
     """Calculate Time to First Token metrics from stream data."""
     ttft = stream_data.get("ttft", 0)
     total_time = stream_data.get("total_time", 0)
@@ -388,9 +390,9 @@ def calculate_ttft_metrics(stream_data: Dict[str, Any]) -> Dict[str, float]:
 
 
 def assert_performance_thresholds(
-    metrics: Dict[str, float],
-    thresholds: Dict[str, float]
-) -> List[str]:
+    metrics: dict[str, float],
+    thresholds: dict[str, float]
+) -> list[str]:
     """Assert that performance metrics meet thresholds."""
     violations = []
     

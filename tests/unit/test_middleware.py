@@ -1,10 +1,10 @@
 """Unit tests for RequestLoggerMiddleware."""
 
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
-from starlette.responses import JSONResponse
 
 from src.api.middleware import RequestLoggerMiddleware
 

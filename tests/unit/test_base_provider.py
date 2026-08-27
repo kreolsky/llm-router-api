@@ -3,7 +3,7 @@
 import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -11,8 +11,6 @@ from fastapi import HTTPException
 
 from src.core.identity_headers import match_passthrough
 from src.providers.base import BaseProvider, retry_on_rate_limit
-from src.core.error_handling import ErrorType, create_error
-
 
 # ---------------------------------------------------------------------------
 # Concrete subclass so we can instantiate the (otherwise abstract-ish) base
@@ -170,9 +168,8 @@ class TestRetryOnRateLimit:
             call_count += 1
             raise exc
 
-        with patch("src.providers.base.asyncio.sleep", side_effect=mock_sleep):
-            with pytest.raises(HTTPException):
-                await fn()
+        with patch("src.providers.base.asyncio.sleep", side_effect=mock_sleep), pytest.raises(HTTPException):
+            await fn()
 
         # attempts 0..3 → delays: min(1*2^0,10)=1, min(1*2^1,10)=2, min(1*2^2,10)=4, min(1*2^3,10)=8
         assert recorded_delays == [1.0, 2.0, 4.0, 8.0]
@@ -196,9 +193,8 @@ class TestRetryOnRateLimit:
 
         obj = SimpleNamespace(config_manager=cm)
 
-        with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock):
-            with pytest.raises(HTTPException):
-                await fn(obj)
+        with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock), pytest.raises(HTTPException):
+            await fn(obj)
 
         # cm.provider_max_retries=1 → 1 initial + 1 retry = 2
         assert call_count == 2
@@ -214,9 +210,8 @@ class TestRetryOnRateLimit:
             call_count += 1
             raise HTTPException(status_code=429, detail="rate limited")
 
-        with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock):
-            with pytest.raises(HTTPException):
-                await fn()
+        with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock), pytest.raises(HTTPException):
+            await fn()
 
         # default max_retries=3 → 1 initial + 3 retries = 4
         assert call_count == 4
@@ -239,9 +234,8 @@ class TestBaseProviderInit:
     def test_missing_api_key_env_var_raises(self):
         """Missing API key env var raises HTTPException."""
         config = {"base_url": "https://api.example.com", "api_key_env": "MISSING_KEY"}
-        with patch.dict("os.environ", {}, clear=True):
-            with pytest.raises(HTTPException) as exc_info:
-                ProviderStub(config)
+        with patch.dict("os.environ", {}, clear=True), pytest.raises(HTTPException) as exc_info:
+            ProviderStub(config)
         assert exc_info.value.status_code == 500
 
     def test_no_api_key_env_no_error(self):
@@ -326,6 +320,11 @@ class TestGetTimeout:
 # ===================================================================
 
 class TestRaiseProviderHttpError:
+    # INVARIANT: patch log_provider_error where it is CALLED (error_handler), not where
+    # base.py once imported it.
+    # Why: base.py only calls create_provider_http_error, which logs internally — the old
+    # `src.providers.base.log_provider_error` target was inert, and these tests passed
+    # without ever suppressing the log until ruff deleted the unused import.
 
     def _make_http_status_error(self, status_code, json_body=None, text_body="error text"):
         """Helper to build a mock httpx.HTTPStatusError."""
@@ -340,7 +339,7 @@ class TestRaiseProviderHttpError:
         error = httpx.HTTPStatusError("error", request=request, response=response)
         return error
 
-    @patch("src.providers.base.log_provider_error")
+    @patch("src.core.error_handling.error_handler.log_provider_error")
     def test_extracts_nested_error_message(self, mock_log):
         """Extracts error message from JSON {"error": {"message": ...}}."""
         provider = _build_provider()
@@ -352,7 +351,7 @@ class TestRaiseProviderHttpError:
         assert exc_info.value.detail["error"]["message"] == "bad request details"
         assert exc_info.value.status_code == 400
 
-    @patch("src.providers.base.log_provider_error")
+    @patch("src.core.error_handling.error_handler.log_provider_error")
     def test_extracts_flat_message(self, mock_log):
         """Extracts error message from {"message": ...}."""
         provider = _build_provider()
@@ -363,7 +362,7 @@ class TestRaiseProviderHttpError:
             provider._raise_provider_http_error(err, "req-1")
         assert exc_info.value.detail["error"]["message"] == "validation failed"
 
-    @patch("src.providers.base.log_provider_error")
+    @patch("src.core.error_handling.error_handler.log_provider_error")
     def test_falls_back_to_response_text(self, mock_log):
         """Falls back to response text when JSON parse fails."""
         provider = _build_provider()
@@ -372,7 +371,7 @@ class TestRaiseProviderHttpError:
             provider._raise_provider_http_error(err, "req-1")
         assert exc_info.value.detail["error"]["message"] == "Bad Gateway"
 
-    @patch("src.providers.base.log_provider_error")
+    @patch("src.core.error_handling.error_handler.log_provider_error")
     def test_raises_with_correct_detail_structure(self, mock_log):
         """HTTPException detail has correct structure with code, message, metadata."""
         provider = _build_provider()

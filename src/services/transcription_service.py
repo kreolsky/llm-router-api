@@ -1,10 +1,11 @@
 """Audio transcription service with default model fallback."""
-from typing import Any, Tuple, Optional
+from typing import Any
+
 from fastapi import Request, UploadFile
 
-from ..services.model_service import ModelService
 from ..core.logging import logger
 from ..core.usage_db import request_stats
+from ..services.model_service import ModelService
 from .base import BaseService
 
 
@@ -24,11 +25,11 @@ class TranscriptionService(BaseService):
         self,
         request: Request,
         audio_file: UploadFile,
-        auth_data: Tuple[str, str, Any, Any],
-        model_id: Optional[str] = None,
+        auth_data: tuple[str, str, Any, Any],
+        model_id: str | None = None,
         response_format: str = "json",
         temperature: float = 0.0,
-        language: Optional[str] = None,
+        language: str | None = None,
         return_timestamps: bool = False,
     ) -> Any:
         """Create a transcription from an audio file using the specified or default model."""

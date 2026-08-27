@@ -1,17 +1,17 @@
 """Standardized HTTPExceptions creation and provider error logging."""
 # SYSTEM: error-format — OpenRouter-compatible error envelope
 
-from typing import Optional
+
 from fastapi import HTTPException
 
+from ...utils.unicode import decode_unicode_escapes
 from ..logging import logger
 from .error_types import ErrorType
-from ...utils.unicode import decode_unicode_escapes
 
 
 def create_error(
     error_type: ErrorType,
-    original_exception: Optional[Exception] = None,
+    original_exception: Exception | None = None,
     **context
 ) -> HTTPException:
     """Create a standardized HTTPException with logging.
@@ -43,7 +43,7 @@ def log_provider_error(
     provider_name: str,
     error_details: str,
     status_code: int,
-    original_exception: Optional[Exception] = None,
+    original_exception: Exception | None = None,
     **context
 ) -> None:
     """Log a provider-specific HTTP error with Unicode decoding."""
@@ -76,8 +76,8 @@ def create_provider_http_error(
     message: str,
     provider_name: str,
     raw: str,
-    request_id: Optional[str] = None,
-    original_exception: Optional[Exception] = None,
+    request_id: str | None = None,
+    original_exception: Exception | None = None,
 ) -> HTTPException:
     """Build a provider passthrough HTTPException with dynamic status code.
 

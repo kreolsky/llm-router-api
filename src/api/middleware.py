@@ -14,9 +14,10 @@ would silently lose exactly the 500s and aborted streams the stats exist to
 record.
 """
 # SYSTEM: request-logging — pure-ASGI request id + Incoming/Outgoing bookends
-import time
-import os
 import json
+import os
+import time
+
 from starlette.requests import Request
 
 from ..core.context import RequestContext

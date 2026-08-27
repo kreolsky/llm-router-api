@@ -10,10 +10,10 @@ sourced from two layers (see src/core/model_capabilities.py):
 INVARIANT: model_info.yaml ALWAYS wins over the auto-cache.
 """
 import time
-from typing import Dict, Any, Tuple, Optional
+from typing import Any
 
-from ..core.logging import logger
 from ..core.error_handling import ErrorType, create_error
+from ..core.logging import logger
 from ..core.model_capabilities import (
     CapabilitiesCache,
     merge_capabilities,
@@ -26,11 +26,11 @@ from .base import BaseService
 class ModelService(BaseService):
     """Lists models and retrieves single-model details from merged capabilities."""
 
-    def __init__(self, config_manager, capabilities_cache: Optional[CapabilitiesCache] = None):
+    def __init__(self, config_manager, capabilities_cache: CapabilitiesCache | None = None):
         super().__init__(config_manager)
         self.capabilities_cache = capabilities_cache
 
-    def _build_model_response(self, model_id: str, **extra_fields) -> Dict[str, Any]:
+    def _build_model_response(self, model_id: str, **extra_fields) -> dict[str, Any]:
         """Build a standardized model response object."""
         return {
             "id": model_id,
@@ -56,19 +56,19 @@ class ModelService(BaseService):
             **extra_fields
         }
 
-    def _resolve_stored_capabilities(self, model_id: str) -> Dict[str, Any]:
+    def _resolve_stored_capabilities(self, model_id: str) -> dict[str, Any]:
         """Merge the auto-cache and manual model_info into the STORED form.
 
         INVARIANT: model_info.yaml always wins over the auto-cache (deep merge
         where lists are replaced, not concatenated).
         """
-        cache_data: Dict[str, Any] = {}
+        cache_data: dict[str, Any] = {}
         if self.capabilities_cache is not None:
             cache_data = self.capabilities_cache.get(model_id) or {}
         model_info = self.config_manager.get_config().get("model_info", {}).get(model_id) or {}
         return merge_capabilities(cache_data, model_info)
 
-    def get_pricing(self, model_id: str) -> Optional[Dict[str, Any]]:
+    def get_pricing(self, model_id: str) -> dict[str, Any] | None:
         """Stored per-token pricing for a model, or None when unknown.
 
         Public wrapper over _resolve_stored_capabilities for the usage-stats
@@ -80,7 +80,7 @@ class ModelService(BaseService):
         pricing = self._resolve_stored_capabilities(model_id).get("pricing")
         return pricing if isinstance(pricing, dict) and pricing else None
 
-    def _capability_meta(self, model_id: str) -> Dict[str, Any]:
+    def _capability_meta(self, model_id: str) -> dict[str, Any]:
         """Provenance fields (source, fetched_at) for diagnostics, when available."""
         if self.capabilities_cache is None:
             return {}
@@ -92,7 +92,7 @@ class ModelService(BaseService):
             "capabilities_fetched_at": meta.get("fetched_at"),
         }
 
-    async def list_models(self, auth_data: Tuple[str, str, list, list]) -> Dict[str, Any]:
+    async def list_models(self, auth_data: tuple[str, str, list, list]) -> dict[str, Any]:
         """Return OpenAI-compatible model list filtered by allowed_models and is_hidden.
 
         Capability fields are rendered identically to retrieve_model, so the
@@ -116,9 +116,9 @@ class ModelService(BaseService):
     async def retrieve_model(
         self,
         model_id: str,
-        auth_data: Tuple[str, str, list, list],
+        auth_data: tuple[str, str, list, list],
         refresh: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Return model details from merged capabilities (no live upstream call).
 
         The hot path reads only from the in-memory store. ``refresh=True``

@@ -1,7 +1,8 @@
 """Unit tests for MessageSanitizer."""
 
-import pytest
 from unittest.mock import patch
+
+import pytest
 
 from src.core.sanitizer import MessageSanitizer
 

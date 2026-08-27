@@ -2,10 +2,12 @@
 Tools generate_key endpoint tests for NNP LLM Router API.
 """
 
-import pytest
-import httpx
-import re
 import asyncio
+import re
+
+import httpx
+import pytest
+
 from tests.test_utils import TestTimer
 
 

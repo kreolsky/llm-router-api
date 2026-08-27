@@ -15,7 +15,6 @@ lazily evicted after a TTL (OPENCODE_SESSION_TTL, no background task).
 # SYSTEM: opencode-identity — synthetic ses_* ids and the session registry
 import os
 import time
-from typing import Dict, Optional, Tuple
 
 _ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 _SESSION_PREFIX = "ses_"
@@ -42,7 +41,7 @@ def _create_identifier(timestamp_ms: int) -> str:
     return time_part + rand_part
 
 
-def new_session_id(timestamp_ms: Optional[int] = None) -> str:
+def new_session_id(timestamp_ms: int | None = None) -> str:
     """Generate a full OpenCode session id: 'ses_' + 26 chars.
 
     timestamp_ms is injectable for deterministic tests only.
@@ -61,9 +60,9 @@ class SessionRegistry:
 
     def __init__(self, ttl: float = 3600.0):
         self.ttl = ttl
-        self._sessions: Dict[str, Tuple[str, float]] = {}
+        self._sessions: dict[str, tuple[str, float]] = {}
 
-    def session_id(self, key: str, now: Optional[float] = None) -> str:
+    def session_id(self, key: str, now: float | None = None) -> str:
         """Return the stable session id for key, refreshing its last-seen time."""
         now = time.monotonic() if now is None else now
         entry = self._sessions.get(key)
@@ -78,10 +77,10 @@ class SessionRegistry:
         return session_id
 
 
-_registry: Optional[SessionRegistry] = None
+_registry: SessionRegistry | None = None
 
 
-def opencode_session_headers(key: str, ttl: float = 3600.0) -> Dict[str, str]:
+def opencode_session_headers(key: str, ttl: float = 3600.0) -> dict[str, str]:
     """Per-request OpenCode session headers for a registry key.
 
     Module-level singleton so provider-cache rebuilds on config reload do not

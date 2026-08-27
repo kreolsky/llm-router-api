@@ -3,25 +3,18 @@
 import asyncio
 import hmac
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, HTTPException, status, Depends, File, Form, Header, UploadFile
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
-from typing import Optional
-import uvicorn
-from typing import Dict, Any
 
+import uvicorn
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+
+from ..core.auth import check_endpoint_access
 from ..core.config_manager import ConfigManager
-from ..core.auth import get_api_key, check_endpoint_access
 from ..core.context import request_context
 from ..core.error_handling import ErrorType, create_error
-from ..core.model_capabilities import CapabilitiesCache, capabilities_refresh_loop
-from ..services.chat_service.chat_service import ChatService
-from ..services.model_service import ModelService
-from ..services.embedding_service import EmbeddingService
-from ..services.transcription_service import TranscriptionService
 from ..core.logging import logger
-from ..utils.generate_key import generate_key
-from ..providers import clear_provider_cache_async, rebuild_provider_cache
+from ..core.model_capabilities import CapabilitiesCache, capabilities_refresh_loop
 from ..core.usage_db import (
     close_db,
     get_distinct_models,
@@ -32,7 +25,13 @@ from ..core.usage_db import (
     init_db,
     request_stats,
 )
+from ..providers import clear_provider_cache_async, rebuild_provider_cache
+from ..services.chat_service.chat_service import ChatService
+from ..services.embedding_service import EmbeddingService
+from ..services.model_service import ModelService
+from ..services.transcription_service import TranscriptionService
 from ..utils.client_address import client_host
+from ..utils.generate_key import generate_key
 from .middleware import RequestLoggerMiddleware
 from .stat_page import stat_page
 
@@ -170,13 +169,13 @@ async def create_embeddings(
 async def create_transcription(
     request: Request,
     # WHY: some clients send 'audio_file', others 'file' — accept both
-    audio_file: Optional[UploadFile] = File(None),
-    file: Optional[UploadFile] = File(None),
-    model: Optional[str] = Form(None),
+    audio_file: UploadFile | None = File(None),
+    file: UploadFile | None = File(None),
+    model: str | None = Form(None),
     response_format: str = Form("json"),
     temperature: float = Form(0.0),
-    language: Optional[str] = Form(None),
-    return_timestamps: Optional[bool] = Form(False),
+    language: str | None = Form(None),
+    return_timestamps: bool | None = Form(False),
     auth_data: tuple = Depends(check_endpoint_access("/v1/audio/transcriptions"))
 ):
     ctx = request_context(request)
@@ -249,7 +248,7 @@ async def generate_key_endpoint(
 
 async def verify_stat_key(
     request: Request,
-    x_stat_key: Optional[str] = Header(None, alias="X-Stat-Key"),
+    x_stat_key: str | None = Header(None, alias="X-Stat-Key"),
 ) -> None:
     """Require X-Stat-Key on /stat/api/* when STAT_API_KEY is configured.
 

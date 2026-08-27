@@ -1,13 +1,12 @@
 """Unit tests for src/services/model_service.py — ModelService class."""
 
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
-from src.services.model_service import ModelService
 from src.core.model_capabilities import CapabilitiesCache
-
+from src.services.model_service import ModelService
 
 # ---------------------------------------------------------------------------
 # Helpers

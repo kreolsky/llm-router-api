@@ -2,13 +2,14 @@
 Pytest configuration and fixtures for NNP LLM Router test suite.
 """
 
+import asyncio
+import os
+from pathlib import Path
+from typing import Any
+
+import httpx
 import pytest
 import pytest_asyncio
-import httpx
-import os
-import asyncio
-from typing import Dict, Any, List, Optional
-from pathlib import Path
 
 
 @pytest.fixture(scope="session")
@@ -18,7 +19,7 @@ def base_url() -> str:
 
 
 @pytest.fixture(scope="session")
-def api_keys() -> Dict[str, str]:
+def api_keys() -> dict[str, str]:
     """API keys for testing different access levels."""
     return {
         "full_access": "dummy",
@@ -30,7 +31,7 @@ def api_keys() -> Dict[str, str]:
 
 
 @pytest.fixture(scope="session")
-def test_models() -> Dict[str, Dict[str, Any]]:
+def test_models() -> dict[str, dict[str, Any]]:
     """Test models configuration."""
     return {
         "local_chat": {
@@ -97,7 +98,7 @@ def audio_file_path() -> Path:
 
 
 @pytest.fixture
-def sample_messages() -> List[Dict[str, str]]:
+def sample_messages() -> list[dict[str, str]]:
     """Sample chat messages for testing."""
     return [
         {"role": "user", "content": "Hello! Tell me a short joke."}
@@ -105,7 +106,7 @@ def sample_messages() -> List[Dict[str, str]]:
 
 
 @pytest.fixture
-def unicode_messages() -> List[Dict[str, str]]:
+def unicode_messages() -> list[dict[str, str]]:
     """Unicode and emoji messages for testing."""
     return [
         {"role": "user", "content": "Respond in Russian with emojis: Что такое искусственный интеллект? 🤖🚀"}
@@ -113,14 +114,14 @@ def unicode_messages() -> List[Dict[str, str]]:
 
 
 @pytest.fixture
-def long_message() -> Dict[str, str]:
+def long_message() -> dict[str, str]:
     """Long message for testing."""
     content = "This is a very long message. " * 100
     return {"role": "user", "content": content}
 
 
 @pytest.fixture
-def sample_texts_for_embedding() -> List[str]:
+def sample_texts_for_embedding() -> list[str]:
     """Sample texts for embedding tests."""
     return [
         "Hello, world!",
@@ -138,7 +139,7 @@ def event_loop():
 
 
 @pytest.fixture
-def expected_chat_response_structure() -> List[str]:
+def expected_chat_response_structure() -> list[str]:
     """Expected structure for chat completion responses."""
     return [
         "id",
@@ -151,7 +152,7 @@ def expected_chat_response_structure() -> List[str]:
 
 
 @pytest.fixture
-def expected_embedding_response_structure() -> List[str]:
+def expected_embedding_response_structure() -> list[str]:
     """Expected structure for embedding responses."""
     return [
         "data",
@@ -161,7 +162,7 @@ def expected_embedding_response_structure() -> List[str]:
 
 
 @pytest.fixture
-def expected_model_response_structure() -> List[str]:
+def expected_model_response_structure() -> list[str]:
     """Expected structure for model responses."""
     return [
         "data",
@@ -170,7 +171,7 @@ def expected_model_response_structure() -> List[str]:
 
 
 @pytest.fixture
-def performance_thresholds() -> Dict[str, float]:
+def performance_thresholds() -> dict[str, float]:
     """Performance thresholds for testing."""
     return {
         "max_response_time": 5.0,
@@ -181,7 +182,7 @@ def performance_thresholds() -> Dict[str, float]:
 
 
 @pytest.fixture
-def streaming_test_config() -> Dict[str, Any]:
+def streaming_test_config() -> dict[str, Any]:
     """Configuration for streaming tests."""
     return {
         "max_tokens": 50,
@@ -256,17 +257,17 @@ def skip_if_service_unavailable(base_url: str):
     
     available = asyncio.run(check_service())
     if not available:
-        pytest.skip("Service not available at {}".format(base_url))
+        pytest.skip(f"Service not available at {base_url}")
 
 
 # Custom assertions for test consistency
-def assert_valid_response_structure(response_data: Dict[str, Any], required_fields: List[str]):
+def assert_valid_response_structure(response_data: dict[str, Any], required_fields: list[str]):
     """Assert that response contains all required fields."""
     for field in required_fields:
         assert field in response_data, f"Response missing required field: {field}"
 
 
-def assert_valid_choice_structure(choice: Dict[str, Any]):
+def assert_valid_choice_structure(choice: dict[str, Any]):
     """Assert that chat completion choice has valid structure."""
     required_fields = ["index", "message", "finish_reason"]
     for field in required_fields:
@@ -278,7 +279,7 @@ def assert_valid_choice_structure(choice: Dict[str, Any]):
     assert "content" in message, "Message missing content"
 
 
-def assert_valid_embedding_structure(embedding: Dict[str, Any]):
+def assert_valid_embedding_structure(embedding: dict[str, Any]):
     """Assert that embedding has valid structure."""
     required_fields = ["object", "embedding", "index"]
     for field in required_fields:

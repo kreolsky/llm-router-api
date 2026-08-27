@@ -2,7 +2,6 @@
 
 import asyncio
 import hashlib
-import json
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -14,9 +13,9 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pytest_asyncio import fixture as asyncio_fixture
 
+from src.api.main import verify_stat_key
 from src.core import usage_db
 from src.core.usage_db import RequestStats
-from src.api.main import verify_stat_key
 
 
 @pytest.fixture(autouse=True)
@@ -113,7 +112,7 @@ class TestMigration:
         conn = usage_db.get_connection()
         cursor = await conn.execute("PRAGMA table_info(usage_events)")
         columns = {row[1] for row in await cursor.fetchall()}
-        assert _NEW_COLUMNS <= columns
+        assert columns >= _NEW_COLUMNS
 
     @pytest.mark.asyncio
     async def test_existing_rows_kept_with_defaults(self, db_path):
@@ -144,7 +143,7 @@ class TestMigration:
     async def test_fresh_db_has_all_columns(self, db):
         cursor = await db.execute("PRAGMA table_info(usage_events)")
         columns = {row[1] for row in await cursor.fetchall()}
-        assert _NEW_COLUMNS <= columns
+        assert columns >= _NEW_COLUMNS
 
     @pytest.mark.asyncio
     async def test_timestamp_index_created(self, db_path):
@@ -814,6 +813,7 @@ class TestAuthKeyHashEnrichment:
     @pytest.mark.asyncio
     async def test_invalid_key_writes_truncated_hash(self):
         from fastapi.security import HTTPAuthorizationCredentials
+
         from src.core.auth import get_api_key
 
         stats = RequestStats()
@@ -838,6 +838,7 @@ class TestAuthKeyHashEnrichment:
     @pytest.mark.asyncio
     async def test_valid_key_leaves_hash_none(self):
         from fastapi.security import HTTPAuthorizationCredentials
+
         from src.core.auth import get_api_key
 
         stats = RequestStats()

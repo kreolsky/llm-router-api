@@ -1,14 +1,15 @@
 """OpenAI-compatible provider for chat, embeddings, and transcription."""
-from typing import Dict, Any, AsyncGenerator
 import io
+from collections.abc import AsyncGenerator
+from typing import Any
 
 from .base import BaseProvider
 
 
 class OpenAICompatibleProvider(BaseProvider):
-    async def chat_completions(self, request_body: Dict[str, Any], provider_model_name: str,
-                               model_config: Dict[str, Any], request_id: str = "unknown",
-                               extra_headers: Dict[str, str] = None) -> Dict[str, Any]:
+    async def chat_completions(self, request_body: dict[str, Any], provider_model_name: str,
+                               model_config: dict[str, Any], request_id: str = "unknown",
+                               extra_headers: dict[str, str] = None) -> dict[str, Any]:
         """Forward a non-streaming chat completion to an OpenAI-compatible API."""
         request_body = self._apply_model_config(request_body, provider_model_name, model_config)
 
@@ -24,16 +25,16 @@ class OpenAICompatibleProvider(BaseProvider):
             request_id=request_id
         )
 
-    def chat_completions_stream(self, request_body: Dict[str, Any], provider_model_name: str,
-                                model_config: Dict[str, Any], request_id: str = "unknown",
-                                extra_headers: Dict[str, str] = None) -> AsyncGenerator[bytes, None]:
+    def chat_completions_stream(self, request_body: dict[str, Any], provider_model_name: str,
+                                model_config: dict[str, Any], request_id: str = "unknown",
+                                extra_headers: dict[str, str] = None) -> AsyncGenerator[bytes, None]:
         """Forward a streaming chat completion to an OpenAI-compatible API."""
         request_body = self._apply_model_config(request_body, provider_model_name, model_config)
         return self._stream_request(self.client, "/chat/completions", request_body,
                                     request_id=request_id, extra_headers=extra_headers)
 
-    async def transcriptions(self, request_body: Dict[str, Any], provider_model_name: str,
-                             model_config: Dict[str, Any], request_id: str = "unknown") -> Dict[str, Any]:
+    async def transcriptions(self, request_body: dict[str, Any], provider_model_name: str,
+                             model_config: dict[str, Any], request_id: str = "unknown") -> dict[str, Any]:
         """Send audio to an OpenAI-compatible /audio/transcriptions endpoint.
 
         Uses provider's own credentials from self.headers (set in BaseProvider.__init__).
@@ -66,8 +67,8 @@ class OpenAICompatibleProvider(BaseProvider):
             request_id=request_id
         )
 
-    async def embeddings(self, request_body: Dict[str, Any], provider_model_name: str,
-                         model_config: Dict[str, Any], request_id: str = "unknown") -> Any:
+    async def embeddings(self, request_body: dict[str, Any], provider_model_name: str,
+                         model_config: dict[str, Any], request_id: str = "unknown") -> Any:
         """Forward embedding request to an OpenAI-compatible API."""
         request_body = self._apply_model_config(request_body, provider_model_name, model_config)
 
@@ -82,7 +83,7 @@ class OpenAICompatibleProvider(BaseProvider):
             request_id=request_id
         )
 
-    async def list_models(self, request_id: str = "unknown") -> Dict[str, Any]:
+    async def list_models(self, request_id: str = "unknown") -> dict[str, Any]:
         """Return the provider's /models list."""
         return await self._make_request(
             method="GET",
@@ -90,7 +91,7 @@ class OpenAICompatibleProvider(BaseProvider):
             request_id=request_id
         )
 
-    async def get_model(self, provider_model_name: str, request_id: str = "unknown") -> Dict[str, Any]:
+    async def get_model(self, provider_model_name: str, request_id: str = "unknown") -> dict[str, Any]:
         """Return a single model's metadata from the provider's /models list.
 
         Returns {} when the model is not present in the list. Provider errors

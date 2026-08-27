@@ -14,10 +14,10 @@ spelling sent upstream — casing is part of a harness fingerprint.
 """
 # SYSTEM: identity-headers — passthrough header whitelist and its override
 
-from typing import Dict, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
 
 # Canonical spelling as opencode/Kilo send them; `*` = prefix match.
-DEFAULT_PASSTHROUGH_HEADERS: Tuple[str, ...] = (
+DEFAULT_PASSTHROUGH_HEADERS: tuple[str, ...] = (
     "User-Agent",
     "X-Session-Id",
     "x-session-affinity",
@@ -27,18 +27,18 @@ DEFAULT_PASSTHROUGH_HEADERS: Tuple[str, ...] = (
 )
 
 # Compiled spec: (exact lower-name -> spelling to send, prefix patterns)
-PassthroughSpec = Tuple[Dict[str, str], Tuple[Tuple[str, str], ...]]
+PassthroughSpec = tuple[dict[str, str], tuple[tuple[str, str], ...]]
 
 
-def compile_passthrough_spec(spec: Optional[Iterable[str]] = None) -> PassthroughSpec:
+def compile_passthrough_spec(spec: Iterable[str] | None = None) -> PassthroughSpec:
     """Compile a header-name spec into (exact map, prefix patterns).
 
     Raises ValueError on a malformed entry so a bad providers.yaml fails at
     provider construction (startup validation), not on the first request.
     """
-    names: List[str] = list(DEFAULT_PASSTHROUGH_HEADERS if spec is None else spec)
-    exact: Dict[str, str] = {}
-    prefixes: List[Tuple[str, str]] = []
+    names: list[str] = list(DEFAULT_PASSTHROUGH_HEADERS if spec is None else spec)
+    exact: dict[str, str] = {}
+    prefixes: list[tuple[str, str]] = []
     for name in names:
         if not isinstance(name, str) or not name.strip():
             raise ValueError(f"passthrough_headers entry must be a non-empty string, got {name!r}")
@@ -53,7 +53,7 @@ def compile_passthrough_spec(spec: Optional[Iterable[str]] = None) -> Passthroug
     return exact, tuple(prefixes)
 
 
-def match_passthrough(name: str, spec: PassthroughSpec) -> Optional[str]:
+def match_passthrough(name: str, spec: PassthroughSpec) -> str | None:
     """Return the spelling to send upstream for a client header, or None."""
     exact, prefixes = spec
     low = name.lower()

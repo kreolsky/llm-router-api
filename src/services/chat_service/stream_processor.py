@@ -3,14 +3,15 @@
 
 import json
 import time
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass
-from typing import Any, AsyncGenerator, Dict, Optional, Tuple
+from typing import Any
+
+from fastapi import HTTPException
 
 from ...core.logging import logger
-from ...core.usage_db import RequestStats
-from ...core.error_handling import ErrorType, create_error
 from ...core.sanitizer import MessageSanitizer
-from fastapi import HTTPException
+from ...core.usage_db import RequestStats
 
 
 def duplicate_reasoning_field(data: Any) -> bool:
@@ -116,7 +117,7 @@ class StreamProcessor:
                            request_id: str,
                            user_id: str,
                            provider_name: str = "",
-                           stats: Optional[RequestStats] = None) -> AsyncGenerator[bytes, None]:
+                           stats: RequestStats | None = None) -> AsyncGenerator[bytes, None]:
         """Forward a provider SSE stream, optionally sanitizing it on the way.
 
         Two independent bodies share only this envelope (logging, usage capture,
@@ -136,7 +137,7 @@ class StreamProcessor:
         partial usage.
         """
         should_sanitize = self._live_sanitization_flag()
-        captured_usage: Dict[str, Any] = {}
+        captured_usage: dict[str, Any] = {}
         # Throwaway holder when the caller passed none (unit tests): the
         # enrichment below stays identical, it just goes nowhere.
         req_stats = stats if stats is not None else RequestStats()
@@ -189,7 +190,7 @@ class StreamProcessor:
     async def _passthrough(self,
                            provider_stream: AsyncGenerator[bytes, None],
                            request_id: str,
-                           captured_usage: Dict[str, Any],
+                           captured_usage: dict[str, Any],
                            stats: "_StreamStats") -> AsyncGenerator[bytes, None]:
         """Forward chunks unchanged, only peeking for reasoning fields and usage.
 
@@ -216,7 +217,7 @@ class StreamProcessor:
     async def _sanitizing(self,
                           provider_stream: AsyncGenerator[bytes, None],
                           request_id: str,
-                          captured_usage: Dict[str, Any],
+                          captured_usage: dict[str, Any],
                           stats: "_StreamStats") -> AsyncGenerator[bytes, None]:
         """Decode, re-frame and sanitize each SSE message before forwarding it."""
         sanitizer = MessageSanitizer
@@ -281,7 +282,7 @@ async def _decode_chunks(provider_stream: AsyncGenerator[bytes, None],
         yield text
 
 
-def _split_frame(buffer: str) -> Optional[Tuple[str, str, str]]:
+def _split_frame(buffer: str) -> tuple[str, str, str] | None:
     """Split one complete SSE frame off the buffer.
 
     Returns (payload, separator, rest), or None when the buffer holds no
@@ -309,7 +310,7 @@ def _split_frame(buffer: str) -> Optional[Tuple[str, str, str]]:
 
 
 async def _iter_sse_frames(text_stream: AsyncGenerator[str, None],
-                           request_id: str) -> AsyncGenerator[Tuple[str, str], None]:
+                           request_id: str) -> AsyncGenerator[tuple[str, str], None]:
     """Re-frame a text stream into (payload, separator) SSE messages.
 
     Any trailing content left when the stream ends is emitted as a final frame
@@ -331,7 +332,7 @@ async def _iter_sse_frames(text_stream: AsyncGenerator[str, None],
         yield buffer, _DEFAULT_SEPARATOR
 
 
-def _capture_usage_from_chunk(chunk: bytes, captured_usage: Dict[str, Any]) -> None:
+def _capture_usage_from_chunk(chunk: bytes, captured_usage: dict[str, Any]) -> None:
     """Parse usage out of a transparent-mode chunk, writing into the holder."""
     try:
         text = chunk.decode('utf-8')
@@ -379,7 +380,7 @@ def _sanitize_sse_message(
     message: str,
     request_id: str,
     sanitizer,
-    captured_usage: Dict[str, Any],
+    captured_usage: dict[str, Any],
 ) -> str:
     """Sanitize a single SSE message, stripping service fields from JSON data.
 
@@ -399,7 +400,7 @@ def _sanitize_sse_message(
         if 'usage' in chunk_data:
             captured_usage["usage"] = chunk_data['usage']
         duplicate_reasoning_field(chunk_data)
-        logger.debug(f"JSON parsed successfully", extra={
+        logger.debug("JSON parsed successfully", extra={
             "request_id": request_id,
             "keys": list(chunk_data.keys())
         })
@@ -422,7 +423,7 @@ def _sanitize_sse_message(
         return message
 
 
-def _error_payload(error: Exception) -> Dict[str, Any]:
+def _error_payload(error: Exception) -> dict[str, Any]:
     """Build the OpenRouter-shaped error payload for a mid-stream failure.
 
     Single construction point shared by the SSE error frame and the stats
@@ -447,16 +448,16 @@ def _error_payload(error: Exception) -> Dict[str, Any]:
     }
 
 
-def _frame_error(error_payload: Dict[str, Any]) -> bytes:
+def _frame_error(error_payload: dict[str, Any]) -> bytes:
     """Frame an error payload as SSE data.
 
     WHY: many OpenAI-compatible clients block until they see [DONE]; an
     error frame alone leaves them waiting until the read timeout fires.
     """
-    return f"data: {json.dumps(error_payload)}\n\ndata: [DONE]\n\n".encode('utf-8')
+    return f"data: {json.dumps(error_payload)}\n\ndata: [DONE]\n\n".encode()
 
 
-def _apply_stream_error(stats: RequestStats, error_payload: Dict[str, Any]) -> None:
+def _apply_stream_error(stats: RequestStats, error_payload: dict[str, Any]) -> None:
     """Write error_code / error_message into the stats holder.
 
     HTTPException → its metadata.error_code (always present for errors raised

@@ -1,11 +1,9 @@
 """Unit tests for utility modules: deep_merge, unicode, generate_key."""
 
-import pytest
 
 from src.utils.deep_merge import deep_merge
-from src.utils.unicode import decode_unicode_escapes
 from src.utils.generate_key import generate_key
-
+from src.utils.unicode import decode_unicode_escapes
 
 # ---------------------------------------------------------------------------
 # deep_merge

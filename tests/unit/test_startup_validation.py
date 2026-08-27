@@ -47,9 +47,8 @@ class TestValidateProviders:
             "broken": {"type": "openai", "base_url": "https://api.example.com", "api_key_env": "DEFINITELY_MISSING_KEY"}
         }
         cm = _cm_with_providers(providers)
-        with patch.dict("os.environ", {}, clear=True):
-            with pytest.raises(RuntimeError, match="broken"):
-                await _validate_providers(cm)
+        with patch.dict("os.environ", {}, clear=True), pytest.raises(RuntimeError, match="broken"):
+            await _validate_providers(cm)
 
     @pytest.mark.asyncio
     async def test_multiple_failures_all_reported(self):
@@ -59,9 +58,8 @@ class TestValidateProviders:
             "broken-b": {"type": "openai", "base_url": "https://b.example.com", "api_key_env": "MISSING_B"},
         }
         cm = _cm_with_providers(providers)
-        with patch.dict("os.environ", {}, clear=True):
-            with pytest.raises(RuntimeError) as exc_info:
-                await _validate_providers(cm)
+        with patch.dict("os.environ", {}, clear=True), pytest.raises(RuntimeError) as exc_info:
+            await _validate_providers(cm)
         msg = str(exc_info.value)
         assert "broken-a" in msg
         assert "broken-b" in msg

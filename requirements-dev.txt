@@ -3,6 +3,7 @@
 # WHY: the suite needs these but the runtime image must not carry them, and an
 # environment missing them fails in ways that look like product bugs (a stale
 # local httpx made 62 unit tests fail on a `proxy=` kwarg that Docker supports).
+ruff==0.16.0
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
 numpy>=1.26.0

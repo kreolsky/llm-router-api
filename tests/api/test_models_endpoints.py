@@ -2,10 +2,12 @@
 Model enumeration and access control tests for NNP LLM Router API.
 """
 
-import pytest
-import httpx
 import logging
-from tests.test_utils import TestTimer, ResponseValidator
+
+import httpx
+import pytest
+
+from tests.test_utils import TestTimer
 
 logger = logging.getLogger(__name__)
 

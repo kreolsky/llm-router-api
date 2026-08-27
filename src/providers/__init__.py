@@ -1,18 +1,18 @@
 """Provider registry with instance caching keyed by provider name."""
 # SYSTEM: provider-registry — provider instances cached by name, drained on reload
 import asyncio
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
+from ..core.error_handling import ErrorType, create_error
 from .base import BaseProvider
 from .openai import OpenAICompatibleProvider
-from ..core.error_handling import ErrorType, create_error
 
 # ARCH: cache key is the provider name (the dict key in providers.yaml).
 # Each cached instance owns its own httpx pool. The cache is rebuilt atomically
 # (rebuild_provider_cache) on startup and config reload: a temp dict is built
 # under _cache_lock, then swapped in, and the previous pools are closed in the
 # background. On rebuild failure the old cache is retained.
-_provider_cache: Dict[str, BaseProvider] = {}
+_provider_cache: dict[str, BaseProvider] = {}
 
 # ARCH: guards the read-create-store path so two concurrent lookups for an
 # uncached provider cannot both build and store (leaking one httpx pool).
@@ -21,8 +21,8 @@ _cache_lock = asyncio.Lock()
 
 def _build_provider(
     provider_name: str,
-    provider_config: Dict[str, Any],
-    config_manager: Optional[Any] = None,
+    provider_config: dict[str, Any],
+    config_manager: Any | None = None,
 ) -> BaseProvider:
     """Pure factory: dispatch on provider type and return a new instance.
 
@@ -38,8 +38,8 @@ def _build_provider(
 
 async def get_provider_instance(
     provider_name: str,
-    provider_config: Dict[str, Any],
-    config_manager: Optional[Any] = None,
+    provider_config: dict[str, Any],
+    config_manager: Any | None = None,
 ) -> BaseProvider:
     """Return a cached provider instance, creating one if needed (under the lock).
 
@@ -65,7 +65,7 @@ async def _gather_closes(coros) -> None:
     await asyncio.gather(*coros, return_exceptions=True)
 
 
-async def rebuild_provider_cache(config: Dict[str, Any], config_manager: Optional[Any]) -> None:
+async def rebuild_provider_cache(config: dict[str, Any], config_manager: Any | None) -> None:
     """Atomically rebuild the cache from config.
 
     Builds a temp dict for every configured provider under _cache_lock. If any
@@ -74,7 +74,7 @@ async def rebuild_provider_cache(config: Dict[str, Any], config_manager: Optiona
     and the previous instances' pools are closed in the background.
     """
     async with _cache_lock:
-        temp: Dict[str, BaseProvider] = {}
+        temp: dict[str, BaseProvider] = {}
         errors = []
         for provider_name, provider_config in (config.get("providers") or {}).items():
             try:

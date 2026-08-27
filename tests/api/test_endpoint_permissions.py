@@ -3,10 +3,10 @@ Endpoint permissions tests for NNP LLM Router API.
 Tests that API keys have appropriate access to different endpoints.
 """
 
-import pytest
-import httpx
 import logging
-from tests.test_utils import TestTimer
+
+import httpx
+import pytest
 
 logger = logging.getLogger(__name__)
 

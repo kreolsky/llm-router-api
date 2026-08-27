@@ -7,13 +7,12 @@ import pytest
 
 from src.core.model_capabilities import (
     CapabilitiesCache,
+    _format_price,
     merge_capabilities,
     normalize_provider_model,
     refresh_provider_capabilities,
     render_capabilities,
-    _format_price,
 )
-
 
 # ---------------------------------------------------------------------------
 # Price formatting (decision 2 — regression on 4.35e-07)

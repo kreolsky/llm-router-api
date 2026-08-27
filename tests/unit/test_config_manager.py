@@ -1,12 +1,11 @@
 """Unit tests for src/core/config_manager.py — ConfigManager class."""
 
-from unittest.mock import patch, mock_open, MagicMock, AsyncMock, call
-import yaml
+from unittest.mock import AsyncMock, patch
 
 import pytest
+import yaml
 
 from src.core.config_manager import ConfigManager
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -26,8 +25,6 @@ ALL_YAMLS = {
 def _multi_open(file_map):
     """Return a side_effect for builtins.open that dispatches by file path suffix."""
     from io import StringIO
-    from unittest.mock import MagicMock
-    import contextlib
 
     def _side_effect(path, *args, **kwargs):
         for key, content in file_map.items():
@@ -136,9 +133,8 @@ class TestLoadConfig:
                  yaml.safe_load(PROVIDERS_YAML),
                  yaml.YAMLError("bad yaml"),
              ]), \
-             patch("src.core.config_manager.logger"):
-            with pytest.raises(RuntimeError, match="Failed to parse config"):
-                cm._load_config(fail_on_error=True)
+             patch("src.core.config_manager.logger"), pytest.raises(RuntimeError, match="Failed to parse config"):
+            cm._load_config(fail_on_error=True)
 
 
 # ===================================================================

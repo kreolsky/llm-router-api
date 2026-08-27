@@ -6,11 +6,10 @@ import pytest
 
 import src.providers as provider_registry
 from src.providers import (
-    get_provider_instance,
     clear_provider_cache_async,
+    get_provider_instance,
     rebuild_provider_cache,
 )
-from src.providers.base import BaseProvider
 
 
 @pytest.fixture(autouse=True)
@@ -132,9 +131,8 @@ class TestRebuildProviderCache:
             "broken-a": {"type": "openai", "base_url": "https://a.example.com", "api_key_env": "MISSING_A"},
             "broken-b": {"type": "openai", "base_url": "https://b.example.com", "api_key_env": "MISSING_B"},
         }
-        with patch.dict("os.environ", {}, clear=True):
-            with pytest.raises(RuntimeError) as exc_info:
-                await rebuild_provider_cache({"providers": bad}, _cm())
+        with patch.dict("os.environ", {}, clear=True), pytest.raises(RuntimeError) as exc_info:
+            await rebuild_provider_cache({"providers": bad}, _cm())
         msg = str(exc_info.value)
         assert "broken-a" in msg
         assert "broken-b" in msg

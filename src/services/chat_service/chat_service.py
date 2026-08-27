@@ -1,17 +1,18 @@
 """Chat completion orchestrator: validation, provider dispatch, streaming."""
 
 import json
-from typing import Any, Tuple
+from typing import Any
+
 from fastapi import Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from ...core.config_manager import ConfigManager
-from ...services.model_service import ModelService
+from ...core.error_handling import ErrorType, create_error
 from ...core.logging import logger
 from ...core.sanitizer import MessageSanitizer
 from ...core.usage_db import request_stats
-from ...core.error_handling import ErrorType, create_error
 from ...services.base import BaseService
+from ...services.model_service import ModelService
 from .stream_processor import StreamProcessor, duplicate_reasoning_field, open_provider_stream
 
 
@@ -23,7 +24,7 @@ class ChatService(BaseService):
         self.model_service = model_service
         self.stream_processor = StreamProcessor(config_manager)
     
-    async def chat_completions(self, request: Request, auth_data: Tuple[str, str, list, list]) -> Any:
+    async def chat_completions(self, request: Request, auth_data: tuple[str, str, list, list]) -> Any:
         """Process a chat completion request, returning StreamingResponse or JSONResponse."""
         ctx = self._get_request_context(request)
         request_id = ctx.request_id

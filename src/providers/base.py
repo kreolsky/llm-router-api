@@ -1,24 +1,24 @@
 """Base provider with shared HTTP, streaming, retry, and error handling logic."""
 # SYSTEM: provider — base HTTP, retry, streaming and header merging
-import httpx
-import os
-import json
 import asyncio
-import time
 import contextlib
-from typing import Dict, Any, AsyncGenerator, Callable, Optional
+import json
+import os
+import time
+from collections.abc import AsyncGenerator, Callable
 from functools import wraps
-from fastapi import HTTPException
-from fastapi.responses import JSONResponse
+from typing import Any
 
+import httpx
+
+from ..core.error_handling import ErrorType, create_error, create_provider_http_error
+from ..core.identity_headers import compile_passthrough_spec
+from ..core.logging import logger
 from ..utils.deep_merge import deep_merge
 from ..utils.mask import mask_headers
-from ..core.error_handling import ErrorType, create_error, log_provider_error, create_provider_http_error
-from ..core.logging import logger
-from ..core.identity_headers import compile_passthrough_spec
 
 
-def retry_on_rate_limit(max_retries: Optional[int] = None, base_delay: Optional[float] = None, max_delay: Optional[float] = None):
+def retry_on_rate_limit(max_retries: int | None = None, base_delay: float | None = None, max_delay: float | None = None):
     """Retry decorator for 429 (Too Many Requests) with exponential backoff.
 
     Backoff formula: min(base_delay * 2^attempt, max_delay).
@@ -51,10 +51,7 @@ def retry_on_rate_limit(max_retries: Optional[int] = None, base_delay: Optional[
                     is_rate_limit = False
                     
                     # Check for HTTPException with rate limit status code
-                    if hasattr(e, 'status_code') and e.status_code == 429:
-                        is_rate_limit = True
-                    # Check for original exception with 429 status
-                    elif hasattr(e, 'original_exception') and hasattr(e.original_exception, 'response') and e.original_exception.response.status_code == 429:
+                    if hasattr(e, 'status_code') and e.status_code == 429 or hasattr(e, 'original_exception') and hasattr(e.original_exception, 'response') and e.original_exception.response.status_code == 429:
                         is_rate_limit = True
                     
                     if is_rate_limit and attempt < actual_max_retries:
@@ -81,7 +78,7 @@ def retry_on_rate_limit(max_retries: Optional[int] = None, base_delay: Optional[
 # os.environ[api_key_env]. It is never replaced per-request. Client API keys
 # stay in auth.py and are not propagated to providers.
 class BaseProvider:
-    def __init__(self, config: Dict[str, Any], config_manager=None):
+    def __init__(self, config: dict[str, Any], config_manager=None):
         """Initialize provider from config dict.
 
         Reads API key from the env var named by config['api_key_env'].
@@ -207,7 +204,7 @@ class BaseProvider:
             timeout = httpx.Timeout(connect=60.0, read=60.0, write=None, pool=5.0)
         return httpx.AsyncClient(limits=limits, timeout=timeout, proxy=self.proxy)
 
-    async def aclose(self, drain_timeout: Optional[float] = None) -> None:
+    async def aclose(self, drain_timeout: float | None = None) -> None:
         """Close the owned httpx.AsyncClient once in-flight requests have drained.
 
         Safe to call multiple times. Waits up to drain_timeout seconds (default:
@@ -223,7 +220,7 @@ class BaseProvider:
                 drain_timeout = self._get_timeout("stream_read_timeout", 300.0)
             try:
                 await asyncio.wait_for(self._idle.wait(), timeout=drain_timeout)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning(
                     f"Provider '{self.provider_name}': {self._inflight} request(s) still in flight "
                     f"after {drain_timeout}s, closing pool anyway",
@@ -252,7 +249,7 @@ class BaseProvider:
                 try:
                     await asyncio.wait_for(self._semaphore.acquire(), timeout=wait)
                     acquired = True
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     raise create_error(
                         ErrorType.PROVIDER_CONCURRENCY_LIMIT,
                         error_details="Concurrency limit reached for provider; retry later.",
@@ -267,7 +264,7 @@ class BaseProvider:
             if self._inflight == 0:
                 self._idle.set()
 
-    def _log_provider_data(self, title: str, data: Dict[str, Any], request_id: str, data_flow: str, component: str = None) -> None:
+    def _log_provider_data(self, title: str, data: dict[str, Any], request_id: str, data_flow: str, component: str = None) -> None:
         """Log request/response data with standardized provider context."""
         if component is None:
             component = f"{self.provider_name}_provider"
@@ -295,8 +292,8 @@ class BaseProvider:
             pool=pool if pool is not None else self.client.timeout.pool
         )
 
-    def _apply_model_config(self, request_body: Dict[str, Any], provider_model_name: str,
-                            model_config: Dict[str, Any]) -> Dict[str, Any]:
+    def _apply_model_config(self, request_body: dict[str, Any], provider_model_name: str,
+                            model_config: dict[str, Any]) -> dict[str, Any]:
         """
         Set provider model name and merge model-level options into request body.
         """
@@ -342,7 +339,7 @@ class BaseProvider:
             return getattr(self.config_manager, timeout_type)
         return default_value
 
-    def _merge_request_headers(self, extra_headers: Optional[Dict[str, str]]) -> Dict[str, str]:
+    def _merge_request_headers(self, extra_headers: dict[str, str] | None) -> dict[str, str]:
         """Merge per-request extra_headers over self.headers.
 
         ARCH: shared by the stream and non-stream paths so both send an
@@ -368,13 +365,13 @@ class BaseProvider:
         self,
         method: str,
         path: str,
-        request_body: Dict[str, Any] = None,
-        extra_headers: Dict[str, str] = None,
+        request_body: dict[str, Any] = None,
+        extra_headers: dict[str, str] = None,
         timeout: httpx.Timeout = None,
-        files: Dict[str, Any] = None,
-        data: Dict[str, Any] = None,
+        files: dict[str, Any] = None,
+        data: dict[str, Any] = None,
         request_id: str = "unknown"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Unified non-streaming HTTP request to provider APIs.
 
         Holds a per-provider concurrency slot across the whole call. The retry
@@ -396,13 +393,13 @@ class BaseProvider:
         self,
         method: str,
         path: str,
-        request_body: Dict[str, Any] = None,
-        extra_headers: Dict[str, str] = None,
+        request_body: dict[str, Any] = None,
+        extra_headers: dict[str, str] = None,
         timeout: httpx.Timeout = None,
-        files: Dict[str, Any] = None,
-        data: Dict[str, Any] = None,
+        files: dict[str, Any] = None,
+        data: dict[str, Any] = None,
         request_id: str = "unknown"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Actual HTTP request implementation. See _make_request for the slot wrapper."""
         merged_headers = self._merge_request_headers(extra_headers)
 
@@ -467,8 +464,8 @@ class BaseProvider:
                              error_details=str(e), request_id=request_id, provider_name=self.provider_name)
 
     async def _stream_request(self, client: httpx.AsyncClient, url_path: str,
-                              request_body: Dict[str, Any], request_id: str = "unknown",
-                              extra_headers: Dict[str, str] = None) -> AsyncGenerator[bytes, None]:
+                              request_body: dict[str, Any], request_id: str = "unknown",
+                              extra_headers: dict[str, str] = None) -> AsyncGenerator[bytes, None]:
         """Async generator streaming raw bytes from a provider API.
 
         Holds a per-provider concurrency slot across the ENTIRE iteration by the
@@ -482,8 +479,8 @@ class BaseProvider:
                 yield chunk
 
     async def _stream_request_inner(self, client: httpx.AsyncClient, url_path: str,
-                              request_body: Dict[str, Any], request_id: str = "unknown",
-                              extra_headers: Dict[str, str] = None) -> AsyncGenerator[bytes, None]:
+                              request_body: dict[str, Any], request_id: str = "unknown",
+                              extra_headers: dict[str, str] = None) -> AsyncGenerator[bytes, None]:
         """Actual streaming implementation. See _stream_request for the slot wrapper.
 
         Uses client.stream() context manager for memory-efficient chunk iteration.
@@ -569,32 +566,32 @@ class BaseProvider:
             }, exc_info=True)
             raise
 
-    async def chat_completions(self, request_body: Dict[str, Any], provider_model_name: str,
-                               model_config: Dict[str, Any], request_id: str = "unknown",
-                               extra_headers: Dict[str, str] = None) -> Dict[str, Any]:
+    async def chat_completions(self, request_body: dict[str, Any], provider_model_name: str,
+                               model_config: dict[str, Any], request_id: str = "unknown",
+                               extra_headers: dict[str, str] = None) -> dict[str, Any]:
         """Non-streaming chat completion. Returns the parsed provider JSON response."""
         raise NotImplementedError
 
-    def chat_completions_stream(self, request_body: Dict[str, Any], provider_model_name: str,
-                                model_config: Dict[str, Any], request_id: str = "unknown",
-                                extra_headers: Dict[str, str] = None) -> AsyncGenerator[bytes, None]:
+    def chat_completions_stream(self, request_body: dict[str, Any], provider_model_name: str,
+                                model_config: dict[str, Any], request_id: str = "unknown",
+                                extra_headers: dict[str, str] = None) -> AsyncGenerator[bytes, None]:
         """Streaming chat completion. Yields raw SSE bytes from the provider."""
         raise NotImplementedError
 
-    async def embeddings(self, request_body: Dict[str, Any], provider_model_name: str,
-                         model_config: Dict[str, Any], request_id: str = "unknown") -> Any:
+    async def embeddings(self, request_body: dict[str, Any], provider_model_name: str,
+                         model_config: dict[str, Any], request_id: str = "unknown") -> Any:
         raise NotImplementedError
 
-    async def list_models(self, request_id: str = "unknown") -> Dict[str, Any]:
+    async def list_models(self, request_id: str = "unknown") -> dict[str, Any]:
         """Return the provider's model list (raw /models response)."""
         raise NotImplementedError
 
-    async def get_model(self, provider_model_name: str, request_id: str = "unknown") -> Dict[str, Any]:
+    async def get_model(self, provider_model_name: str, request_id: str = "unknown") -> dict[str, Any]:
         """Return a single model's metadata, or {} if not found."""
         raise NotImplementedError
 
-    async def transcriptions(self, request_body: Dict[str, Any], provider_model_name: str,
-                             model_config: Dict[str, Any], request_id: str = "unknown") -> Any:
+    async def transcriptions(self, request_body: dict[str, Any], provider_model_name: str,
+                             model_config: dict[str, Any], request_id: str = "unknown") -> Any:
         """Transcribe audio. request_body shape:
 
             {"audio": {"filename": str, "content_type": str, "data": bytes},

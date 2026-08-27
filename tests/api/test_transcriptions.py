@@ -2,13 +2,14 @@
 Transcription functionality tests for NNP LLM Router API.
 """
 
-import pytest
-import httpx
-import os
-import base64
 import asyncio
+import base64
 from pathlib import Path
-from tests.test_utils import TestTimer, ResponseValidator
+
+import httpx
+import pytest
+
+from tests.test_utils import TestTimer
 
 
 class TestTranscriptions:

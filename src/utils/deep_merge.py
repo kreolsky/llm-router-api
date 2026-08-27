@@ -1,7 +1,6 @@
 """Recursive dictionary merge utility."""
-from typing import Dict, Any
 
-def deep_merge(dict1: Dict, dict2: Dict) -> Dict:
+def deep_merge(dict1: dict, dict2: dict) -> dict:
     """Deep merges dict2 into dict1, returning a new dict without mutating inputs."""
     result = dict1.copy()
     for key, value in dict2.items():

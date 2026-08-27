@@ -2,11 +2,13 @@
 Basic connectivity tests for NNP LLM Router API.
 """
 
-import pytest
-import httpx
-import time
 import asyncio
 import logging
+import time
+
+import httpx
+import pytest
+
 from tests.test_utils import TestTimer, check_service_health
 
 logger = logging.getLogger(__name__)
