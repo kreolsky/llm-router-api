@@ -54,50 +54,33 @@ providers:
     proxy: socks5://host:1080             # optional: route this provider's traffic through a proxy
     headers:                              # extra headers (optional)
       HTTP-Referer: "https://myapp.com"
-    identity: opencode                    # optional: opencode | passthrough (see below)
-    identity_version: "1.18.23"           # User-Agent version for identity: opencode
-    passthrough_headers: ["User-Agent"]   # optional: replaces the default passthrough whitelist
+    identity: passthrough                 # optional: forward client headers minus the denylist (see below)
 ```
 
 `type` determines the provider class: `openai` (pass-through). Any OpenAI-compatible API works with `type: openai`. The optional `proxy` key routes all of that provider's traffic through a SOCKS5/HTTP proxy (requires the `httpx[socks]` extra); unset = direct connection.
 
-#### identity — upstream client attribution
+#### identity — forwarding the client's headers
 
-`identity` shapes the headers this router sends upstream so requests look like a specific client (see [plans/1787823885000-opencode-attribution.md](plans/1787823885000-opencode-attribution.md)):
+`identity: passthrough` is the only identity mode: every client header is forwarded upstream verbatim — the client's own spelling, because casing is part of a harness fingerprint and the source is now one real agent, not a synthesized profile. A full forward requires a **denylist** (`src/core/header_policy.py`); it drops three groups, matched case-insensitively:
 
-* **`opencode`** — synthetic OpenCode profile: `User-Agent: opencode/<identity_version>` on every request plus `x-session-affinity` / `X-Session-Id` with a stable `ses_*` id per client project (OpenCode-shaped ids, session-sticky within `OPENCODE_SESSION_TTL` seconds of inactivity). Real harness headers sent by the router's own client still override the synthetic ones.
-* **`passthrough`** — forward the whitelisted headers of the router's client verbatim. Default whitelist: `User-Agent`, `X-Session-Id`, `x-session-affinity`, `x-parent-session-id`, `anthropic-beta`, `x-stainless-*`. Use this when the client is itself a coding harness; nothing is fabricated. Kilo Code and OpenCode both send this set already (Kilo is an OpenCode fork: same stable `ses_*` ids, `User-Agent: Kilo-Code/<version>`), so neither needs a synthetic profile.
-* **unset** — current behavior (plain gateway headers).
+* **client credentials** — `authorization`, `proxy-authorization`, `cookie`, `x-api-key`, `api-key`, `x-goog-api-key`. Only the router's own key (from `api_key_env`) reaches the upstream; Anthropic-/Azure-/Google-style agents carry their key in these names instead of `Authorization`.
+* **transport / hop-by-hop** — `host`, `content-length`, `content-type`, `content-encoding`, `connection`, `transfer-encoding`, `te`, `upgrade`, `keep-alive`, `expect`, `accept-encoding`. The router re-serializes the body (sanitizer, model override), so the client's framing values are stale; `accept-encoding` would make httpx receive `br`/`zstd` it cannot decode.
+* **network topology** — `x-forwarded-*` (prefix), `x-real-ip`, `forwarded`, `true-client-ip`, `cf-connecting-ip`, `cdn-loop`. Behind a reverse proxy these would leak internal IPs of the lab.
 
-##### passthrough_headers — customising the whitelist
-
-`passthrough_headers:` **replaces** the default whitelist for that provider (it does not extend it, so the set can be narrowed as well as widened). A trailing `*` makes an entry a prefix pattern. Matching is case-insensitive; an exact entry is re-cased to the spelling written in the config, a prefix match keeps the client's own spelling — header casing is part of a harness fingerprint.
-
-```yaml
-glm:
-  identity: passthrough
-  passthrough_headers: ["User-Agent", "x-session-affinity", "X-Session-Id", "x-kilocode-*"]
-```
-
-An empty list (`[]`) is valid and forwards nothing. A malformed list (not a list, an empty name, a bare `"*"`) fails startup validation rather than the first request.
-
-Kilo Code additionally sends `HTTP-Referer: https://kilocode.ai`, `X-Title: Kilo Code` and — under its own internal flag — `x-kilocode-mode` / `X-KILOCODE-*`. These are OpenRouter-style attribution and are **not** in the default set: add them here if your upstream makes use of them.
+The denylist is **fail-open**: an unknown client header is forwarded. That is a deliberate trade for the scenario this router serves (a private lab with its own agents and one external server) — the consequence is that the list must be re-audited whenever a new harness or proxy is onboarded. Unknown `identity` values fail startup validation. Rollback: remove the `identity:` key and hot-reload applies it within `CONFIG_RELOAD_INTERVAL` seconds.
 
 ##### Header precedence and the static fallback
 
-Per-request headers are merged over the provider's static `headers:`, replacing case-insensitive duplicates, and `Authorization` is never overwritten. Two consequences worth knowing:
-
-* An explicit `headers:` entry wins over the **synthetic** `opencode` profile (e.g. keep your own `HTTP-Referer`/`X-Title` for `openrouter`), because the profile only fills in a `User-Agent` that is not already configured.
-* Under `passthrough`, a real client header wins over `headers:` — which makes `headers:` a **fallback**. If the client sends no `User-Agent` (a plain `curl`, a script, an SDK that omits it), nothing overrides the static entry, so upstream sees whatever you configured; with no `headers:` entry at all, upstream sees the bare httpx default. Set a static `User-Agent` when the upstream should never see a `python-httpx/*`:
+Per-request headers are merged over the provider's static `headers:`, replacing case-insensitive duplicates, and `Authorization` is never overwritten. Under `passthrough`, a real client header wins over `headers:` — which makes `headers:` a **fallback**. If the client sends no `User-Agent` (a plain `curl`, a script, an SDK that omits it), nothing overrides the static entry, so upstream sees whatever you configured; with no `headers:` entry at all, upstream sees the bare httpx default. Set a static `User-Agent` when the upstream should never see a `python-httpx/*`:
 
 ```yaml
 glm:
   identity: passthrough
   headers:
-    User-Agent: "opencode/1.18.23"   # used only when the client sends none
+    User-Agent: "my-harness/1.0"   # used only when the client sends none
 ```
 
-Unknown `identity` values fail startup validation. Rollback: remove the `identity:` key and hot-reload applies it within `CONFIG_RELOAD_INTERVAL` seconds.
+Static `headers:` is validated at startup: entries must be `name: value` strings, and `Authorization` or transport/hop-by-hop names (e.g. `Content-Length`, `Host`) are rejected — the key comes from `api_key_env` and the router owns the transport values.
 
 ### models.yaml — model registry
 
@@ -244,7 +227,6 @@ See [tests/README.md](tests/README.md) for details on what each test file covers
 | `OPENAI_CONNECT_TIMEOUT` | 60.0 | OpenAI connection timeout (s) |
 | `OPENAI_TRANSCRIPTION_TIMEOUT` | 3600.0 | Transcription request timeout (s) |
 | `OPENAI_EMBEDDINGS_READ_TIMEOUT` | 30.0 | Embeddings read timeout (s) |
-| `OPENCODE_SESSION_TTL` | 3600 | Idle TTL (s) of synthetic `identity: opencode` sessions |
 | `QUEUE_WAIT_TIMEOUT` | 30.0 | Concurrency slot wait timeout (s) |
 | `PROVIDER_MAX_RETRIES` | 3 | 429 retry attempts |
 | `PROVIDER_RETRY_BASE_DELAY` | 1.0 | Retry base delay (s) |
@@ -256,7 +238,7 @@ See [tests/README.md](tests/README.md) for details on what each test file covers
 | `MODEL_CACHE_PATH` | data/model_cache.json | Persisted capabilities cache file |
 | `SANITIZE_MESSAGES` | false | Strip service fields from messages |
 | `DEBUG` | false | Enable debug-level JSON logging |
-| `API_WORKERS` | 1 | Uvicorn worker processes. Keep at 1: session ids, capabilities cache and usage writer are process-local |
+| `API_WORKERS` | 1 | Uvicorn worker processes. Keep at 1: the capabilities cache and usage writer are process-local |
 | `LOG_LEVEL` | INFO | Logging level. `DEBUG` writes full request/response bodies to `logs/debug.log` |
 | `LOG_MAX_BYTES` | 52428800 | Size at which a log file rotates (50 MB) |
 | `LOG_BACKUP_COUNT` | 3 | Rotated log files kept per log |

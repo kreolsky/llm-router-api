@@ -12,10 +12,9 @@ and read the entry file(s). Aliases are hand-maintained in
 | auth | bearer/HMAC authentication and per-key model access control | `src/core/auth.py:2` | ключи, доступ, авторизация, user_keys, api key |
 | config | YAML load, 5s hot reload, env-backed settings | `src/core/config_manager.py:2` | конфиг, yaml, hot reload, перезагрузка конфига |
 | error-format | OpenRouter-compatible error envelope | `src/core/error_handling/error_handler.py:2` | ошибки, error |
-| identity-headers | passthrough header whitelist and its override | `src/core/identity_headers.py:15` | заголовки, passthrough, харнесс, harness |
+| header-policy | denylist for client headers forwarded upstream | `src/core/header_policy.py:10` |  |
 | logging | the kwargs-style Logger used everywhere | `src/core/logging/logger.py:7` | логи, логирование |
 | model-capabilities | manual layer + auto-cache + render | `src/core/model_capabilities.py:18` | модели, capabilities, /v1/models, кэш моделей |
-| opencode-identity | synthetic ses_* ids and the session registry | `src/core/opencode_identity.py:15` | opencode, сессии, ses_, affinity |
 | provider | base HTTP, retry, streaming and header merging | `src/providers/base.py:2` | провайдер, upstream, бэкенд |
 | provider-registry | provider instances cached by name, drained on reload | `src/providers/__init__.py:2` | кэш провайдеров, реестр |
 | request-context | the typed RequestContext carried per request | `src/core/context.py:7` | контекст запроса, request_id |

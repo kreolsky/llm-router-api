@@ -12,7 +12,7 @@ from typing import Any
 import httpx
 
 from ..core.error_handling import ErrorType, create_error, create_provider_http_error
-from ..core.identity_headers import compile_passthrough_spec
+from ..core.header_policy import FORBIDDEN_STATIC_HEADERS
 from ..core.logging import logger
 from ..utils.deep_merge import deep_merge
 from ..utils.mask import mask_headers
@@ -99,35 +99,31 @@ class BaseProvider:
         self.config_manager = config_manager
         self.proxy = config.get("proxy")
         self.provider_name = self.__class__.__name__.replace("Provider", "").lower()
-        self.headers.setdefault("Content-Type", "application/json")
 
-        # ARCH: identity profile. `opencode`
-        # stamps a static OpenCode User-Agent here (an explicit `headers:`
-        # User-Agent wins over the profile); per-request session headers are
-        # assembled by the service layer and arrive via extra_headers.
-        # `passthrough` forwards whitelisted client headers instead; the
-        # whitelist itself is data (`passthrough_headers:`, replaces the
-        # default set) — see core/identity_headers.py.
+        # ARCH: single identity mode. `passthrough` forwards every client
+        # header upstream verbatim minus the denylist
+        # (core/header_policy.py); the headers are assembled by the service
+        # layer per request and arrive via extra_headers.
         self.identity = config.get("identity")
-        self.identity_version = str(config.get("identity_version") or "1.18.23")
-        if self.identity not in (None, "opencode", "passthrough"):
+        if self.identity not in (None, "passthrough"):
             raise create_error(ErrorType.PROVIDER_CONFIG_ERROR,
-                             error_details=f"Unknown identity profile: {self.identity!r} (expected 'opencode' or 'passthrough').",
+                             error_details=f"Unknown identity profile: {self.identity!r} (expected 'passthrough').",
                              provider_name=self.provider_name)
-        if self.identity == "opencode":
-            self.headers.setdefault("User-Agent", f"opencode/{self.identity_version}")
 
-        raw_passthrough = config.get("passthrough_headers")
-        if raw_passthrough is not None and not isinstance(raw_passthrough, list):
-            raise create_error(ErrorType.PROVIDER_CONFIG_ERROR,
-                               error_details="passthrough_headers must be a list of header names.",
-                               provider_name=self.provider_name)
-        try:
-            self.passthrough_spec = compile_passthrough_spec(raw_passthrough)
-        except ValueError as e:
-            raise create_error(ErrorType.PROVIDER_CONFIG_ERROR,
-                               error_details=str(e),
-                               provider_name=self.provider_name)
+        # Static `headers:` validation — fail at construction (startup
+        # validation), not on the first request. Runs BEFORE the code-owned
+        # Content-Type default below, so only operator-authored entries are
+        # checked.
+        for name, value in self.headers.items():
+            if not isinstance(name, str) or not name.strip() or not isinstance(value, str):
+                raise create_error(ErrorType.PROVIDER_CONFIG_ERROR,
+                                 error_details=f"headers entries must be 'name: value' strings, got {name!r}: {value!r}.",
+                                 provider_name=self.provider_name)
+            if name.lower() in FORBIDDEN_STATIC_HEADERS:
+                raise create_error(ErrorType.PROVIDER_CONFIG_ERROR,
+                                 error_details=f"headers may not set {name!r} (Authorization comes from api_key_env; transport/hop-by-hop headers are owned by the router).",
+                                 provider_name=self.provider_name)
+        self.headers.setdefault("Content-Type", "application/json")
 
         if not self.base_url:
             raise create_error(ErrorType.PROVIDER_CONFIG_ERROR,

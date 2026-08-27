@@ -3,13 +3,7 @@ providers:
     type: openai
     base_url: https://api.z.ai/api/coding/paas/v4
     api_key_env: ZAI_API_KEY
-    identity: passthrough # opencode | passthrough; unset = current behavior
-    # identity_version: "1.18.23" # only used by identity: opencode
-    # passthrough_headers: replaces (not extends) the default whitelist of
-    # client headers forwarded upstream. Trailing * = prefix match. Default:
-    # User-Agent, X-Session-Id, x-session-affinity, x-parent-session-id,
-    # anthropic-beta, x-stainless-*  — already covers opencode and Kilo Code.
-    # passthrough_headers: ["User-Agent", "x-session-affinity", "x-kilocode-*"]
+    identity: passthrough # forward client headers minus the denylist (core/header_policy.py); unset = plain gateway headers
   deepseek:
     type: openai # Совместим с OpenAI API
     base_url: https://api.deepseek.com/v1

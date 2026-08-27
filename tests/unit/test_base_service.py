@@ -1,6 +1,5 @@
 """Unit tests for src/services/base.py — BaseService class."""
 
-import re
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8,7 +7,6 @@ import pytest
 from fastapi import HTTPException
 
 from src.core.context import RequestContext
-from src.core.identity_headers import compile_passthrough_spec
 from src.services.base import BaseService
 
 # ---------------------------------------------------------------------------
@@ -261,9 +259,6 @@ class TestGetProvider:
 # _build_identity_headers / _extract_passthrough_headers
 # ===================================================================
 
-SESSION_ID_RE = re.compile(r"^ses_[0-9A-Za-z]{26}$")
-
-
 def _make_identity_request(headers=None, request_id="req-1", project_name="proj"):
     """Mock request with real dict headers and a typed RequestContext."""
     request = MagicMock()
@@ -274,105 +269,86 @@ def _make_identity_request(headers=None, request_id="req-1", project_name="proj"
     return request
 
 
-def _make_identity_provider(identity=None, provider_name="glm", passthrough_headers=None):
-    return SimpleNamespace(
-        identity=identity,
-        provider_name=provider_name,
-        passthrough_spec=compile_passthrough_spec(passthrough_headers),
-    )
+def _make_identity_provider(identity=None, provider_name="glm"):
+    return SimpleNamespace(identity=identity, provider_name=provider_name)
 
 
 def _build_identity_service():
-    cm = _make_config_manager()
-    cm.opencode_session_ttl = 3600.0
-    return BaseService(cm)
-
-
-class TestConfigurablePassthroughWhitelist:
-    """passthrough_headers on the provider replaces the default whitelist."""
-
-    def test_provider_spec_widens_whitelist(self):
-        svc = _build_identity_service()
-        request = _make_identity_request({
-            "user-agent": "Kilo-Code/7.5.5",
-            "x-kilocode-mode": "code",
-            "x-title": "Kilo Code",
-        })
-        provider = _make_identity_provider(
-            "passthrough", passthrough_headers=["User-Agent", "x-kilocode-*"])
-        result = svc._build_identity_headers(provider, request)
-        assert result == {"User-Agent": "Kilo-Code/7.5.5", "x-kilocode-mode": "code"}
-
-    def test_provider_spec_narrows_whitelist(self):
-        svc = _build_identity_service()
-        request = _make_identity_request({"user-agent": "Kilo-Code/7.5.5",
-                                          "x-session-affinity": "ses_abc"})
-        provider = _make_identity_provider("passthrough", passthrough_headers=["User-Agent"])
-        assert svc._build_identity_headers(provider, request) == {"User-Agent": "Kilo-Code/7.5.5"}
-
-    def test_provider_without_spec_attribute_uses_default(self):
-        """Legacy/duck-typed provider objects keep the default whitelist."""
-        svc = _build_identity_service()
-        request = _make_identity_request({"user-agent": "Kilo-Code/7.5.5"})
-        provider = SimpleNamespace(identity="passthrough", provider_name="glm")
-        assert svc._build_identity_headers(provider, request) == {"User-Agent": "Kilo-Code/7.5.5"}
-
-    def test_kilo_session_headers_survive_default_passthrough(self):
-        """Kilo is an opencode fork: its ses_* headers pass through untouched."""
-        svc = _build_identity_service()
-        request = _make_identity_request({
-            "user-agent": "Kilo-Code/7.5.5",
-            "x-session-affinity": "ses_01ab",
-            "x-session-id": "ses_01ab",
-            "x-parent-session-id": "ses_00zz",
-        })
-        result = svc._build_identity_headers(_make_identity_provider("passthrough"), request)
-        assert result == {
-            "User-Agent": "Kilo-Code/7.5.5",
-            "x-session-affinity": "ses_01ab",
-            "X-Session-Id": "ses_01ab",
-            "x-parent-session-id": "ses_00zz",
-        }
+    return BaseService(_make_config_manager())
 
 
 class TestExtractPassthroughHeaders:
+    """Full forward minus the denylist (core/header_policy.py)."""
 
-    def test_whitelisted_headers_forwarded_with_canonical_casing(self):
+    def test_client_headers_forwarded_verbatim(self):
+        """Everything not denylisted goes up with the client's own spelling."""
         svc = _build_identity_service()
         request = _make_identity_request({
-            "user-agent": "oc/1.0",
-            "x-session-id": "ses_abc",
-            "x-session-affinity": "ses_abc",
-            "x-parent-session-id": "ses_parent",
+            "user-agent": "Kilo-Code/7.5.5",
+            "x-session-id": "ses_01ab",
+            "x-session-affinity": "ses_01ab",
+            "x-kilocode-mode": "code",
             "anthropic-beta": "interleaved-thinking-2025-05-14",
+            "accept": "application/json",
         })
-        forwarded = svc._extract_passthrough_headers(request)
-        assert forwarded == {
-            "User-Agent": "oc/1.0",
-            "X-Session-Id": "ses_abc",
-            "x-session-affinity": "ses_abc",
-            "x-parent-session-id": "ses_parent",
+        assert svc._extract_passthrough_headers(request) == {
+            "user-agent": "Kilo-Code/7.5.5",
+            "x-session-id": "ses_01ab",
+            "x-session-affinity": "ses_01ab",
+            "x-kilocode-mode": "code",
             "anthropic-beta": "interleaved-thinking-2025-05-14",
+            "accept": "application/json",
         }
 
-    def test_x_stainless_prefix_forwarded(self):
-        svc = _build_identity_service()
-        request = _make_identity_request({
-            "x-stainless-lang": "js", "x-stainless-retry-count": "2",
-        })
-        forwarded = svc._extract_passthrough_headers(request)
-        assert forwarded == {"x-stainless-lang": "js", "x-stainless-retry-count": "2"}
-
-    def test_non_whitelisted_headers_dropped(self):
+    def test_credential_headers_dropped(self):
+        """Client credentials never reach the upstream — only the router's key goes."""
         svc = _build_identity_service()
         request = _make_identity_request({
             "authorization": "Bearer nnp-v1-x",
-            "x-nnp-project": "proj",
-            "x-request-id": "r1",
-            "http-referer": "https://nnp.space",
-            "content-type": "application/json",
+            "proxy-authorization": "Basic x",
             "cookie": "a=b",
+            "x-api-key": "sk-client",
+            "api-key": "sk-client",
+            "x-goog-api-key": "sk-client",
+            "user-agent": "oc/1.0",
         })
+        assert svc._extract_passthrough_headers(request) == {"user-agent": "oc/1.0"}
+
+    def test_transport_headers_dropped(self):
+        """Hop-by-hop / framing values are stale: the router re-serializes the body."""
+        svc = _build_identity_service()
+        request = _make_identity_request({
+            "host": "router:8777",
+            "content-length": "123",
+            "content-type": "application/json",
+            "content-encoding": "gzip",
+            "connection": "keep-alive",
+            "transfer-encoding": "chunked",
+            "te": "trailers",
+            "upgrade": "h2c",
+            "keep-alive": "timeout=5",
+            "expect": "100-continue",
+            "accept-encoding": "br, zstd",
+        })
+        assert svc._extract_passthrough_headers(request) == {}
+
+    def test_topology_headers_dropped(self):
+        """Reverse-proxy headers would leak internal IPs of the lab."""
+        svc = _build_identity_service()
+        request = _make_identity_request({
+            "x-forwarded-for": "10.10.1.5",
+            "x-forwarded-host": "internal.local",
+            "x-real-ip": "10.10.1.5",
+            "forwarded": "for=10.10.1.5",
+            "true-client-ip": "10.10.1.5",
+            "cf-connecting-ip": "10.10.1.5",
+            "cdn-loop": "cdn1",
+        })
+        assert svc._extract_passthrough_headers(request) == {}
+
+    def test_denylist_is_case_insensitive(self):
+        svc = _build_identity_service()
+        request = _make_identity_request({"X-Api-Key": "sk-client", "HOST": "router"})
         assert svc._extract_passthrough_headers(request) == {}
 
     def test_none_request_returns_empty(self):
@@ -387,50 +363,22 @@ class TestBuildIdentityHeaders:
         assert svc._build_identity_headers(_make_identity_provider(None), request) is None
         assert svc._build_identity_headers(SimpleNamespace(), request) is None
 
-    def test_passthrough_forwards_whitelist_verbatim(self):
+    def test_passthrough_forwards_all_but_denylist(self):
         svc = _build_identity_service()
-        request = _make_identity_request({"user-agent": "oc/1.0", "x-custom": "no"})
+        request = _make_identity_request({
+            "user-agent": "oc/1.0",
+            "x-custom": "yes",
+            "authorization": "Bearer nnp-v1-x",
+        })
         result = svc._build_identity_headers(_make_identity_provider("passthrough"), request)
-        assert result == {"User-Agent": "oc/1.0"}
+        assert result == {"user-agent": "oc/1.0", "x-custom": "yes"}
 
-    def test_passthrough_with_no_harness_headers_returns_none(self):
+    def test_passthrough_with_only_denied_headers_returns_none(self):
         svc = _build_identity_service()
-        request = _make_identity_request({"x-custom": "no"})
+        request = _make_identity_request({"authorization": "Bearer nnp-v1-x"})
         result = svc._build_identity_headers(_make_identity_provider("passthrough"), request)
         assert result is None
 
-    def test_opencode_synthesizes_matching_session_headers(self):
+    def test_none_request_returns_none_for_passthrough(self):
         svc = _build_identity_service()
-        request = _make_identity_request()
-        result = svc._build_identity_headers(_make_identity_provider("opencode"), request)
-        assert set(result) == {"x-session-affinity", "X-Session-Id"}
-        assert result["x-session-affinity"] == result["X-Session-Id"]
-        assert SESSION_ID_RE.fullmatch(result["X-Session-Id"])
-
-    def test_opencode_session_stable_per_project(self):
-        svc = _build_identity_service()
-        provider = _make_identity_provider("opencode")
-        first = svc._build_identity_headers(provider, _make_identity_request(project_name="a"))
-        second = svc._build_identity_headers(provider, _make_identity_request(project_name="a"))
-        other = svc._build_identity_headers(provider, _make_identity_request(project_name="b"))
-        assert first == second
-        assert first["X-Session-Id"] != other["X-Session-Id"]
-
-    def test_opencode_real_client_headers_win_over_synthetic(self):
-        svc = _build_identity_service()
-        request = _make_identity_request({
-            "user-agent": "real-harness/2.0", "x-session-id": "ses_real",
-        })
-        result = svc._build_identity_headers(_make_identity_provider("opencode"), request)
-        assert result["User-Agent"] == "real-harness/2.0"
-        assert result["X-Session-Id"] == "ses_real"
-        # Synthetic affinity still present and synthetic session dropped
-        assert SESSION_ID_RE.fullmatch(result["x-session-affinity"])
-
-    def test_opencode_without_project_falls_back_to_none_key(self):
-        """No project_name → key 'provider:None', still stable across requests."""
-        svc = _build_identity_service()
-        provider = _make_identity_provider("opencode")
-        first = svc._build_identity_headers(provider, _make_identity_request(project_name=None))
-        second = svc._build_identity_headers(provider, _make_identity_request(project_name=None))
-        assert first["X-Session-Id"] == second["X-Session-Id"]
+        assert svc._build_identity_headers(_make_identity_provider("passthrough"), None) is None

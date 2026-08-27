@@ -9,7 +9,6 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
-from src.core.identity_headers import match_passthrough
 from src.providers.base import BaseProvider, retry_on_rate_limit
 
 # ---------------------------------------------------------------------------
@@ -874,30 +873,7 @@ class TestHeaderMergeParity:
 
 
 class TestIdentityProfileInit:
-    """identity / identity_version config keys in BaseProvider.__init__."""
-
-    def test_identity_opencode_sets_user_agent(self):
-        config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
-                  "identity": "opencode", "identity_version": "9.9.9"}
-        with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            provider = ProviderStub(config)
-        assert provider.identity == "opencode"
-        assert provider.headers["User-Agent"] == "opencode/9.9.9"
-
-    def test_identity_opencode_default_version(self):
-        config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
-                  "identity": "opencode"}
-        with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            provider = ProviderStub(config)
-        assert provider.headers["User-Agent"] == "opencode/1.18.23"
-
-    def test_configured_user_agent_wins_over_profile(self):
-        """An explicit headers.User-Agent takes priority over the identity profile."""
-        config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
-                  "identity": "opencode", "headers": {"User-Agent": "custom/1.0"}}
-        with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            provider = ProviderStub(config)
-        assert provider.headers["User-Agent"] == "custom/1.0"
+    """identity config key in BaseProvider.__init__."""
 
     def test_identity_passthrough_sets_no_user_agent(self):
         config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
@@ -907,42 +883,65 @@ class TestIdentityProfileInit:
         assert provider.identity == "passthrough"
         assert "User-Agent" not in provider.headers
 
-    def test_passthrough_headers_config_compiles_into_spec(self):
-        config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
-                  "identity": "passthrough", "passthrough_headers": ["X-Title", "x-kilocode-*"]}
-        with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            provider = ProviderStub(config)
-        assert match_passthrough("x-title", provider.passthrough_spec) == "X-Title"
-        assert match_passthrough("X-KILOCODE-TASKID", provider.passthrough_spec) == "X-KILOCODE-TASKID"
-        assert match_passthrough("User-Agent", provider.passthrough_spec) is None
-
-    def test_passthrough_headers_defaults_when_absent(self):
-        config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY"}
-        with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            provider = ProviderStub(config)
-        assert match_passthrough("x-session-affinity", provider.passthrough_spec) == "x-session-affinity"
-
-    @pytest.mark.parametrize("bad", ["X-Title", {"a": 1}, [""], ["*"]])
-    def test_malformed_passthrough_headers_fails_fast(self, bad):
-        config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
-                  "identity": "passthrough", "passthrough_headers": bad}
-        with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            with pytest.raises(HTTPException) as exc_info:
-                ProviderStub(config)
-        assert exc_info.value.status_code == 500
-
     def test_unknown_identity_fails_fast(self):
         config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
-                  "identity": "claude-code"}
+                  "identity": "opencode"}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
             with pytest.raises(HTTPException) as exc_info:
                 ProviderStub(config)
         assert exc_info.value.status_code == 500
+        assert "expected 'passthrough'" in str(exc_info.value.detail)
 
     def test_no_identity_keeps_current_behavior(self):
         provider = _build_provider()
         assert provider.identity is None
         assert "User-Agent" not in provider.headers
+
+
+class TestStaticHeadersValidation:
+    """Static `headers:` from providers.yaml fails fast at construction."""
+
+    def test_non_string_value_fails_fast(self):
+        """X-Title: 12345 (YAML int) is rejected at startup, not on first request."""
+        config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
+                  "headers": {"X-Title": 12345}}
+        with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
+            with pytest.raises(HTTPException) as exc_info:
+                ProviderStub(config)
+        assert exc_info.value.status_code == 500
+
+    def test_non_string_key_fails_fast(self):
+        config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
+                  "headers": {123: "value"}}
+        with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
+            with pytest.raises(HTTPException) as exc_info:
+                ProviderStub(config)
+        assert exc_info.value.status_code == 500
+
+    def test_authorization_in_headers_fails_fast(self):
+        config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
+                  "headers": {"Authorization": "Bearer literal-key"}}
+        with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
+            with pytest.raises(HTTPException) as exc_info:
+                ProviderStub(config)
+        assert exc_info.value.status_code == 500
+
+    @pytest.mark.parametrize("name", ["Content-Length", "host", "Transfer-Encoding",
+                                      "Connection", "Accept-Encoding"])
+    def test_hop_by_hop_in_headers_fails_fast(self, name):
+        config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
+                  "headers": {name: "x"}}
+        with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
+            with pytest.raises(HTTPException) as exc_info:
+                ProviderStub(config)
+        assert exc_info.value.status_code == 500
+
+    def test_valid_static_headers_accepted(self):
+        """Attribution headers pass validation; Content-Type default still applied."""
+        provider = _build_provider(headers={"HTTP-Referer": "https://nnp.space",
+                                            "X-Title": "nnp.space"})
+        assert provider.headers["HTTP-Referer"] == "https://nnp.space"
+        assert provider.headers["Content-Type"] == "application/json"
 
 
 class TestChatExtraHeadersForwarding:

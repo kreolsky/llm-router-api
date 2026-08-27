@@ -9,9 +9,11 @@ from fastapi import HTTPException, Request
 from ..core.config_manager import ConfigManager
 from ..core.context import RequestContext, request_context
 from ..core.error_handling import ErrorType, create_error
-from ..core.identity_headers import compile_passthrough_spec, match_passthrough
+from ..core.header_policy import (
+    FORWARDED_HEADER_DENYLIST,
+    FORWARDED_HEADER_DENY_PREFIXES,
+)
 from ..core.logging import logger
-from ..core.opencode_identity import opencode_session_headers
 from ..providers import get_provider_instance
 
 
@@ -44,46 +46,37 @@ class BaseService:
         """Return the typed RequestContext carried by the request."""
         return request_context(request)
 
-    def _extract_passthrough_headers(self, request: Request | None,
-                                     spec: Any | None = None) -> dict[str, str]:
-        """Pick whitelisted headers off the client request, canonical casing.
+    def _extract_passthrough_headers(self, request: Request | None) -> dict[str, str]:
+        """Collect every client header minus the denylist (core/header_policy.py).
 
-        spec is the provider's compiled passthrough whitelist; None falls back
-        to the default set (core/identity_headers.py).
+        WHY: passthrough forwards headers verbatim (the client's own spelling —
+        casing is part of a harness fingerprint), so there is no whitelist to
+        apply; the denylist is what keeps client credentials, stale transport
+        values, and lab topology from going upstream.
         """
         if request is None:
             return {}
-        if spec is None:
-            spec = compile_passthrough_spec()
         forwarded: dict[str, str] = {}
         for name, value in request.headers.items():
-            canonical = match_passthrough(name, spec)
-            if canonical is not None:
-                forwarded[canonical] = value
+            low = name.lower()
+            if low in FORWARDED_HEADER_DENYLIST:
+                continue
+            if any(low.startswith(prefix) for prefix in FORWARDED_HEADER_DENY_PREFIXES):
+                continue
+            forwarded[name] = value
         return forwarded
 
     def _build_identity_headers(self, provider_instance: Any,
-                                request: Request | None) -> dict[str, str] | None:
+                                 request: Request | None) -> dict[str, str] | None:
         """Per-request upstream headers for providers with an identity profile.
 
-        passthrough: forward the client's whitelisted harness headers verbatim.
-        opencode: synthesize session headers (registry keyed by provider name +
-        project_name); real client headers still win over the synthetic set.
+        passthrough: forward the client's headers verbatim minus the denylist.
         Returns None when the provider has no profile (behavior unchanged).
         """
         identity = getattr(provider_instance, "identity", None)
         if not identity:
             return None
-        passthrough = self._extract_passthrough_headers(
-            request, getattr(provider_instance, "passthrough_spec", None))
-        if identity == "passthrough":
-            return passthrough or None
-        if identity == "opencode":
-            ctx = request_context(request)
-            registry_key = f"{getattr(provider_instance, 'provider_name', 'unknown')}:{ctx.project_name}"
-            synthetic = opencode_session_headers(registry_key, self.config_manager.opencode_session_ttl)
-            return {**synthetic, **passthrough}
-        return None
+        return self._extract_passthrough_headers(request) or None
 
     def _validate_and_get_config(
         self,
