@@ -2,7 +2,8 @@
 
 import json
 import time
-from typing import Dict, Any, AsyncGenerator, Optional
+from dataclasses import dataclass
+from typing import Any, AsyncGenerator, Dict, Optional, Tuple
 
 from ...core.logging import logger
 from ...core.error_handling import ErrorType, create_error
@@ -76,24 +77,22 @@ class StreamProcessor:
                            request_id: str,
                            user_id: str,
                            provider_name: str = "") -> AsyncGenerator[bytes, None]:
-        """Process provider stream with optional sanitization.
+        """Forward a provider SSE stream, optionally sanitizing it on the way.
 
-        Two code paths: when sanitization is disabled, chunks pass through unchanged
-        (transparent mode). When enabled, chunks are buffered and decoded as UTF-8,
-        split on SSE double-newline boundaries (\\n\\n or \\r\\n\\r\\n), and each
-        SSE data message is parsed and sanitized.
+        Two independent bodies share only this envelope (logging, usage capture,
+        error framing):
 
-        UTF-8 split handling: if a multi-byte character is split at a chunk boundary,
-        the partial bytes are buffered until the next chunk completes them.
+        - transparent (_passthrough): chunks are forwarded byte-for-byte;
+        - sanitizing (_sanitizing): the byte stream is decoded, split into SSE
+          frames and each data frame is parsed and stripped of service fields.
+
+        The sanitization flag is read once per stream, and captured usage lives
+        in a per-stream holder, so concurrent streams never affect each other.
         """
         should_sanitize = self._live_sanitization_flag()
-        # Per-stream mutable holder; never written to self (concurrency-safe).
         captured_usage: Dict[str, Any] = {}
-
+        stats = _StreamStats()
         start_time = time.time()
-        chunk_count = 0
-        sanitized_count = 0
-        bytes_processed = 0
 
         logger.info("Starting stream processing", extra={
             "request_id": request_id,
@@ -102,156 +101,84 @@ class StreamProcessor:
             "sanitization_enabled": should_sanitize
         })
 
+        body = (self._sanitizing(provider_stream, request_id, captured_usage, stats)
+                if should_sanitize
+                else self._passthrough(provider_stream, request_id, captured_usage, stats))
+
         try:
-            buffer = ""
-            byte_buffer = b""
-
-            if not should_sanitize:
-                is_debug = logger.is_debug_enabled()
-                async for chunk in provider_stream:
-                    chunk_count += 1
-                    bytes_processed += len(chunk)
-
-                    if is_debug:
-                        preview = chunk.decode('utf-8', errors='replace')[:200].replace('\n', '\\n')
-                        logger.debug(f"Chunk {chunk_count} ({len(chunk)}B): {preview}", request_id=request_id)
-
-                    if b'"reasoning"' in chunk:
-                        chunk = _remap_reasoning_in_chunk(chunk)
-
-                    yield chunk
-
-                    if b'"usage"' in chunk and b'"prompt_tokens"' in chunk:
-                        _capture_usage_from_chunk(chunk, captured_usage)
-
-                duration = time.time() - start_time
-                logger.info("Stream completed (transparent)", extra={
-                    "request_id": request_id,
-                    "duration": round(duration, 3),
-                    "total_bytes": bytes_processed
-                })
-                if captured_usage.get("usage"):
-                    _schedule_stream_usage(
-                        captured_usage["usage"], request_id, user_id, model_id,
-                        start_time, provider_name
-                    )
-                return
-
-            sanitizer = self._resolve_sanitizer()
-
-            async for chunk in provider_stream:
-                chunk_count += 1
-                bytes_processed += len(chunk)
-
-                byte_buffer += chunk
-                try:
-                    # Try to decode the entire byte buffer
-                    decoded_str = byte_buffer.decode('utf-8')
-                    buffer += decoded_str
-                    byte_buffer = b"" # Clear if successful
-                except UnicodeDecodeError as e:
-                    # If it fails, it might be a split character at the end
-                    # We'll wait for the next chunk, but only if it's at the very end
-                    # WHY: UTF-8 chars can be up to 4 bytes; a split in the last 4 bytes is recoverable
-                    if e.start > len(byte_buffer) - 4:
-                         logger.debug(f"Unicode split at end of chunk, buffering {len(byte_buffer)} bytes", extra={"request_id": request_id})
-                         continue
-
-                    # If it's not at the end, it's a real error
-                    logger.warning(f"Unicode decode error in middle of chunk: {e}", extra={"request_id": request_id})
-                    buffer += byte_buffer.decode('utf-8', errors='replace')
-                    byte_buffer = b""
-                    continue
-
-                # SSE messages are separated by double newlines
-                # SSE messages can be separated by \n\n or \r\n\r\n
-                # We normalize to \n for easier processing
-                normalized_buffer = buffer.replace("\r\n", "\n")
-
-                # Log buffer state if it's getting large
-                if len(buffer) > 10000:
-                    logger.warning(f"Large stream buffer: {len(buffer)} chars", extra={"request_id": request_id})
-
-                # SSE standard says messages are separated by \n\n
-                # But some providers might use just \n for comments or other data
-                # We look for \n\n to be sure we have a full message
-                while "\n\n" in normalized_buffer:
-                    # Check for comments (lines starting with :)
-                    if normalized_buffer.lstrip().startswith(":"):
-                        # Find the end of the comment line
-                        if "\n" in normalized_buffer:
-                            comment_line, buffer = buffer.split("\n", 1)
-                            comment_line = comment_line.rstrip("\r")
-                            normalized_buffer = buffer.replace("\r\n", "\n")
-                            logger.debug(f"Passing through SSE comment", extra={"request_id": request_id})
-                            yield (comment_line + "\n").encode('utf-8')
-                            continue
-                        else:
-                            # Comment is not finished yet
-                            break
-
-                    # Find the original separator in the raw buffer to split correctly
-                    if "\r\n\r\n" in buffer:
-                        message, buffer = buffer.split("\r\n\r\n", 1)
-                        sep = "\r\n\r\n"
-                    else:
-                        message, buffer = buffer.split("\n\n", 1)
-                        sep = "\n\n"
-
-                    # Update normalized buffer for the next iteration
-                    normalized_buffer = buffer.replace("\r\n", "\n")
-
-                    if not message.strip():
-                        yield sep.encode('utf-8')
-                        continue
-
-                    sanitized_message = _sanitize_sse_message(
-                        message, request_id, sanitizer, captured_usage
-                    )
-
-                    if sanitized_message != message:
-                        sanitized_count += 1
-
-                    yield (sanitized_message + sep).encode('utf-8')
-
-            # Yield remaining buffer if any
-            if buffer.strip():
-                sanitized_message = _sanitize_sse_message(
-                    buffer, request_id, sanitizer, captured_usage
-                )
-                # Use \n\n as default separator for the last piece
-                yield (sanitized_message + "\n\n").encode('utf-8')
-
-            duration = time.time() - start_time
-            logger.info("Stream completed (sanitized)", extra={
-                "request_id": request_id,
-                "duration": round(duration, 3),
-                "total_bytes": bytes_processed,
-                "sanitized_messages": sanitized_count
-            })
-            if captured_usage.get("usage"):
-                _schedule_stream_usage(
-                    captured_usage["usage"], request_id, user_id, model_id,
-                    start_time, provider_name
-                )
-
+            async for chunk in body:
+                yield chunk
         except Exception as e:
-            end_time = time.time()
-            duration = end_time - start_time
-
-            logger.error(f"Stream processing failed", extra={
+            logger.error("Stream processing failed", extra={
                 "request_id": request_id,
                 "user_id": user_id,
                 "model": model_id,
                 "stream_processing": {
-                    "duration_seconds": duration,
-                    "chunks_processed": chunk_count,
+                    "duration_seconds": time.time() - start_time,
+                    "chunks_processed": stats.chunks,
                     "error": str(e),
                     "error_type": type(e).__name__
                 }
             }, exc_info=True)
-
             yield self._format_error(e)
+            return
+
+        logger.info(
+            "Stream completed (sanitized)" if should_sanitize else "Stream completed (transparent)",
+            extra={
+                "request_id": request_id,
+                "duration": round(time.time() - start_time, 3),
+                "total_bytes": stats.bytes,
+                "sanitized_messages": stats.sanitized,
+            })
+
+        if captured_usage.get("usage"):
+            _schedule_stream_usage(
+                captured_usage["usage"], request_id, user_id, model_id,
+                start_time, provider_name
+            )
+
+    async def _passthrough(self,
+                           provider_stream: AsyncGenerator[bytes, None],
+                           request_id: str,
+                           captured_usage: Dict[str, Any],
+                           stats: "_StreamStats") -> AsyncGenerator[bytes, None]:
+        """Forward chunks unchanged, only peeking for reasoning fields and usage.
+
+        Both peeks are gated on a raw byte substring test, so a chunk that
+        carries neither costs one scan and no parsing.
+        """
+        is_debug = logger.is_debug_enabled()
+        async for chunk in provider_stream:
+            stats.chunks += 1
+            stats.bytes += len(chunk)
+
+            if is_debug:
+                preview = chunk.decode('utf-8', errors='replace')[:200].replace('\n', '\\n')
+                logger.debug(f"Chunk {stats.chunks} ({len(chunk)}B): {preview}", request_id=request_id)
+
+            if b'"reasoning"' in chunk:
+                chunk = _remap_reasoning_in_chunk(chunk)
+
+            yield chunk
+
+            if b'"usage"' in chunk and b'"prompt_tokens"' in chunk:
+                _capture_usage_from_chunk(chunk, captured_usage)
+
+    async def _sanitizing(self,
+                          provider_stream: AsyncGenerator[bytes, None],
+                          request_id: str,
+                          captured_usage: Dict[str, Any],
+                          stats: "_StreamStats") -> AsyncGenerator[bytes, None]:
+        """Decode, re-frame and sanitize each SSE message before forwarding it."""
+        sanitizer = self._resolve_sanitizer()
+        text_stream = _decode_chunks(provider_stream, request_id, stats)
+
+        async for message, separator in _iter_sse_frames(text_stream, request_id):
+            sanitized = _sanitize_sse_message(message, request_id, sanitizer, captured_usage)
+            if sanitized != message:
+                stats.sanitized += 1
+            yield (sanitized + separator).encode('utf-8')
 
     def _format_error(self, error: Exception) -> bytes:
         """Format an error as an SSE data chunk (OpenRouter-compatible)."""
@@ -277,6 +204,104 @@ class StreamProcessor:
         # WHY: many OpenAI-compatible clients block until they see [DONE]; an
         # error frame alone leaves them waiting until the read timeout fires
         return f"data: {json.dumps(error_payload)}\n\ndata: [DONE]\n\n".encode('utf-8')
+
+
+# Separator styles an SSE producer may use, and the one we fall back to when a
+# stream ends without a trailing blank line.
+_SEPARATORS = ("\r\n\r\n", "\n\n")
+_DEFAULT_SEPARATOR = "\n\n"
+# A frame this large means the producer is not framing at all; worth a warning.
+_LARGE_BUFFER_WARN = 10000
+# Longest UTF-8 sequence, i.e. how far back a split character can start.
+_MAX_UTF8_CHAR_BYTES = 4
+
+
+@dataclass
+class _StreamStats:
+    """Per-stream counters used only for the completion and failure log lines."""
+    chunks: int = 0
+    bytes: int = 0
+    sanitized: int = 0
+
+
+async def _decode_chunks(provider_stream: AsyncGenerator[bytes, None],
+                         request_id: str,
+                         stats: _StreamStats) -> AsyncGenerator[str, None]:
+    """Decode a byte stream to text, healing multi-byte characters split across chunks.
+
+    A UTF-8 character can span up to 4 bytes and a chunk boundary can land in the
+    middle of one. When the decode error starts within the last 4 bytes the tail
+    is held back and completed by the next chunk; an error anywhere earlier is a
+    genuinely malformed stream and is decoded with replacement characters.
+    """
+    pending = b""
+    async for chunk in provider_stream:
+        stats.chunks += 1
+        stats.bytes += len(chunk)
+        pending += chunk
+        try:
+            text = pending.decode('utf-8')
+        except UnicodeDecodeError as e:
+            if e.start > len(pending) - _MAX_UTF8_CHAR_BYTES:
+                logger.debug(
+                    f"Unicode split at end of chunk, buffering {len(pending)} bytes",
+                    extra={"request_id": request_id})
+                continue
+            logger.warning(f"Unicode decode error in middle of chunk: {e}",
+                           extra={"request_id": request_id})
+            text = pending.decode('utf-8', errors='replace')
+        pending = b""
+        yield text
+
+
+def _split_frame(buffer: str) -> Optional[Tuple[str, str, str]]:
+    """Split one complete SSE frame off the buffer.
+
+    Returns (payload, separator, rest), or None when the buffer holds no
+    complete frame yet. The payload is returned verbatim — comments and empty
+    frames included — because the caller passes anything that is not a
+    ``data:`` line straight through.
+    """
+    normalized = buffer.replace("\r\n", "\n")
+    if "\n\n" not in normalized:
+        return None
+
+    # A comment (": keep-alive") is terminated by a single newline, not a blank line.
+    if normalized.lstrip().startswith(":"):
+        if "\n" not in buffer:
+            return None
+        comment, rest = buffer.split("\n", 1)
+        return comment.rstrip("\r"), "\n", rest
+
+    # WHY: pick the separator that occurs FIRST, not whichever is present. A
+    # buffer holding "a\n\nb\r\n\r\n" must yield "a", or the two messages are
+    # merged into one malformed frame.
+    positions = [(buffer.find(sep), sep) for sep in _SEPARATORS]
+    index, separator = min((pos, sep) for pos, sep in positions if pos != -1)
+    return buffer[:index], separator, buffer[index + len(separator):]
+
+
+async def _iter_sse_frames(text_stream: AsyncGenerator[str, None],
+                           request_id: str) -> AsyncGenerator[Tuple[str, str], None]:
+    """Re-frame a text stream into (payload, separator) SSE messages.
+
+    Any trailing content left when the stream ends is emitted as a final frame
+    with the default separator, so a provider that omits the last blank line
+    does not lose its closing message.
+    """
+    buffer = ""
+    warned = False
+    async for text in text_stream:
+        buffer += text
+        if len(buffer) > _LARGE_BUFFER_WARN and not warned:
+            warned = True
+            logger.warning(f"Large stream buffer: {len(buffer)} chars",
+                           extra={"request_id": request_id})
+        while (frame := _split_frame(buffer)) is not None:
+            payload, separator, buffer = frame
+            yield payload, separator
+    if buffer.strip():
+        yield buffer, _DEFAULT_SEPARATOR
 
 
 def _capture_usage_from_chunk(chunk: bytes, captured_usage: Dict[str, Any]) -> None:

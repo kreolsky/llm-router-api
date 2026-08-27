@@ -421,3 +421,95 @@ class TestReasoningFieldDuplication:
         combined = b"".join(result).decode("utf-8")
         parsed = json.loads(combined.split("data: ", 1)[1].split("\n\n")[0])
         assert parsed["choices"][0]["delta"]["reasoning"] == "hello"
+
+
+# ---------------------------------------------------------------------------
+# 9. SSE framing primitives (extracted from process_stream)
+# ---------------------------------------------------------------------------
+
+from src.services.chat_service.stream_processor import (  # noqa: E402
+    _StreamStats,
+    _decode_chunks,
+    _iter_sse_frames,
+    _split_frame,
+)
+
+
+class TestSplitFrame:
+
+    def test_incomplete_buffer_returns_none(self):
+        assert _split_frame('data: {"a":1}\n') is None
+
+    def test_lf_frame(self):
+        assert _split_frame('data: {"a":1}\n\nrest') == ('data: {"a":1}', "\n\n", "rest")
+
+    def test_crlf_frame(self):
+        assert _split_frame('data: {"a":1}\r\n\r\nrest') == ('data: {"a":1}', "\r\n\r\n", "rest")
+
+    def test_comment_terminated_by_single_newline(self):
+        assert _split_frame(": ping\n\ndata: {}\n\n") == (": ping", "\n", "\ndata: {}\n\n")
+
+    def test_earliest_separator_wins(self):
+        """A mixed-separator buffer must split on whichever boundary comes first.
+
+        Testing for "\\r\\n\\r\\n" anywhere in the buffer merged an earlier
+        "\\n\\n"-terminated message into the next frame.
+        """
+        buffer = 'data: {"a":1}\n\ndata: {"b":2}\r\n\r\n'
+        payload, separator, rest = _split_frame(buffer)
+        assert payload == 'data: {"a":1}'
+        assert separator == "\n\n"
+        assert rest == 'data: {"b":2}\r\n\r\n'
+
+    def test_empty_frame_preserved(self):
+        assert _split_frame("\n\ndata: {}\n\n") == ("", "\n\n", "data: {}\n\n")
+
+
+class TestIterSseFrames:
+
+    @pytest.mark.asyncio
+    async def test_frames_split_across_chunks(self):
+        frames = [f async for f in _iter_sse_frames(async_gen(['data: {"a"', ':1}\n\n']), "r")]
+        assert frames == [('data: {"a":1}', "\n\n")]
+
+    @pytest.mark.asyncio
+    async def test_trailing_content_flushed_with_default_separator(self):
+        frames = [f async for f in _iter_sse_frames(async_gen(['data: {"a":1}']), "r")]
+        assert frames == [('data: {"a":1}', "\n\n")]
+
+    @pytest.mark.asyncio
+    async def test_no_trailing_frame_for_whitespace(self):
+        frames = [f async for f in _iter_sse_frames(async_gen(['data: {}\n\n', "  \n"]), "r")]
+        assert frames == [("data: {}", "\n\n")]
+
+    @pytest.mark.asyncio
+    async def test_mixed_separators_yield_two_frames(self):
+        stream = async_gen(['data: {"a":1}\n\ndata: {"b":2}\r\n\r\n'])
+        frames = [f async for f in _iter_sse_frames(stream, "r")]
+        assert [p for p, _ in frames] == ['data: {"a":1}', 'data: {"b":2}']
+
+
+class TestDecodeChunks:
+
+    @pytest.mark.asyncio
+    async def test_counts_bytes_and_chunks(self):
+        stats = _StreamStats()
+        texts = [t async for t in _decode_chunks(async_gen([b"ab", b"cd"]), "r", stats)]
+        assert texts == ["ab", "cd"]
+        assert stats.chunks == 2
+        assert stats.bytes == 4
+
+    @pytest.mark.asyncio
+    async def test_split_multibyte_char_healed(self):
+        encoded = "üx".encode("utf-8")
+        stats = _StreamStats()
+        stream = async_gen([encoded[:1], encoded[1:]])
+        texts = [t async for t in _decode_chunks(stream, "r", stats)]
+        assert "".join(texts) == "üx"
+
+    @pytest.mark.asyncio
+    async def test_malformed_bytes_replaced(self):
+        stats = _StreamStats()
+        stream = async_gen([b"\xff\xfe" + b"ok" * 4])
+        texts = [t async for t in _decode_chunks(stream, "r", stats)]
+        assert "ok" in "".join(texts)
