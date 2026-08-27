@@ -1,4 +1,5 @@
 """Authentication and authorization for the API gateway."""
+# SYSTEM: auth — bearer/HMAC authentication and per-key model access control
 import hashlib
 import hmac
 from fastapi import Depends, Security, HTTPException, status, Request

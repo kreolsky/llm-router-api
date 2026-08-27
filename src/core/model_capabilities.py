@@ -15,6 +15,7 @@ the SAME normalized shape, so a merge between them is well-defined. Lists are
 *replaced* (not concatenated) so a manual ``input_modalities`` override is not
 duplicated by the cache — unlike ``utils.deep_merge`` which concatenates lists.
 """
+# SYSTEM: model-capabilities — manual layer + auto-cache + render
 import asyncio
 import json
 import os

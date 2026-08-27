@@ -1,4 +1,5 @@
 """Message sanitization to strip non-standard fields that break strict providers."""
+# SYSTEM: sanitizer — strips non-standard message/chunk fields
 
 from typing import Dict, Any, List, Tuple
 

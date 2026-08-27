@@ -1,4 +1,5 @@
 """Stream processor for forwarding and optionally sanitizing provider SSE streams."""
+# SYSTEM: sse-stream — SSE frame parsing, passthrough and sanitizing bodies
 
 import json
 import time

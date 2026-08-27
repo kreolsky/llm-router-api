@@ -20,7 +20,7 @@ OpenAI-compatible API gateway for multiple LLM providers. Routes requests to Ope
 
 **Provider Abstraction**: Single provider type (`openai`). Each provider instance owns its own `httpx.AsyncClient` (per-backend connection pool). Instances are cached by **provider name** (the dict key in `providers.yaml`); the cache is rebuilt on config reload, and the previous instances' pools are closed via `aclose()` **after their in-flight requests drain** (bounded by `stream_read_timeout`), so a reload never aborts a live SSE stream. Base class handles retry with exponential backoff on 429s. Optional per-provider `proxy` key (e.g. `socks5://host:port`) routes all of that provider's traffic through a SOCKS5 proxy; `None` (unset) = direct connection. Requires the `httpx[socks]` extra (`socksio`).
 
-**Upstream Identity** (`identity:` key in `providers.yaml`, see `plans/opencode-attribution.md`): `opencode` stamps `User-Agent: opencode/<identity_version>` plus per-request `x-session-affinity`/`X-Session-Id` with a stable `ses_*` id per client project (`src/core/opencode_identity.py`, registry TTL `OPENCODE_SESSION_TTL`); `passthrough` forwards the client's whitelisted harness headers. The whitelist is data (`src/core/identity_headers.py`): the default set is `User-Agent`, `X-Session-Id`, `x-session-affinity`, `x-parent-session-id`, `anthropic-beta`, `x-stainless-*`, and a provider may **replace** it wholesale with `passthrough_headers:` in `providers.yaml` (a trailing `*` is a prefix pattern; exact names are re-cased to the configured spelling, prefix matches keep the client's). A malformed list fails fast at provider construction. Kilo Code is an opencode fork and already sends the default set (`ses_*` ids, `x-session-affinity`, `User-Agent: Kilo-Code/<v>`), so it needs `identity: passthrough` and no synthetic profile; its `HTTP-Referer`/`X-Title`/`x-kilocode-*` extras are opt-in via `passthrough_headers`. Config `headers:` and real client headers win over the synthetic profile. Stream and non-stream paths merge headers identically (`_merge_request_headers`); `Authorization` is never overwritten.
+**Upstream Identity** (`identity:` key in `providers.yaml`, see `plans/1787823885000-opencode-attribution.md`): `opencode` stamps `User-Agent: opencode/<identity_version>` plus per-request `x-session-affinity`/`X-Session-Id` with a stable `ses_*` id per client project (`src/core/opencode_identity.py`, registry TTL `OPENCODE_SESSION_TTL`); `passthrough` forwards the client's whitelisted harness headers. The whitelist is data (`src/core/identity_headers.py`): the default set is `User-Agent`, `X-Session-Id`, `x-session-affinity`, `x-parent-session-id`, `anthropic-beta`, `x-stainless-*`, and a provider may **replace** it wholesale with `passthrough_headers:` in `providers.yaml` (a trailing `*` is a prefix pattern; exact names are re-cased to the configured spelling, prefix matches keep the client's). A malformed list fails fast at provider construction. Kilo Code is an opencode fork and already sends the default set (`ses_*` ids, `x-session-affinity`, `User-Agent: Kilo-Code/<v>`), so it needs `identity: passthrough` and no synthetic profile; its `HTTP-Referer`/`X-Title`/`x-kilocode-*` extras are opt-in via `passthrough_headers`. Config `headers:` and real client headers win over the synthetic profile. Stream and non-stream paths merge headers identically (`_merge_request_headers`); `Authorization` is never overwritten.
 
 **Process Model**: **one uvicorn worker** (`API_WORKERS`, default `1`). The gateway is I/O-bound, and three subsystems are process-local singletons that extra workers would silently fork into independent copies: the OpenCode `SessionRegistry` (stable `ses_*` ids per client — the whole point of `x-session-affinity`), the `CapabilitiesCache` (N copies, N refresh loops, N× upstream polling), and the SQLite usage writer. `PRAGMA busy_timeout=5000` is set regardless so a concurrent writer waits instead of losing the event.
 
@@ -61,10 +61,18 @@ All env-backed settings are read via `ConfigManager` **once, at construction** (
 
 ## Architecture Discovery
 
-Architectural decisions marked with `# ARCH:`. Constraints marked with `# INVARIANT:`. Every file has a module-level docstring.
+Start at **`SYSTEMS.md`** — the generated subsystem catalog (name · description · entry file
+· aliases, incl. Russian task nouns). Find the system, then read its entry file. Regenerate
+with `python3 .claude/scripts/systems-index.py --write`; `pre-commit-gates.sh` blocks on drift.
 
+Markers (`.claude/rules/documentation.md`): `# ARCH:` cross-cutting decisions, `# INVARIANT:`
+constraints (each with a `Why:`), `# WHY:` local non-obvious choices, `# DEBT:` the deferred-work
+ledger, `# SYSTEM:` subsystem entry points. Every file has a module-level docstring.
+
+* `grep -rn "SYSTEM:" src/` — subsystem entry points
 * `grep -rn "ARCH:" src/` — all architectural decisions
 * `grep -rn "INVARIANT:" src/` — constraints that must be preserved
+* `grep -rn "DEBT:" src/` — the tech-debt ledger
 
 ## Design Principles
 

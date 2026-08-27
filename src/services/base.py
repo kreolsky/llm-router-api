@@ -1,4 +1,5 @@
 """Base service with shared validation, provider instantiation, and logging."""
+# SYSTEM: service-layer — validate access, resolve provider, dispatch
 
 import contextlib
 from typing import Dict, Any, Optional, Tuple

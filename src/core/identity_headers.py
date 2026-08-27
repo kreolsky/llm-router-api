@@ -1,7 +1,7 @@
 """Passthrough header whitelist: the default harness set and its config override.
 
 ARCH: which client headers an `identity`-enabled provider forwards upstream is
-data, not code (plans/harness-impersonation.md). The default set below covers
+data, not code. The default set below covers
 the harnesses we actually see — opencode and Kilo Code, which is an opencode
 fork and sends the same session headers (`ses_*` ids, x-session-affinity) plus
 its own `Kilo-Code/<v>` User-Agent. A provider may replace the whole set via
@@ -12,6 +12,7 @@ Spec entries are header names, matched case-insensitively; a trailing `*` makes
 one a prefix pattern (`x-stainless-*`). The spelling written in the spec is the
 spelling sent upstream — casing is part of a harness fingerprint.
 """
+# SYSTEM: identity-headers — passthrough header whitelist and its override
 
 from typing import Dict, Iterable, List, Optional, Tuple
 

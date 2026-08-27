@@ -1,4 +1,5 @@
 """Standardized HTTPExceptions creation and provider error logging."""
+# SYSTEM: error-format — OpenRouter-compatible error envelope
 
 from typing import Optional
 from fastapi import HTTPException

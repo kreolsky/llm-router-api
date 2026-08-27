@@ -9,6 +9,7 @@ SSE streams, whose generator completes before the middleware returns.
 Cost is computed at flush time from merged capabilities pricing, so historical
 rows do not drift when tariffs change.
 """
+# SYSTEM: usage-stats — SQLite per-request usage rows and cost freezing
 
 import os
 import time

@@ -1,4 +1,5 @@
 """Base provider with shared HTTP, streaming, retry, and error handling logic."""
+# SYSTEM: provider — base HTTP, retry, streaming and header merging
 import httpx
 import os
 import json
@@ -103,7 +104,7 @@ class BaseProvider:
         self.provider_name = self.__class__.__name__.replace("Provider", "").lower()
         self.headers.setdefault("Content-Type", "application/json")
 
-        # ARCH: identity profile (plans/opencode-attribution.md). `opencode`
+        # ARCH: identity profile. `opencode`
         # stamps a static OpenCode User-Agent here (an explicit `headers:`
         # User-Agent wins over the profile); per-request session headers are
         # assembled by the service layer and arrive via extra_headers.

@@ -63,7 +63,7 @@ providers:
 
 #### identity — upstream client attribution
 
-`identity` shapes the headers this router sends upstream so requests look like a specific client (see [plans/opencode-attribution.md](plans/opencode-attribution.md)):
+`identity` shapes the headers this router sends upstream so requests look like a specific client (see [plans/1787823885000-opencode-attribution.md](plans/1787823885000-opencode-attribution.md)):
 
 * **`opencode`** — synthetic OpenCode profile: `User-Agent: opencode/<identity_version>` on every request plus `x-session-affinity` / `X-Session-Id` with a stable `ses_*` id per client project (OpenCode-shaped ids, session-sticky within `OPENCODE_SESSION_TTL` seconds of inactivity). Real harness headers sent by the router's own client still override the synthetic ones.
 * **`passthrough`** — forward the whitelisted headers of the router's client verbatim. Default whitelist: `User-Agent`, `X-Session-Id`, `x-session-affinity`, `x-parent-session-id`, `anthropic-beta`, `x-stainless-*`. Use this when the client is itself a coding harness; nothing is fabricated. Kilo Code and OpenCode both send this set already (Kilo is an OpenCode fork: same stable `ses_*` ids, `User-Agent: Kilo-Code/<version>`), so neither needs a synthetic profile.

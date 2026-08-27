@@ -1,4 +1,5 @@
 """YAML-based configuration management with hot-reload support."""
+# SYSTEM: config — YAML load, 5s hot reload, env-backed settings
 import yaml
 import os
 import asyncio

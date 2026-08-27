@@ -4,6 +4,7 @@ Replaces raw string keys on request.state (request_id, project_name) with a
 single typed attribute. Frozen + rebuilt so auth can attach project_name
 without mutating the middleware-created instance.
 """
+# SYSTEM: request-context — the typed RequestContext carried per request
 from dataclasses import dataclass, replace
 from typing import Optional
 

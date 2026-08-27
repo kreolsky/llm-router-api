@@ -1,0 +1,19 @@
+{
+  "api-app": ["startup", "lifespan", "роуты", "приложение"],
+  "auth": ["ключи", "доступ", "авторизация", "user_keys", "api key"],
+  "config": ["конфиг", "yaml", "hot reload", "перезагрузка конфига"],
+  "error-format": ["ошибки", "error"],
+  "identity-headers": ["заголовки", "passthrough", "харнесс", "harness"],
+  "logging": ["логи", "логирование"],
+  "model-capabilities": ["модели", "capabilities", "/v1/models", "кэш моделей"],
+  "opencode-identity": ["opencode", "сессии", "ses_", "affinity"],
+  "provider": ["провайдер", "upstream", "бэкенд"],
+  "provider-registry": ["кэш провайдеров", "реестр"],
+  "request-context": ["контекст запроса", "request_id"],
+  "request-logging": ["middleware", "мидлварь"],
+  "sanitizer": ["санитайзер", "очистка сообщений"],
+  "service-layer": ["сервисы", "сервисный слой"],
+  "sse-stream": ["стрим", "streaming", "sse", "чанки"],
+  "stat-dashboard": ["статистика", "дашборд", "usage"],
+  "usage-stats": ["статистика", "usage", "токены", "стоимость"]
+}

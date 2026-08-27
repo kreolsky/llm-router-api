@@ -12,6 +12,7 @@ is a detectable anomaly. SessionRegistry maps one stable key (provider name +
 project_name from RequestContext) to one ses_* id, refreshed on activity and
 lazily evicted after a TTL (OPENCODE_SESSION_TTL, no background task).
 """
+# SYSTEM: opencode-identity — synthetic ses_* ids and the session registry
 import os
 import time
 from typing import Dict, Optional, Tuple

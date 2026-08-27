@@ -4,6 +4,7 @@ Ultra-simple universal Logger for debugging and diagnostics.
 This module provides a minimal Logger class focused on simplicity and
 effective debugging capabilities when LOG_LEVEL=DEBUG.
 """
+# SYSTEM: logging — the kwargs-style Logger used everywhere
 
 import logging
 import json

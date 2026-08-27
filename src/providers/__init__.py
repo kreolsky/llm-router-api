@@ -1,4 +1,5 @@
 """Provider registry with instance caching keyed by provider name."""
+# SYSTEM: provider-registry — provider instances cached by name, drained on reload
 import asyncio
 from typing import Dict, Any, Optional
 

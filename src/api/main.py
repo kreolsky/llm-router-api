@@ -1,4 +1,5 @@
 """FastAPI application, lifespan management, and route definitions."""
+# SYSTEM: api-app — FastAPI app, lifespan, routes, eager provider validation
 import asyncio
 import hmac
 from contextlib import asynccontextmanager

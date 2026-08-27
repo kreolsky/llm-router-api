@@ -1,4 +1,5 @@
 """Dashboard HTML page at /stat/ showing token usage charts."""
+# SYSTEM: stat-dashboard — /stat/ usage page and its JSON endpoints
 
 import os
 from fastapi import Request

@@ -52,7 +52,106 @@
       "Bash(curl -s \"https://api.github.com/repos/katanemo/plano/contents/demos\")",
       "Bash(python -m pytest tests/unit/ -x --tb=short)",
       "Bash(python -m pytest tests/api/ --tb=short)",
-      "Bash(python -m pytest tests/ --tb=short)"
+      "Bash(python -m pytest tests/ --tb=short)",
+      "Bash(python3:*)",
+      "Bash(git fetch:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(ls -t plans/*.md)",
+      "Bash(.claude/scripts/pre-commit-gates.sh)",
+      "Bash(bash .claude/scripts/pre-commit-gates.sh)"
+    ],
+    "additionalDirectories": [
+      "/tmp"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'CMD=\"$CLAUDE_TOOL_INPUT\"; if echo \"$CMD\" | grep -qE \"rm\\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)\\b\" && ! echo \"$CMD\" | grep -qE \"rm\\s+-[a-zA-Z]+\\s+\\S*(node_modules|__pycache__|\\.cache)\"; then echo \"BLOCKED: rm -rf is destructive. Use targeted removal.\" >&2; exit 1; fi'"
+          },
+          {
+            "type": "command",
+            "command": "bash -c 'CMD=\"$CLAUDE_TOOL_INPUT\"; if echo \"$CMD\" | grep -qiE \"DROP\\s+(TABLE|DATABASE)\"; then echo \"BLOCKED: DROP TABLE/DATABASE is destructive (usage DB).\" >&2; exit 1; fi'"
+          },
+          {
+            "type": "command",
+            "command": "bash -c 'CMD=\"$CLAUDE_TOOL_INPUT\"; if echo \"$CMD\" | grep -qE \"git\\s+push\\s+--force.*(main|dev)\"; then echo \"BLOCKED: force push to main/dev.\" >&2; exit 1; fi'"
+          },
+          {
+            "type": "command",
+            "command": "bash -c 'CMD=\"$CLAUDE_TOOL_INPUT\"; if echo \"$CMD\" | grep -qE \"docker\\s+compose\\s+down\\s+-v\"; then echo \"BLOCKED: docker compose down -v destroys the data/ volume (usage DB + model cache).\" >&2; exit 1; fi'"
+          },
+          {
+            "type": "command",
+            "command": "bash -c 'CMD=\"$CLAUDE_TOOL_INPUT\"; if echo \"$CMD\" | grep -qE \"git\\s+commit\"; then echo \"{\\\"systemMessage\\\": \\\"Review gate: if this change is M/L or a review-gate trigger fired (hot path, new module, user said done/push) - verify /review ran before committing; S-size quick fixes are exempt (workflow.md Phase 4).\\\"}\"; fi'"
+          },
+          {
+            "type": "command",
+            "command": "bash -c 'CMD=\"$CLAUDE_TOOL_INPUT\"; echo \"$CMD\" | grep -qE \"git\\s+commit\" || exit 0; OUT=$(bash .claude/scripts/pre-commit-gates.sh 2>&1); [ $? -eq 0 ] && exit 0; echo \"BLOCKED: pre-commit gates fail. Fix, then commit:\" >&2; echo \"$OUT\" >&2; exit 1'"
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'F=\"$CLAUDE_FILE_PATH\"; R=\"\"; case \"$F\" in */tests/*) R=\"testing-ops.md\";; */src/providers/*) R=\"providers.md testing-ops.md\";; */src/services/*|*/src/api/*) R=\"services.md testing-ops.md\";; */config/*|*config_manager.py) R=\"config.md\";; *usage_db.py|*stat_page.py) R=\"stat.md\";; esac; [ -z \"$R\" ] && exit 0; K=$(echo \"$R\" | tr -d \" .\"); M=\"/tmp/.router-rules-$K-${CLAUDE_SESSION_ID:-$(date +%j)}\"; [ -f \"$M\" ] && exit 0; touch \"$M\"; echo \"{\\\"systemMessage\\\": \\\"Path-scoped rules apply - READ .claude/rules-scoped/: $R (reminder fires once per session).\\\"}\"'"
+          },
+          {
+            "type": "command",
+            "command": "python3 .claude/scripts/plan-snapshot.py"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'if echo \"$CLAUDE_TOOL_INPUT\" | grep -qE \"git\\s+commit\" && [ \"$CLAUDE_EXIT_CODE\" = \"0\" ]; then echo \"{\\\"systemMessage\\\": \\\"Commit successful. Run /retro ONLY if a workflow.md Auto-lessons trigger fired this session (3+ fix iterations / production escape / new pattern / workflow optimization); otherwise skip.\\\"}\"; fi'"
+          }
+        ]
+      },
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .claude/scripts/save-plan.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'F=\"$CLAUDE_FILE_PATH\"; case \"$F\" in */plans/*.md) ;; *) exit 0;; esac; case \"$F\" in */archive/*|*/superseded/*) exit 0;; esac; OUT=$(python3 .claude/scripts/plan-shape-gate.py \"$F\" 2>&1) && exit 0; echo \"{\\\"systemMessage\\\": \\\"Plan is OFF-SHAPE - /implement will refuse it. Rewrite (do not append):\\n$(echo \\\"$OUT\\\" | tr -d \\\"\\\\\\\"\\\")\\\"}\"'"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'echo \"=== Git Status ===\"; git status --short; echo; echo \"=== Recent Commits ===\"; git log --oneline -5; echo; echo \"=== Docker ===\"; docker compose ps --format \"table {{.Name}}\\t{{.Status}}\" 2>/dev/null || echo \"Docker not running\"'"
+          },
+          {
+            "type": "command",
+            "command": "bash -c 'git fetch origin 2>/dev/null; BEHIND=$(git log HEAD..origin/dev --oneline 2>/dev/null); if [ -n \"$BEHIND\" ]; then echo; echo \"=== WARNING: dev is behind origin ===\"; echo \"$BEHIND\"; echo \"Run: git rebase origin/dev\"; fi'"
+          }
+        ]
+      }
     ]
   }
 }

@@ -1,0 +1,27 @@
+# SYSTEMS — subsystem catalog
+
+GENERATED — do not edit; run `.claude/scripts/systems-index.py --write`.
+
+Discovery: find your system (or an alias) here, then `grep -rn "SYSTEM: <name>"`
+and read the entry file(s). Aliases are hand-maintained in
+`.claude/systems-aliases.json`.
+
+| System | Description | Entry file(s) | Aliases |
+|--------|-------------|---------------|---------|
+| api-app | FastAPI app, lifespan, routes, eager provider validation | `src/api/main.py:2` | startup, lifespan, роуты, приложение |
+| auth | bearer/HMAC authentication and per-key model access control | `src/core/auth.py:2` | ключи, доступ, авторизация, user_keys, api key |
+| config | YAML load, 5s hot reload, env-backed settings | `src/core/config_manager.py:2` | конфиг, yaml, hot reload, перезагрузка конфига |
+| error-format | OpenRouter-compatible error envelope | `src/core/error_handling/error_handler.py:2` | ошибки, error |
+| identity-headers | passthrough header whitelist and its override | `src/core/identity_headers.py:15` | заголовки, passthrough, харнесс, harness |
+| logging | the kwargs-style Logger used everywhere | `src/core/logging/logger.py:7` | логи, логирование |
+| model-capabilities | manual layer + auto-cache + render | `src/core/model_capabilities.py:18` | модели, capabilities, /v1/models, кэш моделей |
+| opencode-identity | synthetic ses_* ids and the session registry | `src/core/opencode_identity.py:15` | opencode, сессии, ses_, affinity |
+| provider | base HTTP, retry, streaming and header merging | `src/providers/base.py:2` | провайдер, upstream, бэкенд |
+| provider-registry | provider instances cached by name, drained on reload | `src/providers/__init__.py:2` | кэш провайдеров, реестр |
+| request-context | the typed RequestContext carried per request | `src/core/context.py:7` | контекст запроса, request_id |
+| request-logging | pure-ASGI request id + Incoming/Outgoing bookends | `src/api/middleware.py:16` | middleware, мидлварь |
+| sanitizer | strips non-standard message/chunk fields | `src/core/sanitizer.py:2` | санитайзер, очистка сообщений |
+| service-layer | validate access, resolve provider, dispatch | `src/services/base.py:2` | сервисы, сервисный слой |
+| sse-stream | SSE frame parsing, passthrough and sanitizing bodies | `src/services/chat_service/stream_processor.py:2` | стрим, streaming, sse, чанки |
+| stat-dashboard | /stat/ usage page and its JSON endpoints | `src/api/stat_page.py:2` | статистика, дашборд, usage |
+| usage-stats | SQLite per-request usage rows and cost freezing | `src/core/usage_db.py:12` | статистика, usage, токены, стоимость |

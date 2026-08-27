@@ -13,6 +13,7 @@ mid-stream — propagates past any ``except`` here; code after the app call
 would silently lose exactly the 500s and aborted streams the stats exist to
 record.
 """
+# SYSTEM: request-logging — pure-ASGI request id + Incoming/Outgoing bookends
 import time
 import os
 import json
