@@ -240,12 +240,16 @@ class ConfigManager:
         """
         self._on_reload_callbacks.append((name, callback))
 
-    async def reload_config(self):
+    async def reload_config(self) -> bool:
         """Reload config from disk and invoke registered async callbacks.
 
         Atomicity: self.config is swapped only AFTER every callback succeeds.
         If any callback raises, the previous config is retained (return, no swap).
         Each callback receives the freshly loaded new_config dict.
+
+        Returns True when the new config was applied, False when it was rejected
+        (incomplete on disk, or refused by a callback). The caller uses this to
+        decide whether the on-disk state has been consumed — see _poll_once.
         """
         logger.info("Reloading configuration", extra={
             "config": {
@@ -264,7 +268,7 @@ class ConfigManager:
                         extra={"config": {"operation": "reload_callback_error", "callback_name": name}},
                         exc_info=True,
                     )
-                    return
+                    return False
             self.config = new_config
             logger.info("Configuration reloaded", extra={
                 "config": {
@@ -274,50 +278,68 @@ class ConfigManager:
                     "user_keys_count": len(self.config.get('user_keys', {}))
                 }
             })
-        else:
-            logger.warning("Partial config reload rejected, keeping previous config")
+            return True
 
-    def _initialize_mtimes(self):
-        config_files = [
+        logger.warning("Partial config reload rejected, keeping previous config")
+        return False
+
+    @property
+    def _watched_files(self) -> list:
+        return [
             self.providers_path,
             self.models_path,
             self.user_keys_path,
             self.model_info_path,
         ]
-        for fpath in config_files:
+
+    def _current_mtimes(self) -> Dict[str, float]:
+        """Read mtimes of the watched files, skipping the ones that are absent."""
+        mtimes = {}
+        for fpath in self._watched_files:
             try:
-                self.last_mtimes[fpath] = os.path.getmtime(fpath)
+                mtimes[fpath] = os.path.getmtime(fpath)
             except FileNotFoundError:
                 pass
+        return mtimes
+
+    def _initialize_mtimes(self):
+        self.last_mtimes = self._current_mtimes()
+
+    async def _poll_once(self) -> bool:
+        """One watcher iteration: reload if any watched file changed.
+
+        Returns True when a change was detected (whether or not the reload was
+        accepted), so callers/tests can distinguish "nothing to do" from "work
+        attempted".
+
+        # WHY: last_mtimes is committed only after reload_config() reports
+        # success. Recording it up front means a config rejected by a callback
+        # (a typo in providers.yaml) is never retried until the file changes
+        # again, and the router keeps serving the stale config in silence.
+        """
+        mtimes = self._current_mtimes()
+        changed_files = [
+            fpath for fpath, mtime in mtimes.items()
+            if fpath not in self.last_mtimes or self.last_mtimes[fpath] < mtime
+        ]
+        if not changed_files:
+            return False
+
+        logger.debug("Configuration files changed, triggering reload", extra={
+            "config": {
+                "operation": "auto_reload",
+                "changed_files": changed_files,
+            }
+        })
+        if await self.reload_config():
+            self.last_mtimes = mtimes
+        return True
 
     async def _reload_config_task(self):
         """Background task polling config files for mtime changes."""
         while True:
             try:
-                changed = False
-                config_files = [
-                    self.providers_path,
-                    self.models_path,
-                    self.user_keys_path,
-                    self.model_info_path,
-                ]
-                for fpath in config_files:
-                    try:
-                        mtime = os.path.getmtime(fpath)
-                        if fpath not in self.last_mtimes or self.last_mtimes[fpath] < mtime:
-                            self.last_mtimes[fpath] = mtime
-                            changed = True
-                    except FileNotFoundError:
-                        pass
-
-                if changed:
-                    logger.debug("Configuration files changed, triggering reload", extra={
-                        "config": {
-                            "operation": "auto_reload",
-                            "changed_files": [fpath for fpath in config_files if fpath in self.last_mtimes]
-                        }
-                    })
-                    await self.reload_config()
+                await self._poll_once()
             except asyncio.CancelledError:
                 logger.info("Config reload task cancelled")
                 return

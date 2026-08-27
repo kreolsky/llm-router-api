@@ -383,3 +383,69 @@ class TestAddReloadCallback:
 
         cb1.assert_awaited_once()
         cb2.assert_awaited_once()
+
+
+# ===================================================================
+# mtime bookkeeping: a rejected reload must be retried
+# ===================================================================
+
+class TestReloadRetriesAfterFailure:
+    """The watcher must not treat a REJECTED reload as applied.
+
+    Recording the new mtimes before knowing whether the reload succeeded means a
+    config rejected by a callback (e.g. a typo in providers.yaml) is never retried
+    until the file changes again — the router silently keeps serving stale config.
+    """
+
+    @pytest.mark.asyncio
+    async def test_reload_config_reports_success(self):
+        """reload_config returns True when the new config is applied."""
+        cm = _build_config_manager()
+        with patch("builtins.open", side_effect=_multi_open(ALL_YAMLS)), \
+             patch("src.core.config_manager.logger"):
+            assert await cm.reload_config() is True
+
+    @pytest.mark.asyncio
+    async def test_reload_config_reports_callback_failure(self):
+        """reload_config returns False when a callback rejects the new config."""
+        cm = _build_config_manager()
+        cm.add_reload_callback(AsyncMock(side_effect=RuntimeError("boom")), name="failing")
+        with patch("builtins.open", side_effect=_multi_open(ALL_YAMLS)), \
+             patch("src.core.config_manager.logger"):
+            assert await cm.reload_config() is False
+
+    @pytest.mark.asyncio
+    async def test_reload_config_reports_partial_rejection(self):
+        """reload_config returns False when the loaded config is incomplete."""
+        cm = _build_config_manager()
+        with patch("builtins.open", side_effect=_multi_open({"providers.yaml": PROVIDERS_YAML})), \
+             patch("src.core.config_manager.logger"):
+            assert await cm.reload_config() is False
+
+    @pytest.mark.asyncio
+    async def test_failed_reload_leaves_mtimes_unchanged(self):
+        """After a rejected reload the recorded mtimes still allow a retry."""
+        cm = _build_config_manager()
+        before = dict(cm.last_mtimes)
+        cm.add_reload_callback(AsyncMock(side_effect=RuntimeError("boom")), name="failing")
+
+        with patch("os.path.getmtime", return_value=2000.0), \
+             patch("builtins.open", side_effect=_multi_open(ALL_YAMLS)), \
+             patch("src.core.config_manager.logger"):
+            assert await cm._poll_once() is True   # change detected, reload attempted
+            assert await cm._poll_once() is True   # still pending: retried
+
+        assert cm.last_mtimes == before
+
+    @pytest.mark.asyncio
+    async def test_successful_reload_commits_mtimes(self):
+        """A successful reload records the new mtimes so it is not repeated."""
+        cm = _build_config_manager()
+
+        with patch("os.path.getmtime", return_value=2000.0), \
+             patch("builtins.open", side_effect=_multi_open(ALL_YAMLS)), \
+             patch("src.core.config_manager.logger"):
+            assert await cm._poll_once() is True    # change detected and applied
+            assert await cm._poll_once() is False   # nothing left to do
+
+        assert set(cm.last_mtimes.values()) == {2000.0}
