@@ -152,6 +152,16 @@ class BaseProvider:
         # `max_concurrent` is a positive int; otherwise None (no limiting). The semaphore
         # is owned per-instance, so a config reload that changes max_concurrent only takes
         # effect after a config reload rebuilds the cache (semaphore is per-instance).
+        # ARCH: in-flight accounting for graceful drain. A config reload swaps the
+        # provider cache and closes the OLD pools, but long-lived SSE streams are
+        # still reading from them — closing mid-stream aborts live generations.
+        # aclose() therefore waits for _idle before closing. Counted from entry
+        # into _acquire_slot (before the semaphore wait), so a queued request can
+        # never slip past a drain that already observed zero.
+        self._inflight = 0
+        self._idle = asyncio.Event()
+        self._idle.set()
+
         max_concurrent = config.get("max_concurrent")
         if isinstance(max_concurrent, int) and max_concurrent > 0:
             self._semaphore = asyncio.Semaphore(max_concurrent)
@@ -196,40 +206,65 @@ class BaseProvider:
             timeout = httpx.Timeout(connect=60.0, read=60.0, write=None, pool=5.0)
         return httpx.AsyncClient(limits=limits, timeout=timeout, proxy=self.proxy)
 
-    async def aclose(self) -> None:
-        """Close the owned httpx.AsyncClient. Safe to call multiple times."""
-        if self.client is not None and not self.client.is_closed:
-            await self.client.aclose()
+    async def aclose(self, drain_timeout: Optional[float] = None) -> None:
+        """Close the owned httpx.AsyncClient once in-flight requests have drained.
+
+        Safe to call multiple times. Waits up to drain_timeout seconds (default:
+        stream_read_timeout, the longest a legitimate request may run) for every
+        in-flight request and stream to finish, so a config reload does not abort
+        live SSE generations. On timeout the pool is closed anyway — a stuck
+        request must never block shutdown forever.
+        """
+        if self.client is None or self.client.is_closed:
+            return
+        if self._inflight > 0:
+            if drain_timeout is None:
+                drain_timeout = self._get_timeout("stream_read_timeout", 300.0)
+            try:
+                await asyncio.wait_for(self._idle.wait(), timeout=drain_timeout)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"Provider '{self.provider_name}': {self._inflight} request(s) still in flight "
+                    f"after {drain_timeout}s, closing pool anyway",
+                    extra={"component": "base_provider", "provider_name": self.provider_name,
+                           "inflight": self._inflight},
+                )
+        await self.client.aclose()
 
     @contextlib.asynccontextmanager
     async def _acquire_slot(self, request_id: str = "unknown"):
-        """Acquire a per-provider concurrency slot for the duration of the request.
+        """Track the request as in-flight and hold a concurrency slot for its duration.
 
-        When no semaphore is configured (max_concurrent unset) this is a no-op.
-        Otherwise waits up to config_manager.queue_wait_timeout for a free slot;
-        on timeout raises 503 SERVICE_UNAVAILABLE. Acquired slots are always
-        released in the finally block (exception-safe).
+        In-flight accounting always runs (it is what aclose() drains on). The
+        semaphore gate only applies when max_concurrent is configured: it waits
+        up to config_manager.queue_wait_timeout for a free slot and raises 503
+        SERVICE_UNAVAILABLE on timeout. Both the slot and the in-flight count are
+        released in the finally block (exception-safe, and reached on generator
+        close, so a client disconnect frees them too).
         """
-        if self._semaphore is None:
-            yield
-            return
+        self._inflight += 1
+        self._idle.clear()
         acquired = False
-        wait = self.config_manager.queue_wait_timeout if self.config_manager is not None else 30.0
         try:
-            try:
-                await asyncio.wait_for(self._semaphore.acquire(), timeout=wait)
-                acquired = True
-            except asyncio.TimeoutError:
-                raise create_error(
-                    ErrorType.PROVIDER_CONCURRENCY_LIMIT,
-                    error_details="Concurrency limit reached for provider; retry later.",
-                    request_id=request_id,
-                    provider_name=self.provider_name,
-                )
+            if self._semaphore is not None:
+                wait = self.config_manager.queue_wait_timeout if self.config_manager is not None else 30.0
+                try:
+                    await asyncio.wait_for(self._semaphore.acquire(), timeout=wait)
+                    acquired = True
+                except asyncio.TimeoutError:
+                    raise create_error(
+                        ErrorType.PROVIDER_CONCURRENCY_LIMIT,
+                        error_details="Concurrency limit reached for provider; retry later.",
+                        request_id=request_id,
+                        provider_name=self.provider_name,
+                    )
             yield
         finally:
             if acquired:
                 self._semaphore.release()
+            self._inflight -= 1
+            if self._inflight == 0:
+                self._idle.set()
 
     def _log_provider_data(self, title: str, data: Dict[str, Any], request_id: str, data_flow: str, component: str = None) -> None:
         """Log request/response data with standardized provider context."""

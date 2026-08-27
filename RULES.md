@@ -66,7 +66,7 @@ If `plan_lines / implementation_lines > 2`, the plan is bloated. Cut it.
 
 * Every provider must inherit from `BaseProvider` and implement the required interface.
 * Provider instances are cached by **provider name** (the dict key in `providers.yaml`). Never store request-specific state on instances.
-* Each provider instance owns its own `httpx.AsyncClient` (per-backend pool); the cache's `clear_provider_cache()` closes every pool before clearing.
+* Each provider instance owns its own `httpx.AsyncClient` (per-backend pool); closing a pool (`aclose()`) first drains that provider's in-flight requests, so a config reload cannot abort a live stream.
 * Format translation happens in the provider, not in the service layer.
 * New provider types require: class in `providers/`, registration in `providers/__init__.py`, config entries in `providers.yaml` and `models.yaml`.
 * Retry logic lives in the base class. Providers must not implement their own retry.
