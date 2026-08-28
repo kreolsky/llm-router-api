@@ -31,18 +31,17 @@ class RequestContext:
 # INVARIANT: the single auth contract crossing auth → services.
 # Why: the positional 4-tuple it replaced forced every consumer to unpack by
 # position, and its second element (the raw api_key) was read nowhere in src/
-# — a credential slot with no consumer. project_name stays here even though
-# RequestContext also carries it: the endpoint checker logs it before
-# RequestContext is rebuilt; one owner per contract is a separate task.
+# — a credential slot with no consumer. The resolved project name lives ONLY
+# on RequestContext (auth.get_api_key attaches it); this contract carries
+# grants alone.
 @dataclass(frozen=True)
 class AuthContext:
-    """Resolved identity and grants of an authenticated API key.
+    """Resolved grants of an authenticated API key.
 
     Built once per request by auth.get_api_key; carried into services and
     endpoint dependencies. Fields are read by name — adding one is a typed
     change, not a new positional slot every unpack site must survive.
     """
-    project_name: str
     allowed_models: list[str]
     allowed_endpoints: list[str]
 

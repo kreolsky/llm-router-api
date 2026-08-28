@@ -77,12 +77,6 @@ def timeout() -> float:
     return float(os.getenv("TIMEOUT", "30.0"))
 
 
-@pytest.fixture(scope="session")
-def retries() -> int:
-    """Number of retry attempts for failed requests."""
-    return int(os.getenv("RETRIES", "3"))
-
-
 @pytest_asyncio.fixture
 async def http_client(timeout: float) -> httpx.AsyncClient:
     """HTTP client for making requests."""
@@ -181,36 +175,4 @@ def streaming_test_config() -> dict[str, Any]:
         "min_chunks": 1,
         "max_empty_chunks": 5
     }
-
-
-# Custom assertions for test consistency
-def assert_valid_response_structure(response_data: dict[str, Any], required_fields: list[str]):
-    """Assert that response contains all required fields."""
-    for field in required_fields:
-        assert field in response_data, f"Response missing required field: {field}"
-
-
-def assert_valid_choice_structure(choice: dict[str, Any]):
-    """Assert that chat completion choice has valid structure."""
-    required_fields = ["index", "message", "finish_reason"]
-    for field in required_fields:
-        assert field in choice, f"Choice missing required field: {field}"
-    
-    # Check message structure
-    message = choice["message"]
-    assert "role" in message, "Message missing role"
-    assert "content" in message, "Message missing content"
-
-
-def assert_valid_embedding_structure(embedding: dict[str, Any]):
-    """Assert that embedding has valid structure."""
-    required_fields = ["object", "embedding", "index"]
-    for field in required_fields:
-        assert field in embedding, f"Embedding missing required field: {field}"
-    
-    # Check embedding vector
-    vector = embedding["embedding"]
-    assert isinstance(vector, list), "Embedding should be a list"
-    assert len(vector) > 0, "Embedding vector should not be empty"
-    assert all(isinstance(x, (int, float)) for x in vector), "Embedding values should be numeric"
 

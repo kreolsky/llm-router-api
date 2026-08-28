@@ -9,9 +9,9 @@ from src.core.context import AuthContext, RequestContext
 from src.services.transcription_service import TranscriptionService
 
 
-def _make_auth_context(project_name="proj"):
+def _make_auth_context():
     """AuthContext matching what auth.get_api_key builds."""
-    return AuthContext(project_name, [], [])
+    return AuthContext(allowed_models=[], allowed_endpoints=[])
 
 
 def _make_config_manager(models=None, providers=None, default_stt_model="stt/dummy"):
@@ -60,7 +60,7 @@ class TestIdentityHeadersForwarded:
         with patch("src.services.transcription_service.get_provider_instance",
                    new=AsyncMock(return_value=provider_instance)):
             response = await service.create_transcription(
-                request, _make_audio_file(), _make_auth_context("proj"), model_id="stt/model"
+                request, _make_audio_file(), _make_auth_context(), model_id="stt/model"
             )
 
         assert response == {"text": "ok"}

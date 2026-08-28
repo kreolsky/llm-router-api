@@ -9,17 +9,20 @@ token reaches get_api_key as a non-ASCII str.
 import json
 
 import pytest
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 
 from src.api.main import custom_http_exception_handler
 from src.core.auth import get_api_key
-from src.core.context import AuthContext
+from src.core.context import AuthContext, request_context
 
 
-def _config_manager_with_keys(keys: dict[str, str]):
+def _config_manager_with_keys(keys: dict):
     class _CM:
         def get_config(self):
-            return {"user_keys": {name: {"api_key": key} for name, key in keys.items()}}
+            return {"user_keys": {
+                name: ({"api_key": key} if isinstance(key, str) else dict(key))
+                for name, key in keys.items()
+            }}
     return _CM()
 
 
@@ -31,18 +34,20 @@ def app():
     application.add_exception_handler(HTTPException, custom_http_exception_handler)
 
     @application.get("/check")
-    async def check(auth_context: AuthContext = Depends(get_api_key)):
-        return {"project": auth_context.project_name}
+    async def check(request: Request, auth_context: AuthContext = Depends(get_api_key)):
+        # AuthContext carries grants only; the resolved project name is read
+        # from the request context it now solely owns.
+        return {"user": request_context(request).user_id}
 
     return application
 
 
-async def _drive(app, headers: list[tuple[bytes, bytes]]) -> tuple[int, dict, bytes | None]:
-    """Send GET /check through raw ASGI; return (status, body-bytes, raised-or-None)."""
+async def _drive(app, headers: list[tuple[bytes, bytes]], path: str = "/check") -> tuple[int, dict, bytes | None]:
+    """Send GET <path> through raw ASGI; return (status, body-bytes, raised-or-None)."""
     scope = {
         "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
         "http_version": "1.1", "method": "GET", "scheme": "http",
-        "path": "/check", "raw_path": b"/check", "query_string": b"",
+        "path": path, "raw_path": path.encode(), "query_string": b"",
         "root_path": "", "headers": headers,
         "client": ("127.0.0.1", 123), "server": ("testserver", 80), "state": {},
     }
@@ -89,10 +94,81 @@ class TestNonAsciiBearer:
         status, body, raised = await _drive(app, [(b"authorization", b"Bearer nnp-v1-valid-key")])
         assert raised is None
         assert status == 200
-        assert json.loads(body) == {"project": "lab"}
+        assert json.loads(body) == {"user": "lab"}
 
     @pytest.mark.asyncio
     async def test_missing_key_401(self, app):
         status, body, _ = await _drive(app, [])
         assert status == 401
         assert json.loads(body)["error"]["metadata"]["error_code"] == "missing_api_key"
+
+
+def _guarded_app(key: str, allowed_endpoints: list[str] | None) -> FastAPI:
+    """App whose /guarded route is protected by check_endpoint_access.
+
+    allowed_endpoints=None leaves the key's list unset (admin: unrestricted).
+    """
+    project = {"api_key": key}
+    if allowed_endpoints is not None:
+        project["allowed_endpoints"] = allowed_endpoints
+
+    application = FastAPI()
+    application.state.config_manager = _config_manager_with_keys({"lab": project})
+    application.add_exception_handler(HTTPException, custom_http_exception_handler)
+
+    from src.core.auth import check_endpoint_access
+
+    @application.get("/guarded")
+    async def guarded(request: Request,
+                      auth_context: AuthContext = Depends(check_endpoint_access("/guarded"))):
+        return {"user": request_context(request).user_id}
+
+    return application
+
+
+class TestCheckEndpointAccess:
+    """check_endpoint_access: empty list passes, mismatch 403s with user_id logged."""
+
+    AUTH = [(b"authorization", b"Bearer nnp-v1-valid-key")]
+
+    @pytest.mark.asyncio
+    async def test_empty_list_is_unrestricted(self):
+        app = _guarded_app("nnp-v1-valid-key", [])
+        status, body, raised = await _drive(app, self.AUTH, path="/guarded")
+        assert raised is None
+        assert status == 200
+        assert json.loads(body) == {"user": "lab"}
+
+    @pytest.mark.asyncio
+    async def test_unsupported_key_has_unrestricted_access(self):
+        """No allowed_endpoints key at all behaves like the empty list."""
+        app = _guarded_app("nnp-v1-valid-key", None)
+        status, body, _ = await _drive(app, self.AUTH, path="/guarded")
+        assert status == 200
+        assert json.loads(body) == {"user": "lab"}
+
+    @pytest.mark.asyncio
+    async def test_matching_endpoint_passes(self):
+        app = _guarded_app("nnp-v1-valid-key", ["/guarded"])
+        status, _, _ = await _drive(app, self.AUTH, path="/guarded")
+        assert status == 200
+
+    @pytest.mark.asyncio
+    async def test_mismatch_is_403_envelope_with_user_id(self):
+        from unittest.mock import patch
+
+        app = _guarded_app("nnp-v1-valid-key", ["/v1/other"])
+        with patch("src.core.auth.logger") as mock_logger:
+            status, body, _ = await _drive(app, self.AUTH, path="/guarded")
+
+        assert status == 403
+        envelope = json.loads(body)
+        assert envelope["error"]["code"] == 403
+        assert envelope["error"]["metadata"]["error_code"] == "endpoint_not_allowed"
+        assert "{" not in envelope["error"]["message"]
+        assert "/guarded" in envelope["error"]["message"]
+        # user_id reaches the log from request_context — the single owner of
+        # the resolved project name (get_api_key, the wrapped Depends, has
+        # already attached it).
+        log_extra = mock_logger.warning.call_args[1]["extra"]
+        assert log_extra["auth"]["user_id"] == "lab"

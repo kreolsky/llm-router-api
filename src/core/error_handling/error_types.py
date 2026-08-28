@@ -1,9 +1,13 @@
 """Standardized error types for the LLM Router."""
 
+import re
 from enum import Enum
 from typing import Any
 
 from fastapi import status
+
+# A `{placeholder}` token in a template whose kwarg was not supplied.
+_PLACEHOLDER_RE = re.compile(r"\{[^{}]*\}")
 
 
 class ErrorType(Enum):
@@ -41,11 +45,17 @@ class ErrorType(Enum):
         self.message_template = message_template
 
     def format_message(self, **kwargs) -> str:
-        """Format the error message with provided parameters."""
+        """Format the error message with provided parameters.
+
+        A missing kwarg strips the `{...}` tokens instead of returning the raw
+        template — braces in a client-visible message are a placeholder leak.
+        metadata.error_code is the machine-read field; the message is
+        human-only prose.
+        """
         try:
             return self.message_template.format(**kwargs)
         except KeyError:
-            return self.message_template
+            return _PLACEHOLDER_RE.sub("", self.message_template)
 
     def create_error_detail(self, **kwargs) -> dict[str, Any]:
         """Create standardized error detail dictionary in OpenRouter format.

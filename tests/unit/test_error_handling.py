@@ -49,9 +49,19 @@ class TestErrorTypeFormatMessage:
         )
         assert msg == "Provider 'openai' not found for model 'gpt-4'"
 
-    def test_format_message_missing_kwargs_returns_raw_template(self):
+    def test_format_message_missing_kwargs_strips_placeholder_tokens(self):
+        """A missing kwarg must not leak the raw `{...}` token to the client.
+
+        metadata.error_code is the machine-read field; the message is
+        human-only prose.
+        """
+        msg = ErrorType.SERVICE_UNAVAILABLE.format_message()
+        assert msg == "Could not connect to service: "
+        assert "{" not in msg
+
+    def test_format_message_missing_kwarg_keeps_surrounding_text(self):
         msg = ErrorType.MODEL_NOT_FOUND.format_message()
-        assert msg == ErrorType.MODEL_NOT_FOUND.message_template
+        assert msg == "Model '' not found in configuration"
 
     def test_format_message_no_placeholders(self):
         msg = ErrorType.MODEL_NOT_SPECIFIED.format_message()
@@ -136,9 +146,19 @@ class TestCreateError:
         assert "error" in exc.detail
         assert exc.detail["error"]["code"] == 400
 
-    def test_logs_error(self, mock_logger):
-        create_error(ErrorType.MODEL_NOT_SPECIFIED)
+    def test_4xx_logs_warning_not_error(self, mock_logger):
+        """4xx is a client error: WARNING, and log_type "warning" — auth already
+        logged its own WARNING line; a second line at ERROR doubled every 401/403."""
+        create_error(ErrorType.INVALID_API_KEY)
+        mock_logger.error.assert_not_called()
+        call_kwargs = mock_logger.warning.call_args
+        assert call_kwargs[1]["extra"]["log_type"] == "warning"
+
+    def test_5xx_logs_error(self, mock_logger):
+        create_error(ErrorType.INTERNAL_SERVER_ERROR, error_details="oops")
+        mock_logger.warning.assert_not_called()
         mock_logger.error.assert_called_once()
+        assert mock_logger.error.call_args[1]["extra"]["log_type"] == "error"
 
     def test_context_kwargs_included_in_message(self, mock_logger):
         exc = create_error(ErrorType.MODEL_NOT_FOUND, model_id="gpt-4")

@@ -20,21 +20,27 @@ def create_error(
     are passed as kwargs and used for both message formatting and log extras.
     """
     error_detail = error_type.create_error_detail(**context)
-    error_detail["error"]["code"] = error_type.status_code
 
-    log_extra = {"log_type": "error", "error_type": error_type.code}
+    # 4xx answers at WARNING: auth already logs its own WARNING line for
+    # 401/403, and a create_error line at ERROR doubled every one of them.
+    # >=500 stays ERROR. log_type follows the level so `log_type: "error"`
+    # keeps meaning "server-side failure".
+    is_server_error = (error_type.status_code or 500) >= 500
+    log_extra = {"log_type": "error" if is_server_error else "warning",
+                 "error_type": error_type.code}
     for key in ("request_id", "user_id", "model_id", "provider_name", "endpoint_path"):
         if context.get(key):
             log_extra[key] = context[key]
 
     message = error_type.format_message(**context)
+    log = logger.error if is_server_error else logger.warning
 
     if original_exception:
         log_extra["original_exception"] = str(original_exception)
         log_extra["original_exception_type"] = type(original_exception).__name__
-        logger.error(message, extra=log_extra, exc_info=True)
+        log(message, extra=log_extra, exc_info=True)
     else:
-        logger.error(message, extra=log_extra)
+        log(message, extra=log_extra)
 
     return HTTPException(status_code=error_type.status_code, detail=error_detail)
 

@@ -6,7 +6,7 @@ import hmac
 from fastapi import Depends, Request, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from .context import AuthContext, RequestContext
+from .context import AuthContext, request_context
 from .error_handling import ErrorType, create_error
 from .logging import logger
 from .usage_db import request_stats
@@ -22,8 +22,10 @@ async def get_api_key(
 
     Uses HTTPBearer scheme to extract token from Authorization header.
     Uses constant-time comparison to prevent timing attacks.
-    Rebuilds the typed RequestContext on request.state.request_context with
-    project_name attached (via ctx.with_project_name(...)) for downstream handlers.
+    Attaches project_name to the typed RequestContext on
+    request.state.request_context (via with_project_name(...)) for downstream
+    handlers — RequestContext is the single owner of the resolved project
+    name; AuthContext carries grants alone.
     """
     config_manager = request.app.state.config_manager
     config = config_manager.get_config()
@@ -83,14 +85,11 @@ async def get_api_key(
     allowed_models = config["user_keys"][found_project].get("allowed_models") or []
     allowed_endpoints = config["user_keys"][found_project].get("allowed_endpoints") or []
     
-    # SIDE EFFECT: attach project_name to the typed RequestContext read by downstream handlers
-    ctx: RequestContext = getattr(request.state, "request_context", None)
-    if ctx is not None:
-        request.state.request_context = ctx.with_project_name(found_project)
-    else:
-        request.state.request_context = RequestContext(
-            request_id="unknown", project_name=found_project
-        )
+    # SIDE EFFECT: attach project_name to the typed RequestContext read by
+    # downstream handlers — the single owner of the resolved project name.
+    # The accessor's placeholder covers a request that never passed through
+    # the middleware (unit tests driving raw ASGI).
+    request.state.request_context = request_context(request).with_project_name(found_project)
 
     logger.info("Authentication successful", extra={
         "auth": {
@@ -102,7 +101,6 @@ async def get_api_key(
     })
     
     return AuthContext(
-        project_name=found_project,
         allowed_models=allowed_models,
         allowed_endpoints=allowed_endpoints,
     )
@@ -121,15 +119,19 @@ def check_endpoint_access(endpoint_path: str):
         if not auth_context.allowed_endpoints or endpoint_path in auth_context.allowed_endpoints:
             return auth_context
 
+        # WHY: user_id is read from request_context, not AuthContext —
+        # RequestContext is the single owner of the resolved project name,
+        # and get_api_key (the Depends this checker wraps) has already
+        # attached it by the time this body runs.
         logger.warning("Endpoint access denied", extra={
             "auth": {
                 "error_type": "endpoint_not_allowed",
-                "user_id": auth_context.project_name,
+                "user_id": request_context(request).user_id,
                 "endpoint_path": endpoint_path,
                 "allowed_endpoints": auth_context.allowed_endpoints
             }
         })
         raise create_error(ErrorType.ENDPOINT_NOT_ALLOWED, endpoint_path=endpoint_path,
-                           user_id=auth_context.project_name)
+                           user_id=request_context(request).user_id)
 
     return endpoint_checker

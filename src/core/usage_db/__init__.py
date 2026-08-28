@@ -6,11 +6,13 @@ reads; they share only the connection (_conn.py). Every public name the rest
 of the tree imports is re-exported here, so the package is a drop-in for the
 old single module.
 
-WHY re-exports do not preserve patch targets: schedule_flush resolves
-_flush_row through writer's own module globals, so a test patching
-``src.core.usage_db._flush_row`` would replace only the inert alias here.
-Patch the submodule the CALLER resolves the name from
-(``src.core.usage_db.writer._flush_row``).
+WHY re-exports do not preserve patch targets: the submodules resolve names
+through their OWN module globals — writer.py does ``from ._conn import
+get_connection``, so a test patching the package re-export
+``src.core.usage_db.get_connection`` replaces only the inert alias here and
+the writer keeps the real one. Patch the submodule the CALLER resolves the
+name from (``src.core.usage_db.writer.get_connection``; same seam for
+queries.py).
 """
 # SYSTEM: usage-stats — SQLite per-request usage rows and cost freezing
 
@@ -26,6 +28,7 @@ from .queries import (
 from .writer import (
     RequestStats,
     close_db,
+    drain_pending_flushes,
     init_db,
     request_stats,
     schedule_flush,
@@ -35,6 +38,7 @@ __all__ = [
     "ERROR_CODE_NULL",
     "RequestStats",
     "close_db",
+    "drain_pending_flushes",
     "get_connection",
     "get_distinct_models",
     "get_distinct_users",

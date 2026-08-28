@@ -304,6 +304,31 @@ def _on_usage_done(task: asyncio.Task) -> None:
         )
 
 
+async def drain_pending_flushes(drain_timeout: float = 10.0) -> None:
+    """Await every pending flush task, bounded by drain_timeout — the shutdown path.
+
+    Called by the app lifespan between provider-pool close and close_db() so an
+    in-flight flush cannot race the connection close. Gathers a COPY of the
+    set: each task's done callback discards it from _usage_tasks, so awaiting
+    tasks while iterating the live set would race its own completion. A flush
+    is one INSERT + commit; anything still pending after the timeout is logged
+    at WARNING and abandoned — a stuck flush must never block shutdown.
+    """
+    pending = [t for t in list(_usage_tasks) if not t.done()]
+    if not pending:
+        return
+    _, leftovers = await asyncio.wait(pending, timeout=drain_timeout)
+    if leftovers:
+        logger.warning(
+            f"{len(leftovers)} usage flush task(s) still pending after {drain_timeout}s; abandoning",
+            extra={
+                "log_type": "warning",
+                "error_type": "usage_drain_timeout",
+                "pending_count": len(leftovers),
+            },
+        )
+
+
 def schedule_flush(
     stats: RequestStats,
     *,
@@ -315,9 +340,10 @@ def schedule_flush(
 ) -> asyncio.Task | None:
     """Fire-and-forget single-row flush (tracked in _usage_tasks).
 
-    Returns the created task, or None when no event loop is running. Flush
-    tasks created during shutdown after close_db() see a None connection and
-    no-op — a bounded loss window at process exit, accepted.
+    Returns the created task, or None when no event loop is running. The
+    shutdown lifespan drains the tracked set via drain_pending_flushes()
+    BEFORE close_db(); a flush scheduled after that drain sees a None
+    connection and no-ops — a bounded loss window at process exit, accepted.
     """
     try:
         loop = asyncio.get_running_loop()

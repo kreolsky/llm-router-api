@@ -6,6 +6,7 @@ src/core/usage_db/__init__.py).
 """
 
 import asyncio
+import contextlib
 import hashlib
 import time
 from types import SimpleNamespace
@@ -414,6 +415,80 @@ class TestScheduleFlush:
         assert task is None
 
 
+class TestDrainPendingFlushes:
+    """Shutdown drain: pending flush tasks complete BEFORE close_db()."""
+
+    @pytest.mark.asyncio
+    async def test_drain_awaits_pending_flush(self, db):
+        """A gated _flush_row finishes only after release; drain must wait for it.
+
+        Two tasks are scheduled so one completes (its done callback mutates
+        _usage_tasks) while drain is still awaiting the other — a drain that
+        iterated the live set would race its own completion.
+        """
+        entered = asyncio.Event()
+        gate = asyncio.Event()
+
+        async def slow_flush(*a, **k):
+            entered.set()
+            await gate.wait()
+
+        async def fast_flush(*a, **k):
+            return None
+
+        with patch("src.core.usage_db.writer._flush_row", new=slow_flush):
+            gated = writer.schedule_flush(
+                RequestStats(endpoint="chat"), request_id="r-gated",
+                project_name="p", duration_ms=1.0, status_code=200,
+                app_state=None,
+            )
+            await asyncio.wait_for(entered.wait(), timeout=1.0)
+        with patch("src.core.usage_db.writer._flush_row", new=fast_flush):
+            writer.schedule_flush(
+                RequestStats(endpoint="chat"), request_id="r-fast",
+                project_name="p", duration_ms=1.0, status_code=200,
+                app_state=None,
+            )
+            await asyncio.sleep(0)  # let the fast task finish (done callback fires)
+
+            drained = asyncio.create_task(writer.drain_pending_flushes(drain_timeout=1.0))
+            await asyncio.sleep(0.05)
+            assert not drained.done(), "drain returned while a flush was pending"
+
+            gate.set()
+            await asyncio.wait_for(drained, timeout=1.0)
+        assert gated.done() and not gated.cancelled()
+
+    @pytest.mark.asyncio
+    async def test_drain_no_pending_returns_at_once(self, db):
+        await asyncio.wait_for(writer.drain_pending_flushes(drain_timeout=1.0), timeout=1.0)
+
+    @pytest.mark.asyncio
+    async def test_drain_timeout_logs_warning_and_abandons(self, db):
+        """A stuck flush cannot block shutdown: WARNING, then abandon."""
+        entered = asyncio.Event()
+
+        async def stuck_flush(*a, **k):
+            entered.set()
+            await asyncio.Event().wait()
+
+        with patch("src.core.usage_db.writer._flush_row", new=stuck_flush), \
+             patch("src.core.usage_db.writer.logger") as mock_logger:
+            stuck = writer.schedule_flush(
+                RequestStats(endpoint="chat"), request_id="r",
+                project_name="p", duration_ms=1.0, status_code=200,
+                app_state=None,
+            )
+            await asyncio.wait_for(entered.wait(), timeout=1.0)
+
+            await asyncio.wait_for(writer.drain_pending_flushes(drain_timeout=0.05), timeout=1.0)
+            mock_logger.warning.assert_called_once()
+
+        stuck.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await stuck
+
+
 # ---------------------------------------------------------------------------
 # Summary query
 # ---------------------------------------------------------------------------
@@ -628,6 +703,78 @@ class TestGetRequests:
 
         result = await usage_db.get_requests([], [], [], "all", "", "", 0)
         assert result["total"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Chart series + distinct filters (get_usage_data / get_distinct_*)
+# ---------------------------------------------------------------------------
+
+class TestUsageDataAndDistinct:
+
+    @pytest.mark.asyncio
+    async def test_distinct_users_and_models(self, db):
+        await seed_request_log(db)
+        assert await usage_db.get_distinct_users() == ["alice", "bob", "carol"]
+        assert await usage_db.get_distinct_models() == ["m1", "m2", "m3"]
+
+    @pytest.mark.asyncio
+    async def test_usage_data_groups_by_user_model_day_and_zero_fills(self, db):
+        """Two users, two models, two days: each series is aligned over the
+        union of dates, missing (user, model, day) cells are zero."""
+        now = time.time()
+        a1 = RequestStats(endpoint="chat", model_id="m1", provider_name="p")
+        a1.set_usage({"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12,
+                      "prompt_tokens_details": {"cached_tokens": 4}})
+        b1 = RequestStats(endpoint="chat", model_id="m2", provider_name="p")
+        b1.set_usage({"prompt_tokens": 7, "completion_tokens": 1, "total_tokens": 8})
+        await flush(a1, request_id="r1", project_name="alice", status_code=200)
+        await flush(b1, request_id="r2", project_name="bob", status_code=200)
+        # Push r1 to yesterday: m1's series needs a zero for today, m2's for
+        # yesterday.
+        await db.execute("UPDATE usage_events SET timestamp = ? WHERE request_id = 'r1'",
+                         (now - 86400,))
+        await db.commit()
+
+        result = await usage_db.get_usage_data([], [], None)
+        series = {s["model"]: s for s in result["series"]}
+        assert set(series) == {"m1", "m2"}
+        assert len(series["m1"]["dates"]) == 2
+        # dates are the shared union, sorted ascending (yesterday first)
+        assert series["m1"]["prompt"] == [10, 0]
+        assert series["m1"]["cached"] == [4, 0]
+        assert series["m2"]["prompt"] == [0, 7]
+
+    @pytest.mark.asyncio
+    async def test_usage_data_user_filter_narrows_series(self, db):
+        a1 = RequestStats(endpoint="chat", model_id="m1", provider_name="p")
+        a1.set_usage({"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12})
+        b1 = RequestStats(endpoint="chat", model_id="m2", provider_name="p")
+        b1.set_usage({"prompt_tokens": 7, "completion_tokens": 1, "total_tokens": 8})
+        await flush(a1, request_id="r1", project_name="alice", status_code=200)
+        await flush(b1, request_id="r2", project_name="bob", status_code=200)
+
+        result = await usage_db.get_usage_data(["alice"], [], None)
+        assert [s["model"] for s in result["series"]] == ["m1"]
+
+    @pytest.mark.asyncio
+    async def test_usage_data_days_filter_excludes_old_rows(self, db):
+        a1 = RequestStats(endpoint="chat", model_id="m1", provider_name="p")
+        a1.set_usage({"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12})
+        await flush(a1, request_id="r1", project_name="alice", status_code=200)
+        await db.execute("UPDATE usage_events SET timestamp = ? WHERE request_id = 'r1'",
+                         (time.time() - 10 * 86400,))
+        await db.commit()
+
+        assert await usage_db.get_usage_data([], [], 7) == {"series": []}
+        recent = await usage_db.get_usage_data([], [], None)
+        assert recent["series"] != []
+
+    @pytest.mark.asyncio
+    async def test_no_connection_returns_empty_shapes(self):
+        await usage_db.close_db()
+        assert await usage_db.get_distinct_users() == []
+        assert await usage_db.get_distinct_models() == []
+        assert await usage_db.get_usage_data([], [], None) == {"series": []}
 
 
 # ---------------------------------------------------------------------------
@@ -848,7 +995,10 @@ class TestAuthKeyHashEnrichment:
         request = self._auth_request(stats)
         credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="nnp-v1-real")
         result = await get_api_key(request, credentials)
-        assert result.project_name == "proj"
+        # AuthContext carries grants; the resolved name lives on RequestContext.
+        assert result.allowed_models == []
+        assert result.allowed_endpoints == []
+        assert request.state.request_context.project_name == "proj"
         assert stats.api_key_hash is None
 
 

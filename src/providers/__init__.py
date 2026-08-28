@@ -108,16 +108,12 @@ async def rebuild_provider_cache(config: dict[str, Any], config_manager: Any | N
 
     coros = [inst.aclose() for inst in old_cache.values()]
     if coros:
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-        if loop is not None:
-            task = asyncio.ensure_future(_gather_closes(coros))
-            _drain_tasks.add(task)
-            task.add_done_callback(_on_drain_done)
-        else:
-            asyncio.run(_gather_closes(coros))
+        # rebuild_provider_cache is async, so a loop is always running here and
+        # get_running_loop() cannot raise — the old no-loop fallback was dead
+        # code inside an async def.
+        task = asyncio.ensure_future(_gather_closes(coros))
+        _drain_tasks.add(task)
+        task.add_done_callback(_on_drain_done)
 
 
 async def clear_provider_cache_async() -> None:
