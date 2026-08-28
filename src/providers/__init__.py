@@ -20,9 +20,9 @@ _cache_lock = asyncio.Lock()
 
 # ARCH: background drain tasks are tracked here so they are not garbage-
 # collected before completion (asyncio holds only weak references to tasks).
-# Same pattern as _usage_tasks in src/core/usage_db.py; each task discards
-# itself via a done callback. No failure logging here: _gather_closes runs
-# with return_exceptions=True, so the task itself never raises.
+# Same pattern as _usage_tasks in src/core/usage_db/writer.py; each task
+# discards itself via a done callback. No failure logging here:
+# _gather_closes runs with return_exceptions=True, so the task never raises.
 _drain_tasks: set[asyncio.Task] = set()
 
 

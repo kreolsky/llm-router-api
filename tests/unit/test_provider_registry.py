@@ -185,7 +185,7 @@ class TestRebuildProviderCache:
         asyncio only keeps a weak reference to a running task: an unreferenced
         ensure_future result can be garbage-collected mid-flight, dropping the
         pool closes it was carrying. Mirrors the _usage_tasks pattern in
-        src/core/usage_db.py.
+        src/core/usage_db/writer.py.
         """
         import asyncio
         await rebuild_provider_cache({"providers": {"ok": _make_config()}}, _cm())
