@@ -1227,3 +1227,41 @@ class TestCallSiteTimeouts:
         assert t.connect == 60.0
         assert t.pool == 5.0
 
+
+
+# ===================================================================
+# Retry 429-detection robustness
+# ===================================================================
+
+class TestRetryRateLimitDetection:
+    """429 detection must survive a wrapped exception whose .response is None."""
+
+    @pytest.mark.asyncio
+    async def test_wrapped_exception_with_none_response_is_not_rate_limit(self):
+        inner = SimpleNamespace(response=None)
+        wrapped = HTTPException(status_code=500, detail="wrapped network failure")
+        wrapped.original_exception = inner
+
+        @retry_on_rate_limit(max_retries=2, base_delay=0.01, max_delay=0.05)
+        async def fn():
+            raise wrapped
+
+        with pytest.raises(HTTPException):
+            await fn()
+
+    @pytest.mark.asyncio
+    async def test_wrapped_429_response_still_retries(self):
+        inner = SimpleNamespace(response=SimpleNamespace(status_code=429))
+        wrapped = HTTPException(status_code=502, detail="upstream 429")
+        wrapped.original_exception = inner
+        calls = {"n": 0}
+
+        @retry_on_rate_limit(max_retries=2, base_delay=0.01, max_delay=0.05)
+        async def fn():
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise wrapped
+            return "ok"
+
+        assert await fn() == "ok"
+        assert calls["n"] == 3

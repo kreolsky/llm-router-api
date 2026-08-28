@@ -18,12 +18,26 @@ from ..utils.deep_merge import deep_merge
 from ..utils.mask import mask_headers
 
 
+def _is_rate_limit_error(e: BaseException) -> bool:
+    """429 detection for retry_on_rate_limit.
+
+    Either the exception itself carries status 429, or it wraps one
+    (original_exception.response.status_code == 429, wrapped httpx errors) —
+    the wrapped response may be None, which must mean "not a rate limit",
+    not a crash.
+    """
+    if hasattr(e, 'status_code') and e.status_code == 429:
+        return True
+    original = getattr(e, 'original_exception', None)
+    response = getattr(original, 'response', None)
+    return response is not None and getattr(response, 'status_code', None) == 429
+
+
 def retry_on_rate_limit(max_retries: int | None = None, base_delay: float | None = None, max_delay: float | None = None):
     """Retry decorator for 429 (Too Many Requests) with exponential backoff.
 
     Backoff formula: min(base_delay * 2^attempt, max_delay).
-    Rate-limit detection checks both e.status_code == 429 and
-    e.original_exception.response.status_code == 429 (wrapped httpx errors).
+    Rate-limit detection lives in _is_rate_limit_error.
     Config is read from self.config_manager (first arg); otherwise the decorator
     args / hardcoded defaults are used.
     """
@@ -47,14 +61,7 @@ def retry_on_rate_limit(max_retries: int | None = None, base_delay: float | None
                 try:
                     return await func(*args, **kwargs)
                 except Exception as e:
-                    # Check if this is a rate limit error (429)
-                    is_rate_limit = False
-                    
-                    # Check for HTTPException with rate limit status code
-                    if hasattr(e, 'status_code') and e.status_code == 429 or hasattr(e, 'original_exception') and hasattr(e.original_exception, 'response') and e.original_exception.response.status_code == 429:
-                        is_rate_limit = True
-                    
-                    if is_rate_limit and attempt < actual_max_retries:
+                    if _is_rate_limit_error(e) and attempt < actual_max_retries:
                         delay = min(actual_base_delay * (2 ** attempt), actual_max_delay)
                         last_exception = e
 
