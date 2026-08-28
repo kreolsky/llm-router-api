@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import HTTPException, Request
 
 from ..core.config_manager import ConfigManager
-from ..core.context import RequestContext, request_context
+from ..core.context import AuthContext, RequestContext, request_context
 from ..core.error_handling import ErrorType, create_error
 from ..core.header_policy import (
     FORWARDED_HEADER_DENY_PREFIXES,
@@ -81,11 +81,11 @@ class BaseService:
     def _validate_and_get_config(
         self,
         requested_model: str,
-        auth_data: tuple[str, str, list, list],
+        auth_context: AuthContext,
         **error_context
     ) -> tuple[dict[str, Any], str, str, dict[str, Any]]:
         """Validate model access and return (model_config, provider_name, provider_model_name, provider_config)."""
-        project_name, api_key, allowed_models, _ = auth_data
+        allowed_models = auth_context.allowed_models
 
         if not requested_model:
             raise create_error(ErrorType.MODEL_NOT_SPECIFIED, **error_context)

@@ -6,6 +6,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from ...core.config_manager import ConfigManager
+from ...core.context import AuthContext
 from ...core.error_handling import ErrorType, create_error
 from ...core.usage_db import request_stats
 from ...services.base import BaseService
@@ -21,7 +22,7 @@ class ChatService(BaseService):
         self.model_service = model_service
         self.stream_processor = StreamProcessor(config_manager)
     
-    async def chat_completions(self, request: Request, auth_data: tuple[str, str, list, list]) -> Any:
+    async def chat_completions(self, request: Request, auth_context: AuthContext) -> Any:
         """Process a chat completion request, returning StreamingResponse or JSONResponse."""
         ctx = self._get_request_context(request)
         request_id = ctx.request_id
@@ -51,7 +52,7 @@ class ChatService(BaseService):
         error_ctx = {"request_id": request_id, "user_id": user_id, "model_id": requested_model}
 
         model_config, provider_name, provider_model_name, provider_config = \
-            self._validate_and_get_config(requested_model, auth_data, **error_ctx)
+            self._validate_and_get_config(requested_model, auth_context, **error_ctx)
         stats.provider_name = provider_name
 
         provider_instance = await self._get_provider(provider_name, provider_config, **error_ctx)

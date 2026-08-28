@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ..core.auth import check_endpoint_access
 from ..core.config_manager import ConfigManager
-from ..core.context import request_context
+from ..core.context import AuthContext, request_context
 from ..core.error_handling import ErrorType, create_error
 from ..core.logging import logger
 from ..core.model_capabilities import CapabilitiesCache, capabilities_refresh_loop
@@ -158,9 +158,9 @@ async def health_check():
 
 @app.get("/v1/models")
 async def list_models(
-    auth_data: tuple = Depends(check_endpoint_access("/v1/models"))
+    auth_context: AuthContext = Depends(check_endpoint_access("/v1/models"))
 ):
-    return await app.state.model_service.list_models(auth_data)
+    return await app.state.model_service.list_models(auth_context)
 
 
 # ARCH: endpoint string "/v1/models/{model_id:path}" отличается от "/v1/models" —
@@ -169,23 +169,23 @@ async def list_models(
 async def retrieve_model(
     model_id: str,
     refresh: bool = False,
-    auth_data: tuple = Depends(check_endpoint_access("/v1/models/{model_id:path}"))
+    auth_context: AuthContext = Depends(check_endpoint_access("/v1/models/{model_id:path}"))
 ):
-    return await app.state.model_service.retrieve_model(model_id, auth_data, refresh=refresh)
+    return await app.state.model_service.retrieve_model(model_id, auth_context, refresh=refresh)
 
 @app.post("/v1/chat/completions")
 async def chat_completions(
     request: Request,
-    auth_data: tuple = Depends(check_endpoint_access("/v1/chat/completions"))
+    auth_context: AuthContext = Depends(check_endpoint_access("/v1/chat/completions"))
 ):
-    return await app.state.chat_service.chat_completions(request, auth_data)
+    return await app.state.chat_service.chat_completions(request, auth_context)
 
 @app.post("/v1/embeddings")
 async def create_embeddings(
     request: Request,
-    auth_data: tuple = Depends(check_endpoint_access("/v1/embeddings"))
+    auth_context: AuthContext = Depends(check_endpoint_access("/v1/embeddings"))
 ):
-    return await app.state.embedding_service.create_embeddings(request, auth_data)
+    return await app.state.embedding_service.create_embeddings(request, auth_context)
 
 @app.post("/v1/audio/transcriptions")
 async def create_transcription(
@@ -198,7 +198,7 @@ async def create_transcription(
     temperature: float = Form(0.0),
     language: str | None = Form(None),
     return_timestamps: bool | None = Form(False),
-    auth_data: tuple = Depends(check_endpoint_access("/v1/audio/transcriptions"))
+    auth_context: AuthContext = Depends(check_endpoint_access("/v1/audio/transcriptions"))
 ):
     ctx = request_context(request)
     request_id = ctx.request_id
@@ -233,7 +233,7 @@ async def create_transcription(
     return await app.state.transcription_service.create_transcription(
         request=request,
         audio_file=uploaded_file,
-        auth_data=auth_data,
+        auth_context=auth_context,
         model_id=model,
         response_format=response_format,
         temperature=temperature,
@@ -244,7 +244,7 @@ async def create_transcription(
 @app.get("/tools/generate_key")
 async def generate_key_endpoint(
     request: Request,
-    auth_data: tuple = Depends(check_endpoint_access("/tools/generate_key"))
+    auth_context: AuthContext = Depends(check_endpoint_access("/tools/generate_key"))
 ):
     ctx = request_context(request)
     request_id = ctx.request_id

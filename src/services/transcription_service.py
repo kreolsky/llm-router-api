@@ -3,6 +3,7 @@ from typing import Any
 
 from fastapi import Request, UploadFile
 
+from ..core.context import AuthContext
 from ..core.logging import logger
 from ..core.usage_db import request_stats
 from ..services.model_service import ModelService
@@ -25,7 +26,7 @@ class TranscriptionService(BaseService):
         self,
         request: Request,
         audio_file: UploadFile,
-        auth_data: tuple[str, str, Any, Any],
+        auth_context: AuthContext,
         model_id: str | None = None,
         response_format: str = "json",
         temperature: float = 0.0,
@@ -73,7 +74,7 @@ class TranscriptionService(BaseService):
 
         async with self._guard_service_errors(error_ctx):
             model_config, provider_name, provider_model_name, provider_config = \
-                self._validate_and_get_config(model_id, auth_data, **error_ctx)
+                self._validate_and_get_config(model_id, auth_context, **error_ctx)
             stats.provider_name = provider_name
 
             provider_instance = await self._get_provider(provider_name, provider_config, **error_ctx)

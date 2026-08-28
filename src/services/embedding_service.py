@@ -4,6 +4,7 @@ from typing import Any
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
+from ..core.context import AuthContext
 from ..core.error_handling import ErrorType, create_error
 from ..core.logging import logger
 from ..core.usage_db import request_stats
@@ -12,7 +13,7 @@ from .base import BaseService
 
 class EmbeddingService(BaseService):
 
-    async def create_embeddings(self, request: Request, auth_data: tuple[str, str, list, list]) -> Any:
+    async def create_embeddings(self, request: Request, auth_context: AuthContext) -> Any:
         """Validate, dispatch, and return an embedding creation request."""
         ctx = self._get_request_context(request)
         request_id = ctx.request_id
@@ -42,7 +43,7 @@ class EmbeddingService(BaseService):
         )
 
         model_config, provider_name, provider_model_name, provider_config = \
-            self._validate_and_get_config(requested_model, auth_data, **error_ctx)
+            self._validate_and_get_config(requested_model, auth_context, **error_ctx)
         stats.provider_name = provider_name
 
         provider_instance = await self._get_provider(provider_name, provider_config, **error_ctx)

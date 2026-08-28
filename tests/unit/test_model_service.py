@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
+from src.core.context import AuthContext
 from src.core.model_capabilities import CapabilitiesCache
 from src.services.model_service import ModelService
 
@@ -12,10 +13,10 @@ from src.services.model_service import ModelService
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_auth_data(project_name="test-project", api_key="sk-123",
-                    allowed_models=None, allowed_endpoints=None):
-    """Return a 4-tuple matching auth_data convention."""
-    return (project_name, api_key, allowed_models or [], allowed_endpoints or [])
+def _make_auth_context(project_name="test-project",
+                       allowed_models=None, allowed_endpoints=None):
+    """Return an AuthContext matching what auth.get_api_key builds."""
+    return AuthContext(project_name, allowed_models or [], allowed_endpoints or [])
 
 
 def _make_config(models=None, providers=None, model_info=None):
@@ -69,9 +70,9 @@ class TestListModels:
     async def test_unrestricted_user_sees_all_visible(self):
         """Empty allowed_models → all non-hidden models returned."""
         svc = _build_service(models=SAMPLE_MODELS)
-        auth_data = _make_auth_data(allowed_models=[])
+        auth_ctx = _make_auth_context(allowed_models=[])
 
-        result = await svc.list_models(auth_data)
+        result = await svc.list_models(auth_ctx)
 
         ids = [m["id"] for m in result["data"]]
         assert sorted(ids) == ["model-a", "model-b", "model-c"]
@@ -81,9 +82,9 @@ class TestListModels:
     async def test_restricted_user_sees_only_allowed(self):
         """Non-empty allowed_models → only those models returned."""
         svc = _build_service(models=SAMPLE_MODELS)
-        auth_data = _make_auth_data(allowed_models=["model-a"])
+        auth_ctx = _make_auth_context(allowed_models=["model-a"])
 
-        result = await svc.list_models(auth_data)
+        result = await svc.list_models(auth_ctx)
 
         ids = [m["id"] for m in result["data"]]
         assert ids == ["model-a"]
@@ -92,9 +93,9 @@ class TestListModels:
     async def test_restricted_user_multiple_allowed(self):
         """Partial overlap: only allowed models that exist in config are returned."""
         svc = _build_service(models=SAMPLE_MODELS)
-        auth_data = _make_auth_data(allowed_models=["model-a", "model-c"])
+        auth_ctx = _make_auth_context(allowed_models=["model-a", "model-c"])
 
-        result = await svc.list_models(auth_data)
+        result = await svc.list_models(auth_ctx)
 
         ids = sorted(m["id"] for m in result["data"])
         assert ids == ["model-a", "model-c"]
@@ -103,9 +104,9 @@ class TestListModels:
     async def test_hidden_model_excluded_even_if_allowed(self):
         """Hidden model is excluded from list even when in allowed_models."""
         svc = _build_service(models=SAMPLE_MODELS)
-        auth_data = _make_auth_data(allowed_models=["model-a", "hidden-model"])
+        auth_ctx = _make_auth_context(allowed_models=["model-a", "hidden-model"])
 
-        result = await svc.list_models(auth_data)
+        result = await svc.list_models(auth_ctx)
 
         ids = [m["id"] for m in result["data"]]
         assert "hidden-model" not in ids
@@ -115,9 +116,9 @@ class TestListModels:
     async def test_allowed_model_not_in_config(self):
         """allowed_models references a model not in config — no crash, empty result."""
         svc = _build_service(models=SAMPLE_MODELS)
-        auth_data = _make_auth_data(allowed_models=["nonexistent-model"])
+        auth_ctx = _make_auth_context(allowed_models=["nonexistent-model"])
 
-        result = await svc.list_models(auth_data)
+        result = await svc.list_models(auth_ctx)
 
         assert result["data"] == []
 
@@ -129,9 +130,9 @@ class TestListModels:
             "h2": {"provider": "p", "is_hidden": True},
         }
         svc = _build_service(models=models)
-        auth_data = _make_auth_data(allowed_models=[])
+        auth_ctx = _make_auth_context(allowed_models=[])
 
-        result = await svc.list_models(auth_data)
+        result = await svc.list_models(auth_ctx)
 
         assert result["data"] == []
 
@@ -139,9 +140,9 @@ class TestListModels:
     async def test_response_structure(self):
         """Response has OpenAI-compatible structure."""
         svc = _build_service(models=SAMPLE_MODELS)
-        auth_data = _make_auth_data(allowed_models=[])
+        auth_ctx = _make_auth_context(allowed_models=[])
 
-        result = await svc.list_models(auth_data)
+        result = await svc.list_models(auth_ctx)
 
         assert result["object"] == "list"
         assert isinstance(result["data"], list)
@@ -155,9 +156,9 @@ class TestListModels:
     async def test_empty_config(self):
         """No models in config → empty list."""
         svc = _build_service(models={})
-        auth_data = _make_auth_data(allowed_models=[])
+        auth_ctx = _make_auth_context(allowed_models=[])
 
-        result = await svc.list_models(auth_data)
+        result = await svc.list_models(auth_ctx)
 
         assert result["data"] == []
 
@@ -173,9 +174,9 @@ class TestListModels:
             },
         }
         svc = _build_service(models=SAMPLE_MODELS, model_info=model_info)
-        auth_data = _make_auth_data(allowed_models=[])
+        auth_ctx = _make_auth_context(allowed_models=[])
 
-        result = await svc.list_models(auth_data)
+        result = await svc.list_models(auth_ctx)
 
         model_a = next(m for m in result["data"] if m["id"] == "model-a")
         assert model_a["description"] == "desc-a"
@@ -202,9 +203,9 @@ class TestListModels:
             },
         }
         svc = _build_service(models=SAMPLE_MODELS, model_info=model_info)
-        auth_data = _make_auth_data(allowed_models=[])
+        auth_ctx = _make_auth_context(allowed_models=[])
 
-        result = await svc.list_models(auth_data)
+        result = await svc.list_models(auth_ctx)
 
         model_b = next(m for m in result["data"] if m["id"] == "model-b")
         assert model_b["reasoning"] == {"supported": True, "default_enabled": False}
@@ -213,9 +214,9 @@ class TestListModels:
     async def test_model_info_empty_catalog_no_crash(self):
         """No model_info in config → no extra fields, no crash."""
         svc = _build_service(models=SAMPLE_MODELS)
-        auth_data = _make_auth_data(allowed_models=[])
+        auth_ctx = _make_auth_context(allowed_models=[])
 
-        result = await svc.list_models(auth_data)
+        result = await svc.list_models(auth_ctx)
 
         for model in result["data"]:
             assert "description" not in model
@@ -226,9 +227,9 @@ class TestListModels:
         """Auto-cache provides capabilities when no manual model_info entry exists."""
         cache = _make_cache({"model-a": {"context_length": 32768, "max_completion_tokens": 4096}})
         svc = _build_service(models=SAMPLE_MODELS, cache=cache)
-        auth_data = _make_auth_data(allowed_models=[])
+        auth_ctx = _make_auth_context(allowed_models=[])
 
-        result = await svc.list_models(auth_data)
+        result = await svc.list_models(auth_ctx)
 
         model_a = next(m for m in result["data"] if m["id"] == "model-a")
         assert model_a["context_length"] == 32768
@@ -245,9 +246,9 @@ class TestRetrieveModel:
     async def test_unrestricted_user_retrieves_model(self):
         """Unrestricted user can retrieve any existing model."""
         svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS)
-        auth_data = _make_auth_data(allowed_models=[])
+        auth_ctx = _make_auth_context(allowed_models=[])
 
-        result = await svc.retrieve_model("model-a", auth_data)
+        result = await svc.retrieve_model("model-a", auth_ctx)
 
         assert result["id"] == "model-a"
         assert result["provider"] == "prov-a"
@@ -256,9 +257,9 @@ class TestRetrieveModel:
     async def test_restricted_user_retrieves_allowed(self):
         """Restricted user can retrieve a model in their allowed_models."""
         svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS)
-        auth_data = _make_auth_data(allowed_models=["model-a"])
+        auth_ctx = _make_auth_context(allowed_models=["model-a"])
 
-        result = await svc.retrieve_model("model-a", auth_data)
+        result = await svc.retrieve_model("model-a", auth_ctx)
 
         assert result["id"] == "model-a"
 
@@ -266,30 +267,30 @@ class TestRetrieveModel:
     async def test_restricted_user_denied_disallowed(self):
         """Restricted user gets 403 for a model not in allowed_models."""
         svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS)
-        auth_data = _make_auth_data(allowed_models=["model-a"])
+        auth_ctx = _make_auth_context(allowed_models=["model-a"])
 
         with pytest.raises(HTTPException) as exc_info:
-            await svc.retrieve_model("model-b", auth_data)
+            await svc.retrieve_model("model-b", auth_ctx)
         assert exc_info.value.status_code == 403
 
     @pytest.mark.asyncio
     async def test_access_check_before_existence(self):
         """INVARIANT: disallowed + nonexistent model → 403, not 404."""
         svc = _build_service(models={})
-        auth_data = _make_auth_data(allowed_models=["model-a"])
+        auth_ctx = _make_auth_context(allowed_models=["model-a"])
 
         with pytest.raises(HTTPException) as exc_info:
-            await svc.retrieve_model("secret-model", auth_data)
+            await svc.retrieve_model("secret-model", auth_ctx)
         assert exc_info.value.status_code == 403
 
     @pytest.mark.asyncio
     async def test_unrestricted_user_nonexistent_model(self):
         """Unrestricted user gets 404 for nonexistent model."""
         svc = _build_service(models={})
-        auth_data = _make_auth_data(allowed_models=[])
+        auth_ctx = _make_auth_context(allowed_models=[])
 
         with pytest.raises(HTTPException) as exc_info:
-            await svc.retrieve_model("no-such-model", auth_data)
+            await svc.retrieve_model("no-such-model", auth_ctx)
         assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
@@ -297,20 +298,20 @@ class TestRetrieveModel:
         """Model exists but its provider is not in config → 404."""
         models = {"orphan": {"provider": "missing-prov", "provider_model_name": "x"}}
         svc = _build_service(models=models, providers={})
-        auth_data = _make_auth_data(allowed_models=[])
+        auth_ctx = _make_auth_context(allowed_models=[])
 
         with pytest.raises(HTTPException) as exc_info:
-            await svc.retrieve_model("orphan", auth_data)
+            await svc.retrieve_model("orphan", auth_ctx)
         assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
     async def test_retrieve_does_not_touch_network(self):
         """ARCH: retrieve_model never instantiates a provider / makes no HTTP call."""
         svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS)
-        auth_data = _make_auth_data(allowed_models=[])
+        auth_ctx = _make_auth_context(allowed_models=[])
 
         with patch("src.services.base.get_provider_instance", new_callable=AsyncMock) as mock_get:
-            result = await svc.retrieve_model("model-a", auth_data)
+            result = await svc.retrieve_model("model-a", auth_ctx)
 
         mock_get.assert_not_called()
         assert result["id"] == "model-a"
@@ -321,9 +322,9 @@ class TestRetrieveModel:
         cache = _make_cache({"model-a": {"context_length": 4096, "description": "cache-desc"}})
         model_info = {"model-a": {"context_length": 16384, "description": "catalog-desc"}}
         svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS, model_info=model_info, cache=cache)
-        auth_data = _make_auth_data(allowed_models=[])
+        auth_ctx = _make_auth_context(allowed_models=[])
 
-        result = await svc.retrieve_model("model-a", auth_data)
+        result = await svc.retrieve_model("model-a", auth_ctx)
 
         assert result["description"] == "catalog-desc"
         assert result["context_length"] == 16384
@@ -340,9 +341,9 @@ class TestRetrieveModel:
         # manual only overrides description; rest comes from cache
         model_info = {"model-a": {"description": "manual"}}
         svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS, model_info=model_info, cache=cache)
-        auth_data = _make_auth_data(allowed_models=[])
+        auth_ctx = _make_auth_context(allowed_models=[])
 
-        result = await svc.retrieve_model("model-a", auth_data)
+        result = await svc.retrieve_model("model-a", auth_ctx)
 
         assert result["description"] == "manual"
         assert result["context_length"] == 32768
@@ -355,10 +356,10 @@ class TestRetrieveModel:
             "model-a": {"architecture": {"input_modalities": ["text", "image"], "output_modalities": ["text"]}},
         }
         svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS, model_info=model_info)
-        auth_data = _make_auth_data(allowed_models=[])
+        auth_ctx = _make_auth_context(allowed_models=[])
 
-        listed = await svc.list_models(auth_data)
-        detail = await svc.retrieve_model("model-a", auth_data)
+        listed = await svc.list_models(auth_ctx)
+        detail = await svc.retrieve_model("model-a", auth_ctx)
 
         listed_a = next(m for m in listed["data"] if m["id"] == "model-a")
         assert listed_a["supports_vision"] is True
@@ -369,9 +370,9 @@ class TestRetrieveModel:
         """Detail includes capabilities_source / capabilities_fetched_at from cache."""
         cache = _make_cache({"model-a": {"context_length": 8192}})
         svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS, cache=cache)
-        auth_data = _make_auth_data(allowed_models=[])
+        auth_ctx = _make_auth_context(allowed_models=[])
 
-        result = await svc.retrieve_model("model-a", auth_data)
+        result = await svc.retrieve_model("model-a", auth_ctx)
 
         assert result["capabilities_source"] == "test-provider"
         assert result["capabilities_fetched_at"] is not None
@@ -380,9 +381,9 @@ class TestRetrieveModel:
     async def test_no_meta_fields_without_cache(self):
         """Without a cache, no provenance fields are added."""
         svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS)
-        auth_data = _make_auth_data(allowed_models=[])
+        auth_ctx = _make_auth_context(allowed_models=[])
 
-        result = await svc.retrieve_model("model-a", auth_data)
+        result = await svc.retrieve_model("model-a", auth_ctx)
 
         assert "capabilities_source" not in result
         assert "capabilities_fetched_at" not in result
@@ -393,10 +394,10 @@ class TestRetrieveModel:
         svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS,
                              cache=_make_cache({"model-a": {"context_length": 1}}))
         svc.config_manager.model_cache_enabled = True
-        auth_data = _make_auth_data(allowed_models=[])
+        auth_ctx = _make_auth_context(allowed_models=[])
 
         with patch("src.services.model_service.refresh_provider_capabilities", new_callable=AsyncMock) as mock_refresh:
-            await svc.retrieve_model("model-a", auth_data, refresh=True)
+            await svc.retrieve_model("model-a", auth_ctx, refresh=True)
 
         mock_refresh.assert_awaited_once()
 
@@ -404,10 +405,10 @@ class TestRetrieveModel:
     async def test_refresh_false_does_not_trigger_refresh(self):
         """Default refresh=False keeps the hot path network-free."""
         svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS, cache=_make_cache())
-        auth_data = _make_auth_data(allowed_models=[])
+        auth_ctx = _make_auth_context(allowed_models=[])
 
         with patch("src.services.model_service.refresh_provider_capabilities", new_callable=AsyncMock) as mock_refresh:
-            await svc.retrieve_model("model-a", auth_data, refresh=False)
+            await svc.retrieve_model("model-a", auth_ctx, refresh=False)
 
         mock_refresh.assert_not_called()
 

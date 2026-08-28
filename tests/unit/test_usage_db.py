@@ -843,7 +843,7 @@ class TestAuthKeyHashEnrichment:
         request = self._auth_request(stats)
         credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="nnp-v1-real")
         result = await get_api_key(request, credentials)
-        assert result[0] == "proj"
+        assert result.project_name == "proj"
         assert stats.api_key_hash is None
 
 
