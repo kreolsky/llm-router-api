@@ -129,5 +129,13 @@ this plan — locate by symbol when they drift.
 
 ## Progress
 
-- [ ] 1 auth · [ ] 2 timeouts · [ ] 3 stat/JSON robustness · [ ] 4 error envelope
-- [ ] 5 retry guard · [ ] 6 ruff gate · [ ] 7 conftest · [ ] 8 docs+pins · [ ] validation
+- [x] 1 auth · [x] 2 timeouts · [x] 3 stat/JSON robustness · [x] 4 error envelope
+- [x] 5 retry guard · [x] 6 ruff gate · [x] 7 conftest · [x] 8 docs+pins · [x] validation
+
+All steps implemented on branch `audit-debt` (session 2026-08-27); commits pending.
+Validation evidence: 525 passed / 1 skipped / 10 failed (identical on repeat run; the
+base `dev` build fails 12 in the same file — dead upstream `google/gemini-2.0-flash-001`
++ deepseek reasoning-token exhaustion; environmental, pre-existing). Live drives on :8777
+all green: non-ASCII bearer ⇒ 401 envelope, stream + non-stream chat, refused key ⇒ 403,
+stat days=7/30/90/"" ⇒ 200 and days=abc ⇒ 422 envelope. Timeout and 500-envelope steps:
+no live fault injection — unit/ASGI tests are the stated exemption.
