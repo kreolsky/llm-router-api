@@ -2,7 +2,6 @@
 Pytest configuration and fixtures for NNP LLM Router test suite.
 """
 
-import asyncio
 import os
 from pathlib import Path
 from typing import Any
@@ -130,14 +129,6 @@ def sample_texts_for_embedding() -> list[str]:
     ]
 
 
-@pytest.fixture(scope="session", autouse=True)
-def event_loop():
-    """Create an instance of the default event loop for the test session."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
-
-
 @pytest.fixture
 def expected_chat_response_structure() -> list[str]:
     """Expected structure for chat completion responses."""
@@ -190,74 +181,6 @@ def streaming_test_config() -> dict[str, Any]:
         "min_chunks": 1,
         "max_empty_chunks": 5
     }
-
-
-@pytest.fixture(autouse=True)
-def setup_test_environment():
-    """Setup test environment before each test."""
-    # Set environment variables for testing
-    os.environ["PYTHONPATH"] = str(Path(__file__).parent.parent)
-    
-    yield
-    
-    # Cleanup after test
-    pass
-
-
-def pytest_configure(config):
-    """Configure pytest with custom markers."""
-    config.addinivalue_line(
-        "markers", "slow: mark test as slow running"
-    )
-    config.addinivalue_line(
-        "markers", "integration: mark test as integration test"
-    )
-    config.addinivalue_line(
-        "markers", "performance: mark test as performance test"
-    )
-    config.addinivalue_line(
-        "markers", "streaming: mark test as streaming test"
-    )
-    config.addinivalue_line(
-        "markers", "auth: mark test as authentication test"
-    )
-
-
-def pytest_collection_modifyitems(config, items):
-    """Modify test collection to add markers based on test location."""
-    for item in items:
-        # Add slow marker for performance tests
-        if "performance" in str(item.fspath):
-            item.add_marker(pytest.mark.slow)
-            item.add_marker(pytest.mark.performance)
-        
-        # Add integration marker for integration tests
-        if "integration" in str(item.fspath):
-            item.add_marker(pytest.mark.integration)
-        
-        # Add streaming marker for streaming tests
-        if "streaming" in str(item.fspath):
-            item.add_marker(pytest.mark.streaming)
-        
-        # Add auth marker for authentication tests
-        if "auth" in str(item.fspath):
-            item.add_marker(pytest.mark.auth)
-
-
-@pytest.fixture
-def skip_if_service_unavailable(base_url: str):
-    """Skip test if service is not available."""
-    async def check_service():
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(f"{base_url}/health")
-                return response.status_code == 200
-        except Exception:
-            return False
-    
-    available = asyncio.run(check_service())
-    if not available:
-        pytest.skip(f"Service not available at {base_url}")
 
 
 # Custom assertions for test consistency

@@ -18,8 +18,17 @@ description: >
 - **`tests/unit/`** — изолированные unit-тесты, бегут offline за ~0.5 сек.
 - **`tests/api/`** — end-to-end интеграционные, бьют по `http://localhost:8777`
   через [tests/conftest.py:17](tests/conftest.py#L17). Без живого сервиса
-  падают на `httpx.ConnectError` (фикстура `skip_if_service_unavailable`
-  существует, но не `autouse` — игнорируется).
+  падают на `httpx.ConnectError` — механизма пропуска нет, сервис должен быть
+  поднят (шаг 2).
+
+  Observation: $ grep -rl "skip_if_service_unavailable" tests/ --include='*.py'
+               exit=1
+               # 2026-08-27, audit-debt: фикстура удалена при чистке conftest
+               # (0 использований вне самого conftest.py — grep перед удалением).
+  Rule:        в tests/api нет skip-механизма для поднятого/опущенного сервиса;
+               ссылка на "существует, но игнорируется" фикстуру удалена как
+               устаревшая.
+  File:        tests/conftest.py — удалено в коммите чистки (план audit-debt, шаг 7).
 
 Полный прогон ≈ 2 минуты (API-тесты ходят к реальным провайдерам через ключи из `.env`).
 
