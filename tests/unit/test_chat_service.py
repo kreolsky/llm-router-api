@@ -10,9 +10,9 @@ from src.core.context import AuthContext, RequestContext
 from src.services.chat_service.chat_service import ChatService
 
 
-def _make_auth_context(project_name="proj"):
+def _make_auth_context():
     """AuthContext matching what auth.get_api_key builds."""
-    return AuthContext(project_name, [], [])
+    return AuthContext(allowed_models=[], allowed_endpoints=[])
 
 
 def _service() -> ChatService:
@@ -39,7 +39,7 @@ class TestInvalidBody:
         )
 
         with pytest.raises(HTTPException) as exc_info:
-            await _service().chat_completions(request, _make_auth_context("proj"))
+            await _service().chat_completions(request, _make_auth_context())
 
         assert exc_info.value.status_code == 400
         assert "valid JSON body" in exc_info.value.detail["error"]["message"]
@@ -51,6 +51,6 @@ class TestInvalidBody:
         request = _request_raising(json.JSONDecodeError("Expecting value", "{not", 0))
 
         with pytest.raises(HTTPException) as exc_info:
-            await _service().chat_completions(request, _make_auth_context("proj"))
+            await _service().chat_completions(request, _make_auth_context())
 
         assert exc_info.value.status_code == 400

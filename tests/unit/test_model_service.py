@@ -13,10 +13,9 @@ from src.services.model_service import ModelService
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_auth_context(project_name="test-project",
-                       allowed_models=None, allowed_endpoints=None):
+def _make_auth_context(allowed_models=None, allowed_endpoints=None):
     """Return an AuthContext matching what auth.get_api_key builds."""
-    return AuthContext(project_name, allowed_models or [], allowed_endpoints or [])
+    return AuthContext(allowed_models or [], allowed_endpoints or [])
 
 
 def _make_config(models=None, providers=None, model_info=None):

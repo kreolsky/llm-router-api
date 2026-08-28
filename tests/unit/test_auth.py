@@ -9,11 +9,11 @@ token reaches get_api_key as a non-ASCII str.
 import json
 
 import pytest
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 
 from src.api.main import custom_http_exception_handler
 from src.core.auth import get_api_key
-from src.core.context import AuthContext
+from src.core.context import AuthContext, request_context
 
 
 def _config_manager_with_keys(keys: dict[str, str]):
@@ -31,8 +31,10 @@ def app():
     application.add_exception_handler(HTTPException, custom_http_exception_handler)
 
     @application.get("/check")
-    async def check(auth_context: AuthContext = Depends(get_api_key)):
-        return {"project": auth_context.project_name}
+    async def check(request: Request, auth_context: AuthContext = Depends(get_api_key)):
+        # AuthContext carries grants only; the resolved project name is read
+        # from the request context it now solely owns.
+        return {"user": request_context(request).user_id}
 
     return application
 
@@ -89,7 +91,7 @@ class TestNonAsciiBearer:
         status, body, raised = await _drive(app, [(b"authorization", b"Bearer nnp-v1-valid-key")])
         assert raised is None
         assert status == 200
-        assert json.loads(body) == {"project": "lab"}
+        assert json.loads(body) == {"user": "lab"}
 
     @pytest.mark.asyncio
     async def test_missing_key_401(self, app):

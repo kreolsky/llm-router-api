@@ -11,9 +11,9 @@ from src.core.context import AuthContext, RequestContext
 from src.services.embedding_service import EmbeddingService
 
 
-def _make_auth_context(project_name="proj"):
+def _make_auth_context():
     """AuthContext matching what auth.get_api_key builds."""
-    return AuthContext(project_name, [], [])
+    return AuthContext(allowed_models=[], allowed_endpoints=[])
 
 
 def _make_config_manager(models=None, providers=None):
@@ -44,7 +44,7 @@ class TestInvalidJsonBody:
         request = _make_request(b"{not json")
 
         with pytest.raises(HTTPException) as exc_info:
-            await service.create_embeddings(request, _make_auth_context("proj"))
+            await service.create_embeddings(request, _make_auth_context())
 
         assert exc_info.value.status_code == 400
         assert "valid JSON body" in exc_info.value.detail["error"]["message"]
@@ -59,7 +59,7 @@ class TestInvalidJsonBody:
         service = EmbeddingService(_make_config_manager())
 
         with pytest.raises(HTTPException) as exc_info:
-            await service.create_embeddings(request, _make_auth_context("proj"))
+            await service.create_embeddings(request, _make_auth_context())
 
         assert exc_info.value.status_code == 400
         assert "valid JSON body" in exc_info.value.detail["error"]["message"]
@@ -82,7 +82,7 @@ class TestIdentityHeadersForwarded:
         provider_instance.embeddings = AsyncMock(return_value={"data": [], "usage": {}})
         with patch("src.services.base.get_provider_instance",
                    new=AsyncMock(return_value=provider_instance)):
-            await service.create_embeddings(request, _make_auth_context("proj"))
+            await service.create_embeddings(request, _make_auth_context())
 
         kwargs = provider_instance.embeddings.call_args.kwargs
         assert kwargs["extra_headers"] == {"user-agent": "Kilo-Code/7.5.5"}
