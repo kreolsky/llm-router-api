@@ -17,6 +17,7 @@ from ..core.header_policy import (
 from ..core.logging import logger
 from ..core.usage_db import RequestStats, request_stats
 from ..providers import get_provider_instance
+from ..providers.base import BaseProvider
 
 
 @dataclass(frozen=True)
@@ -28,7 +29,7 @@ class PreparedDispatch:
     frozen here only means the fields cannot be rebound, not deep immutability.
     """
     request_body: dict[str, Any]
-    requested_model: Any
+    requested_model: str | None
     request_id: str
     user_id: str
     stats: RequestStats
@@ -37,7 +38,7 @@ class PreparedDispatch:
     provider_name: str
     provider_model_name: str
     provider_config: dict[str, Any]
-    provider: Any
+    provider: BaseProvider
     identity_headers: dict[str, str] | None
 
 
@@ -135,7 +136,7 @@ class BaseService:
 
         return model_config, provider_name, provider_model_name, provider_config
 
-    async def _parse_json_request(self, request: Request | None) -> dict[str, Any]:
+    async def _parse_json_request(self, request: Request) -> dict[str, Any]:
         """Parse the JSON request body, answering 400 on malformed input."""
         try:
             return await request.json()
@@ -149,7 +150,7 @@ class BaseService:
 
     async def _prepare_dispatch(
         self,
-        request: Request | None,
+        request: Request,
         auth_context: AuthContext,
         *,
         component: str,

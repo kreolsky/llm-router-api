@@ -7,6 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 from src.core.context import AuthContext, RequestContext
+from src.core.usage_db import RequestStats
 from src.services.base import BaseService
 
 # ---------------------------------------------------------------------------
@@ -304,7 +305,7 @@ class TestPrepareDispatchPreamble:
 
     @pytest.mark.asyncio
     @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
-    async def test_stats_enriched_and_identity_headers_once(self, mock_get):
+    async def test_stats_enriched_and_identity_headers_built(self, mock_get):
         mock_get.return_value = SimpleNamespace(identity="passthrough")
         svc = self._svc()
         request = self._request({"model": "m"})
@@ -323,18 +324,26 @@ class TestPrepareDispatchPreamble:
     @pytest.mark.asyncio
     @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
     async def test_non_string_model_blanks_stats_model_id(self, mock_get):
-        mock_get.return_value = SimpleNamespace(identity=None)
-        svc = _build_service(models={"": {"provider": "openai"}},
-                             providers={"openai": {"type": "openai"}})
-        request = self._request({"model": None})
-        request.headers = {}
+        """A non-string "model" reaches the usage row as "", never as the raw value.
 
-        # model None → 400 (model not specified) before stats matter
+        The stats holder is enriched BEFORE validation rejects the request, so
+        the blanking branch is observable on the real RequestStats even though
+        the call raises. A truthy non-string (123) is used deliberately: None
+        would short-circuit at MODEL_NOT_SPECIFIED without exercising it.
+        """
+        mock_get.return_value = SimpleNamespace(identity=None)
+        svc = self._svc()
+        request = self._request({"model": 123})
+        request.headers = {}
+        stats = RequestStats()
+        request.state.request_stats = stats
+
         with pytest.raises(HTTPException) as exc_info:
             await svc._prepare_dispatch(
                 request, _make_auth_context(), component="c", log_title="t"
             )
-        assert exc_info.value.status_code == 400
+        assert exc_info.value.status_code == 404
+        assert stats.model_id == ""
 
 
 # ===================================================================

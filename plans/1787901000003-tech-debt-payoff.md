@@ -139,7 +139,7 @@ with its own commit, green gates and a live drive:
    per-file-ignores (+B008, the FastAPI Depends idiom) and the 5 real bugs
    fixed; `ruff check src/ tests/` clean.
 
-Outstanding before merge: the 10 failing live-upstream API tests
+Outstanding before merge: the 11 failing live-upstream API tests
 (gemini_mini: OpenRouter delisted google/gemini-2.0-flash-001; deepseek_flash:
 reasoning-first model returns empty content at the tests' token budgets) are
 environmental — identical set across two repeat runs; every local/orange-backed
