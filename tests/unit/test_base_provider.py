@@ -9,7 +9,12 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
-from src.providers.base import BaseProvider, retry_on_rate_limit
+from src.providers.base import (
+    _RETRY_DEFAULTS,
+    _TIMEOUT_DEFAULTS,
+    BaseProvider,
+    retry_on_rate_limit,
+)
 from src.providers.openai import OpenAICompatibleProvider
 
 # ---------------------------------------------------------------------------
@@ -302,19 +307,55 @@ class TestGetTimeout:
         cm.openai_connect_timeout = 42.0
         provider = _build_provider(config_manager=None)
         provider.config_manager = cm
-        assert provider._get_timeout("openai_connect_timeout", 10.0) == 42.0
+        assert provider._get_timeout("openai_connect_timeout") == 42.0
 
-    def test_without_config_manager(self):
-        """Without config_manager, returns default_value."""
+    def test_without_config_manager_returns_map_default(self):
+        """Without config_manager, the _TIMEOUT_DEFAULTS value is used."""
         provider = _build_provider(config_manager=None)
-        assert provider._get_timeout("openai_connect_timeout", 10.0) == 10.0
+        assert provider._get_timeout("openai_connect_timeout") == 60.0
 
-    def test_config_manager_missing_attr(self):
-        """config_manager exists but lacks the attribute, returns default."""
+    def test_config_manager_missing_attr_falls_back_to_map(self):
+        """config_manager exists but lacks the attribute: map default."""
         cm = MagicMock(spec=[])  # empty spec, no attributes
         provider = _build_provider(config_manager=None)
         provider.config_manager = cm
-        assert provider._get_timeout("nonexistent_timeout", 99.0) == 99.0
+        assert provider._get_timeout("stream_read_timeout") == 300.0
+
+    def test_unknown_timeout_name_raises(self):
+        """The map is keyed by ConfigManager attribute names — a typo fails loud."""
+        provider = _build_provider(config_manager=None)
+        with pytest.raises(KeyError):
+            provider._get_timeout("nonexistent_timeout")
+
+
+class TestEnvDefaultsDrift:
+    """_TIMEOUT_DEFAULTS / _RETRY_DEFAULTS must match ConfigManager._ENV_SETTINGS.
+
+    The fallback literals used to be duplicated between the provider call
+    sites and _ENV_SETTINGS; the maps are the single fallback source now, and
+    this test trips any drift in either direction. Scope: _get_timeout keys
+    and retry keys only — the _build_client no-config literals (connect/read
+    60.0, pool 5.0) are client-construction defaults, not _get_timeout reads,
+    and stay out of the map.
+    """
+
+    def _env_defaults(self) -> dict:
+        from src.core.config_manager import ConfigManager
+        return {name: default for name, _env, default, _cast in ConfigManager._ENV_SETTINGS}
+
+    def test_timeout_defaults_match_env_settings(self):
+        env = self._env_defaults()
+        for key, default in _TIMEOUT_DEFAULTS.items():
+            assert key in env, f"{key!r} is not a ConfigManager env setting"
+            assert env[key] == default, (
+                f"{key}: provider fallback {default} != _ENV_SETTINGS default {env[key]}")
+
+    def test_retry_defaults_match_env_settings(self):
+        env = self._env_defaults()
+        for key, default in _RETRY_DEFAULTS.items():
+            assert key in env, f"{key!r} is not a ConfigManager env setting"
+            assert env[key] == default, (
+                f"{key}: provider fallback {default} != _ENV_SETTINGS default {env[key]}")
 
 
 # ===================================================================

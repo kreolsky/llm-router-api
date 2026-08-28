@@ -17,6 +17,25 @@ from ..core.logging import logger
 from ..utils.deep_merge import deep_merge
 from ..utils.mask import mask_headers
 
+# ARCH: single source of the no-config fallbacks for every env-backed knob the
+# provider layer reads. Keyed by the ConfigManager attribute name, so a drift
+# test can pin them to ConfigManager._ENV_SETTINGS (tests/unit/
+# test_base_provider.py). Covers _get_timeout reads and the retry-decorator /
+# queue-wait fallbacks only — the _build_client no-config literals are
+# client-construction defaults, not knob reads.
+_TIMEOUT_DEFAULTS: dict[str, float] = {
+    "openai_connect_timeout": 60.0,
+    "stream_read_timeout": 300.0,
+    "openai_transcription_timeout": 3600.0,
+    "openai_embeddings_read_timeout": 30.0,
+    "queue_wait_timeout": 30.0,
+}
+_RETRY_DEFAULTS: dict[str, float] = {
+    "provider_max_retries": 3,
+    "provider_retry_base_delay": 1.0,
+    "provider_retry_max_delay": 30.0,
+}
+
 
 def _is_rate_limit_error(e: BaseException) -> bool:
     """429 detection for retry_on_rate_limit.
@@ -52,9 +71,9 @@ def retry_on_rate_limit(max_retries: int | None = None, base_delay: float | None
                 actual_base_delay = cm.provider_retry_base_delay if base_delay is None else base_delay
                 actual_max_delay = cm.provider_retry_max_delay if max_delay is None else max_delay
             else:
-                actual_max_retries = max_retries if max_retries is not None else 3
-                actual_base_delay = base_delay if base_delay is not None else 1.0
-                actual_max_delay = max_delay if max_delay is not None else 30.0
+                actual_max_retries = max_retries if max_retries is not None else _RETRY_DEFAULTS["provider_max_retries"]
+                actual_base_delay = base_delay if base_delay is not None else _RETRY_DEFAULTS["provider_retry_base_delay"]
+                actual_max_delay = max_delay if max_delay is not None else _RETRY_DEFAULTS["provider_retry_max_delay"]
 
             last_exception = None
             for attempt in range(actual_max_retries + 1):
@@ -233,7 +252,7 @@ class BaseProvider:
             return
         if self._inflight > 0:
             if drain_timeout is None:
-                drain_timeout = self._get_timeout("stream_read_timeout", 300.0)
+                drain_timeout = self._get_timeout("stream_read_timeout")
             try:
                 await asyncio.wait_for(self._idle.wait(), timeout=drain_timeout)
             except TimeoutError:
@@ -272,7 +291,9 @@ class BaseProvider:
         acquired = False
         try:
             if self._semaphore is not None:
-                wait = self.config_manager.queue_wait_timeout if self.config_manager is not None else 30.0
+                wait = (self.config_manager.queue_wait_timeout
+                        if self.config_manager is not None
+                        else _TIMEOUT_DEFAULTS["queue_wait_timeout"])
                 try:
                     await asyncio.wait_for(self._semaphore.acquire(), timeout=wait)
                     acquired = True
@@ -381,11 +402,16 @@ class BaseProvider:
             original_exception=e,
         ) from e
 
-    def _get_timeout(self, timeout_type: str, default_value: float) -> float:
-        """Read a named timeout from config_manager, falling back to default_value."""
+    def _get_timeout(self, timeout_type: str) -> float:
+        """Read a named timeout from config_manager, falling back to _TIMEOUT_DEFAULTS.
+
+        Unknown names raise KeyError: the map is keyed by ConfigManager
+        attribute names and pinned to _ENV_SETTINGS by a drift test, so an
+        unknown key is a typo, not a tunable.
+        """
         if self.config_manager and hasattr(self.config_manager, timeout_type):
             return getattr(self.config_manager, timeout_type)
-        return default_value
+        return _TIMEOUT_DEFAULTS[timeout_type]
 
     def _merge_request_headers(self, extra_headers: dict[str, str] | None) -> dict[str, str]:
         """Merge per-request extra_headers over self.headers.
@@ -556,7 +582,7 @@ class BaseProvider:
             data_flow="to_provider"
         )
 
-        stream_read_timeout = self._get_timeout("stream_read_timeout", 300.0)
+        stream_read_timeout = self._get_timeout("stream_read_timeout")
         stream_timeout = self._create_timeout(read=stream_read_timeout)
 
         logger.debug(f"Starting stream request to {url_path}", extra={
