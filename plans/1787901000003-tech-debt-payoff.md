@@ -118,6 +118,30 @@ per step.
 
 ## Progress
 
-Not started. Branch from `dev` (5 commits ⇒ L). Findings that produced this plan came from
-a full read of `src/` at 430f2c1, reviewed by an external audit; re-verify the cited lines
-before editing each step.
+All five steps executed on branch `tech-debt-payoff` (from `dev` @ 430f2c1), each
+with its own commit, green gates and a live drive:
+
+1. `fix(providers)` — bytes in the files tuple; drain tasks tracked in
+   `_drain_tasks`. Ruling: the EOF-replay premise does not reproduce on pinned
+   httpx 0.28.1 (multipart render_data seeks seekable files to 0 — verified with
+   a non-seekable wrapper); fix applied anyway as construction-site robustness.
+2. `refactor(auth)` — `AuthContext` frozen dataclass; all four unpack sites and
+   test helpers rewritten; unused api_key slot dropped.
+3. `refactor(usage-db)` — package split (writer/queries/_conn); six patch
+   targets rewritten to caller submodules; SYSTEMS.md regenerated; func-length
+   baseline re-keyed.
+4. `refactor(api)` — stat_routes.py APIRouter + `_csv_list`; stat_page SYSTEM
+   description corrected; `BaseService._prepare_dispatch` + `PreparedDispatch`
+   (identity headers computed once, INVARIANT pinned); `_get_provider` inlined;
+   baseline 17 -> 16 (create_embeddings paid off).
+5. `chore` — MODEL_CACHE_TTL deleted everywhere; main.py ARCH comment
+   translated; cyrillic-src gate added; tests/ under ruff with the planned
+   per-file-ignores (+B008, the FastAPI Depends idiom) and the 5 real bugs
+   fixed; `ruff check src/ tests/` clean.
+
+Outstanding before merge: the 10 failing live-upstream API tests
+(gemini_mini: OpenRouter delisted google/gemini-2.0-flash-001; deepseek_flash:
+reasoning-first model returns empty content at the tests' token budgets) are
+environmental — identical set across two repeat runs; every local/orange-backed
+test passes and every live drive was green. Merge to `dev` pending review
+approval.
