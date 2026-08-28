@@ -403,3 +403,13 @@ def assert_performance_thresholds(
                 violations.append(f"{metric}: {value:.3f} > {threshold:.3f}")
     
     return violations
+
+def assistant_text(message: dict[str, Any]) -> str:
+    """Visible text a model produced, wherever it landed.
+
+    A reasoning model spends a small ``max_tokens`` budget on ``reasoning_content``
+    and returns ``content`` empty or null, so an assertion over ``content`` alone
+    measures the model's thinking budget rather than the router.
+    """
+    parts = (message.get("content"), message.get("reasoning_content"))
+    return "".join(part for part in parts if isinstance(part, str))

@@ -13,6 +13,7 @@ from tests.test_utils import (
     StreamingResponseParser,
     TestTimer,
     assert_performance_thresholds,
+    assistant_text,
     calculate_ttft_metrics,
 )
 
@@ -181,7 +182,7 @@ class TestChatCompletions:
         assert response.status_code == 200
         data = response.json()
         
-        content = data["choices"][0]["message"]["content"]
+        content = assistant_text(data["choices"][0]["message"])
         assert len(content) > 0, "Should receive content"
         
         # Should contain Unicode characters
@@ -218,7 +219,7 @@ class TestChatCompletions:
         assert response.status_code == 200
         data = response.json()
         
-        content = data["choices"][0]["message"]["content"]
+        content = assistant_text(data["choices"][0]["message"])
         assert len(content) > 0, "Should receive content even with long input"
         
         # Verify usage information reflects long input
@@ -261,7 +262,7 @@ class TestChatCompletions:
         assert response.status_code == 200
         data = response.json()
         
-        content = data["choices"][0]["message"]["content"]
+        content = assistant_text(data["choices"][0]["message"])
         assert len(content) > 0, "Should receive content"
         
         # Should handle conversation context
@@ -303,7 +304,7 @@ class TestChatCompletions:
         data = response.json()
         
         # Verify response respects max_tokens
-        content = data["choices"][0]["message"]["content"]
+        content = assistant_text(data["choices"][0]["message"])
         # Note: This is a rough check as tokenization varies
         assert len(content) > 0, "Should receive content"
         
@@ -690,10 +691,12 @@ class TestChatCompletionStreamingSpecific:
                     assert "role" in delta
                     assert delta["role"] == "assistant"
                 else:
-                    # Subsequent chunks should have content
+                    # Subsequent chunks carry text in content, or - for a reasoning
+                    # model - in reasoning_content, with content sent as null.
                     delta = choice["delta"]
-                    if "content" in delta:
-                        assert isinstance(delta["content"], str)
+                    for field in ("content", "reasoning_content"):
+                        if delta.get(field) is not None:
+                            assert isinstance(delta[field], str)
                 
                 # Break after a few chunks to avoid long test
                 if chunk_count >= 5:
