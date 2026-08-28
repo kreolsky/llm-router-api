@@ -53,7 +53,8 @@ missed, the next move is a hook, not a firmer sentence.
 ## Gates (`.claude/scripts/`)
 
 `pre-commit-gates.sh` runs them all in a couple of seconds — **run it unpiped before any
-push**: `invariant-why`, `systems-index`, `func-length`, `debt-ledger`, `ruff-src`.
+push**: `invariant-why`, `systems-index`, `func-length`, `debt-ledger`,
+`cyrillic-src`, `ruff`.
 Each is zero-net-growth against a committed baseline in `.claude/baselines/`; intentional
 growth is a `--update` in the same commit with justification. `plan-shape-gate.py`
 deliberately does NOT gate the commit — it fires on the plan write and at `/implement`

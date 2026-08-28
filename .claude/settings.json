@@ -105,7 +105,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash -c 'F=\"$CLAUDE_FILE_PATH\"; R=\"\"; case \"$F\" in */tests/*) R=\"testing-ops.md\";; */src/providers/*) R=\"providers.md testing-ops.md\";; */src/services/*|*/src/api/*) R=\"services.md testing-ops.md\";; */config/*|*config_manager.py) R=\"config.md\";; *usage_db.py|*stat_page.py) R=\"stat.md\";; esac; [ -z \"$R\" ] && exit 0; K=$(echo \"$R\" | tr -d \" .\"); M=\"/tmp/.router-rules-$K-${CLAUDE_SESSION_ID:-$(date +%j)}\"; [ -f \"$M\" ] && exit 0; touch \"$M\"; echo \"{\\\"systemMessage\\\": \\\"Path-scoped rules apply - READ .claude/rules-scoped/: $R (reminder fires once per session).\\\"}\"'"
+            "command": "bash -c 'F=\"$CLAUDE_FILE_PATH\"; R=\"\"; case \"$F\" in */tests/*) R=\"testing-ops.md\";; */src/providers/*) R=\"providers.md testing-ops.md\";; */src/services/*|*/src/api/*) R=\"services.md testing-ops.md\";; */config/*|*config_manager.py) R=\"config.md\";; *usage_db.py|*usage_db/*|*stat_page.py) R=\"stat.md\";; esac; [ -z \"$R\" ] && exit 0; K=$(echo \"$R\" | tr -d \" .\"); M=\"/tmp/.router-rules-$K-${CLAUDE_SESSION_ID:-$(date +%j)}\"; [ -f \"$M\" ] && exit 0; touch \"$M\"; echo \"{\\\"systemMessage\\\": \\\"Path-scoped rules apply - READ .claude/rules-scoped/: $R (reminder fires once per session).\\\"}\"'"
           },
           {
             "type": "command",
