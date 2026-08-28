@@ -1,6 +1,5 @@
 """Chat completion orchestrator: validation, provider dispatch, streaming."""
 
-import json
 from typing import Any
 
 from fastapi import Request
@@ -30,9 +29,12 @@ class ChatService(BaseService):
 
         try:
             request_body = await request.json()
-        except json.JSONDecodeError:
+        # WHY: ValueError, not json.JSONDecodeError — invalid UTF-8 bodies raise
+        # UnicodeDecodeError (also a ValueError) and must answer 400, not 500
+        except ValueError:
+            # from None: the client's own malformed body is the whole story
             raise create_error(ErrorType.MISSING_REQUIRED_FIELD, field_name="valid JSON body",
-                             request_id=request_id, user_id=user_id)
+                             request_id=request_id, user_id=user_id) from None
 
         requested_model = request_body.get("model")
         stats = request_stats(request)
