@@ -6,8 +6,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from ...core.config_manager import ConfigManager
-from ...core.error_handling import ErrorType, create_error
-from ...core.usage_db import request_stats
+from ...core.context import AuthContext
 from ...services.base import BaseService
 from ...services.model_service import ModelService
 from .stream_processor import StreamProcessor, duplicate_reasoning_field, open_provider_stream
@@ -20,49 +19,20 @@ class ChatService(BaseService):
         super().__init__(config_manager)
         self.model_service = model_service
         self.stream_processor = StreamProcessor(config_manager)
-    
-    async def chat_completions(self, request: Request, auth_data: tuple[str, str, list, list]) -> Any:
+
+    async def chat_completions(self, request: Request, auth_context: AuthContext) -> Any:
         """Process a chat completion request, returning StreamingResponse or JSONResponse."""
-        ctx = self._get_request_context(request)
-        request_id = ctx.request_id
-        user_id = ctx.user_id
-
-        try:
-            request_body = await request.json()
-        # WHY: ValueError, not json.JSONDecodeError — invalid UTF-8 bodies raise
-        # UnicodeDecodeError (also a ValueError) and must answer 400, not 500
-        except ValueError:
-            # from None: the client's own malformed body is the whole story
-            raise create_error(ErrorType.MISSING_REQUIRED_FIELD, field_name="valid JSON body",
-                             request_id=request_id, user_id=user_id) from None
-
-        requested_model = request_body.get("model")
-        stats = request_stats(request)
-        stats.model_id = requested_model if isinstance(requested_model, str) else ""
-
-        self._log_service_data(
-            title="Chat Completion Request JSON",
-            data=request_body,
-            request_id=request_id,
-            component="chat_service",
-            data_flow="incoming"
+        prepared = await self._prepare_dispatch(
+            request, auth_context,
+            component="chat_service", log_title="Chat Completion Request JSON",
         )
 
-        error_ctx = {"request_id": request_id, "user_id": user_id, "model_id": requested_model}
-
-        model_config, provider_name, provider_model_name, provider_config = \
-            self._validate_and_get_config(requested_model, auth_data, **error_ctx)
-        stats.provider_name = provider_name
-
-        provider_instance = await self._get_provider(provider_name, provider_config, **error_ctx)
-        identity_headers = self._build_identity_headers(provider_instance, request)
-
-        async with self._guard_service_errors(error_ctx):
-            if request_body.get("stream", False):
-                stats.stream = True
-                provider_stream = provider_instance.chat_completions_stream(
-                    request_body, provider_model_name, model_config, request_id=request_id,
-                    extra_headers=identity_headers
+        async with self._guard_service_errors(prepared.error_ctx):
+            if prepared.request_body.get("stream", False):
+                prepared.stats.stream = True
+                provider_stream = prepared.provider.chat_completions_stream(
+                    prepared.request_body, prepared.provider_model_name, prepared.model_config,
+                    request_id=prepared.request_id, extra_headers=prepared.identity_headers
                 )
                 # Surface an upstream failure as a real HTTP status instead of a
                 # 200 carrying an SSE error frame (see open_provider_stream).
@@ -71,26 +41,26 @@ class ChatService(BaseService):
                     title="Streaming Response Started",
                     data={
                         "streaming": True,
-                        "model": requested_model,
-                        "request_id": request_id
+                        "model": prepared.requested_model,
+                        "request_id": prepared.request_id
                     },
-                    request_id=request_id,
+                    request_id=prepared.request_id,
                     component="chat_service",
                     data_flow="from_provider"
                 )
 
                 return StreamingResponse(
                     self.stream_processor.process_stream(
-                        provider_stream, requested_model, request_id, user_id,
-                        provider_name, stats=stats
+                        provider_stream, prepared.requested_model, prepared.request_id,
+                        prepared.user_id, prepared.provider_name, stats=prepared.stats
                     ),
                     media_type="text/event-stream",
                     headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"}
                 )
 
-            response_data = await provider_instance.chat_completions(
-                request_body, provider_model_name, model_config, request_id=request_id,
-                extra_headers=identity_headers
+            response_data = await prepared.provider.chat_completions(
+                prepared.request_body, prepared.provider_model_name, prepared.model_config,
+                request_id=prepared.request_id, extra_headers=prepared.identity_headers
             )
 
             duplicate_reasoning_field(response_data)
@@ -98,13 +68,13 @@ class ChatService(BaseService):
             self._log_service_data(
                 title="Chat Completion Response JSON",
                 data=response_data,
-                request_id=request_id,
+                request_id=prepared.request_id,
                 component="chat_service",
                 data_flow="from_provider"
             )
 
             usage = response_data.get("usage", {})
             if usage:
-                stats.set_usage(usage)
+                prepared.stats.set_usage(usage)
 
             return JSONResponse(content=response_data)

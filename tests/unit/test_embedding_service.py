@@ -2,13 +2,18 @@
 
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
-from src.core.context import RequestContext
+from src.core.context import AuthContext, RequestContext
 from src.services.embedding_service import EmbeddingService
+
+
+def _make_auth_context(project_name="proj"):
+    """AuthContext matching what auth.get_api_key builds."""
+    return AuthContext(project_name, [], [])
 
 
 def _make_config_manager(models=None, providers=None):
@@ -39,7 +44,7 @@ class TestInvalidJsonBody:
         request = _make_request(b"{not json")
 
         with pytest.raises(HTTPException) as exc_info:
-            await service.create_embeddings(request, ("proj", "sk-1", [], []))
+            await service.create_embeddings(request, _make_auth_context("proj"))
 
         assert exc_info.value.status_code == 400
         assert "valid JSON body" in exc_info.value.detail["error"]["message"]
@@ -54,7 +59,7 @@ class TestInvalidJsonBody:
         service = EmbeddingService(_make_config_manager())
 
         with pytest.raises(HTTPException) as exc_info:
-            await service.create_embeddings(request, ("proj", "sk-1", [], []))
+            await service.create_embeddings(request, _make_auth_context("proj"))
 
         assert exc_info.value.status_code == 400
         assert "valid JSON body" in exc_info.value.detail["error"]["message"]
@@ -75,9 +80,9 @@ class TestIdentityHeadersForwarded:
 
         provider_instance = SimpleNamespace(identity="passthrough")
         provider_instance.embeddings = AsyncMock(return_value={"data": [], "usage": {}})
-        service._get_provider = AsyncMock(return_value=provider_instance)
-
-        await service.create_embeddings(request, ("proj", "sk-1", [], []))
+        with patch("src.services.base.get_provider_instance",
+                   new=AsyncMock(return_value=provider_instance)):
+            await service.create_embeddings(request, _make_auth_context("proj"))
 
         kwargs = provider_instance.embeddings.call_args.kwargs
         assert kwargs["extra_headers"] == {"user-agent": "Kilo-Code/7.5.5"}

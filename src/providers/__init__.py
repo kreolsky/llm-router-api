@@ -18,6 +18,18 @@ _provider_cache: dict[str, BaseProvider] = {}
 # uncached provider cannot both build and store (leaking one httpx pool).
 _cache_lock = asyncio.Lock()
 
+# ARCH: background drain tasks are tracked here so they are not garbage-
+# collected before completion (asyncio holds only weak references to tasks).
+# Same pattern as _usage_tasks in src/core/usage_db/writer.py; each task
+# discards itself via a done callback. No failure logging here:
+# _gather_closes runs with return_exceptions=True, so the task never raises.
+_drain_tasks: set[asyncio.Task] = set()
+
+
+def _on_drain_done(task: asyncio.Task) -> None:
+    """Done callback: discard the finished drain task from _drain_tasks."""
+    _drain_tasks.discard(task)
+
 
 def _build_provider(
     provider_name: str,
@@ -101,7 +113,9 @@ async def rebuild_provider_cache(config: dict[str, Any], config_manager: Any | N
         except RuntimeError:
             loop = None
         if loop is not None:
-            asyncio.ensure_future(_gather_closes(coros))
+            task = asyncio.ensure_future(_gather_closes(coros))
+            _drain_tasks.add(task)
+            task.add_done_callback(_on_drain_done)
         else:
             asyncio.run(_gather_closes(coros))
 

@@ -1,5 +1,5 @@
 """Dashboard HTML page at /stat/ showing token usage charts."""
-# SYSTEM: stat-dashboard — /stat/ usage page and its JSON endpoints
+# SYSTEM: stat-dashboard — the /stat/ usage HTML page (JSON endpoints in stat_routes.py)
 
 import os
 

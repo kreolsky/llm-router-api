@@ -2,19 +2,44 @@
 # SYSTEM: service-layer — validate access, resolve provider, dispatch
 
 import contextlib
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import HTTPException, Request
 
 from ..core.config_manager import ConfigManager
-from ..core.context import RequestContext, request_context
+from ..core.context import AuthContext, RequestContext, request_context
 from ..core.error_handling import ErrorType, create_error
 from ..core.header_policy import (
     FORWARDED_HEADER_DENY_PREFIXES,
     FORWARDED_HEADER_DENYLIST,
 )
 from ..core.logging import logger
+from ..core.usage_db import RequestStats, request_stats
 from ..providers import get_provider_instance
+from ..providers.base import BaseProvider
+
+
+@dataclass(frozen=True)
+class PreparedDispatch:
+    """Result of the shared service preamble (BaseService._prepare_dispatch).
+
+    Hoists the ~33 identical opening lines chat_completions and
+    create_embeddings duplicated. `stats` is the mutable per-request holder —
+    frozen here only means the fields cannot be rebound, not deep immutability.
+    """
+    request_body: dict[str, Any]
+    requested_model: str | None
+    request_id: str
+    user_id: str
+    stats: RequestStats
+    error_ctx: dict[str, Any]
+    model_config: dict[str, Any]
+    provider_name: str
+    provider_model_name: str
+    provider_config: dict[str, Any]
+    provider: BaseProvider
+    identity_headers: dict[str, str] | None
 
 
 class BaseService:
@@ -81,11 +106,11 @@ class BaseService:
     def _validate_and_get_config(
         self,
         requested_model: str,
-        auth_data: tuple[str, str, list, list],
+        auth_context: AuthContext,
         **error_context
     ) -> tuple[dict[str, Any], str, str, dict[str, Any]]:
         """Validate model access and return (model_config, provider_name, provider_model_name, provider_config)."""
-        project_name, api_key, allowed_models, _ = auth_data
+        allowed_models = auth_context.allowed_models
 
         if not requested_model:
             raise create_error(ErrorType.MODEL_NOT_SPECIFIED, **error_context)
@@ -111,19 +136,66 @@ class BaseService:
 
         return model_config, provider_name, provider_model_name, provider_config
 
-    async def _get_provider(
+    async def _parse_json_request(self, request: Request) -> dict[str, Any]:
+        """Parse the JSON request body, answering 400 on malformed input."""
+        try:
+            return await request.json()
+        # WHY: ValueError, not json.JSONDecodeError — invalid UTF-8 bodies raise
+        # UnicodeDecodeError (also a ValueError) and must answer 400, not 500
+        except ValueError:
+            ctx = self._get_request_context(request)
+            # from None: the client's own malformed body is the whole story
+            raise create_error(ErrorType.MISSING_REQUIRED_FIELD, field_name="valid JSON body",
+                             request_id=ctx.request_id, user_id=ctx.user_id) from None
+
+    async def _prepare_dispatch(
         self,
-        provider_name: str,
-        provider_config: dict[str, Any],
-        **error_context
-    ) -> Any:
-        """Instantiate a provider from config (cache lookup under lock), raising on invalid type."""
-        return await get_provider_instance(
-            provider_name,
-            provider_config,
-            self.config_manager
+        request: Request,
+        auth_context: AuthContext,
+        *,
+        component: str,
+        log_title: str,
+    ) -> PreparedDispatch:
+        """Shared preamble: parse the JSON body, enrich stats, validate access,
+        resolve the provider, and build the identity headers.
+
+        INVARIANT: identity_headers is computed exactly ONCE per request here,
+        and the SAME object feeds the stream and non-stream branches.
+        Why: the provider layer requires both paths to send an identical set
+        (providers/base.py _merge_request_headers ARCH), and a per-branch
+        recompute would hold that by luck, not by construction.
+        """
+        ctx = self._get_request_context(request)
+        request_id = ctx.request_id
+        user_id = ctx.user_id
+
+        request_body = await self._parse_json_request(request)
+        requested_model = request_body.get("model")
+        stats = request_stats(request)
+        stats.model_id = requested_model if isinstance(requested_model, str) else ""
+
+        error_ctx = {"request_id": request_id, "user_id": user_id, "model_id": requested_model}
+
+        self._log_service_data(title=log_title, data=request_body, request_id=request_id,
+                               component=component, data_flow="incoming")
+
+        model_config, provider_name, provider_model_name, provider_config = \
+            self._validate_and_get_config(requested_model, auth_context, **error_ctx)
+        stats.provider_name = provider_name
+
+        provider_instance = await get_provider_instance(
+            provider_name, provider_config, self.config_manager
         )
-    
+        identity_headers = self._build_identity_headers(provider_instance, request)
+
+        return PreparedDispatch(
+            request_body=request_body, requested_model=requested_model,
+            request_id=request_id, user_id=user_id, stats=stats, error_ctx=error_ctx,
+            model_config=model_config, provider_name=provider_name,
+            provider_model_name=provider_model_name, provider_config=provider_config,
+            provider=provider_instance, identity_headers=identity_headers,
+        )
+
     def _log_service_data(
         self,
         title: str,

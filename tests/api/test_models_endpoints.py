@@ -261,9 +261,7 @@ class TestModelsEndpoints:
         )
         
         assert response.status_code == 200
-        data = response.json()
-        total_models = len(data["data"])
-        
+
         # Test with limit parameter (if supported)
         response = await http_client.get(
             f"{base_url}/v1/models?limit=5",

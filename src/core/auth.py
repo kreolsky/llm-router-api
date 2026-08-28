@@ -6,18 +6,19 @@ import hmac
 from fastapi import Depends, Request, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from .context import RequestContext
+from .context import AuthContext, RequestContext
 from .error_handling import ErrorType, create_error
 from .logging import logger
 from .usage_db import request_stats
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
+
 async def get_api_key(
     request: Request,
     credentials: HTTPAuthorizationCredentials = Security(bearer_scheme)
-) -> tuple[str, str, list[str], list[str]]:
-    """Authenticate request and return (project_name, api_key, allowed_models, allowed_endpoints).
+) -> AuthContext:
+    """Authenticate the request and return the typed AuthContext.
 
     Uses HTTPBearer scheme to extract token from Authorization header.
     Uses constant-time comparison to prevent timing attacks.
@@ -100,7 +101,11 @@ async def get_api_key(
         }
     })
     
-    return found_project, api_key, allowed_models, allowed_endpoints
+    return AuthContext(
+        project_name=found_project,
+        allowed_models=allowed_models,
+        allowed_endpoints=allowed_endpoints,
+    )
 
 
 def check_endpoint_access(endpoint_path: str):
@@ -110,22 +115,21 @@ def check_endpoint_access(endpoint_path: str):
     """
     async def endpoint_checker(
         request: Request,
-        auth_data: tuple[str, str, list[str], list[str]] = Depends(get_api_key)
+        auth_context: AuthContext = Depends(get_api_key)
     ):
-        user_id, _, _, allowed_endpoints = auth_data
-        
         # WHY: empty allowed_endpoints means unrestricted access (default for admin keys)
-        if not allowed_endpoints or endpoint_path in allowed_endpoints:
-            return auth_data
-            
+        if not auth_context.allowed_endpoints or endpoint_path in auth_context.allowed_endpoints:
+            return auth_context
+
         logger.warning("Endpoint access denied", extra={
             "auth": {
                 "error_type": "endpoint_not_allowed",
-                "user_id": user_id,
+                "user_id": auth_context.project_name,
                 "endpoint_path": endpoint_path,
-                "allowed_endpoints": allowed_endpoints
+                "allowed_endpoints": auth_context.allowed_endpoints
             }
         })
-        raise create_error(ErrorType.ENDPOINT_NOT_ALLOWED, endpoint_path=endpoint_path, user_id=user_id)
-    
+        raise create_error(ErrorType.ENDPOINT_NOT_ALLOWED, endpoint_path=endpoint_path,
+                           user_id=auth_context.project_name)
+
     return endpoint_checker

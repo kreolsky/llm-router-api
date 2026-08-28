@@ -12,6 +12,7 @@ INVARIANT: model_info.yaml ALWAYS wins over the auto-cache.
 import time
 from typing import Any
 
+from ..core.context import AuthContext
 from ..core.error_handling import ErrorType, create_error
 from ..core.logging import logger
 from ..core.model_capabilities import (
@@ -92,13 +93,13 @@ class ModelService(BaseService):
             "capabilities_fetched_at": meta.get("fetched_at"),
         }
 
-    async def list_models(self, auth_data: tuple[str, str, list, list]) -> dict[str, Any]:
+    async def list_models(self, auth_context: AuthContext) -> dict[str, Any]:
         """Return OpenAI-compatible model list filtered by allowed_models and is_hidden.
 
         Capability fields are rendered identically to retrieve_model, so the
         list and the detail endpoint never diverge.
         """
-        _, _, allowed_models, _ = auth_data
+        allowed_models = auth_context.allowed_models
         current_config = self.config_manager.get_config()
         models_config = current_config.get("models", {})
 
@@ -116,7 +117,7 @@ class ModelService(BaseService):
     async def retrieve_model(
         self,
         model_id: str,
-        auth_data: tuple[str, str, list, list],
+        auth_context: AuthContext,
         refresh: bool = False,
     ) -> dict[str, Any]:
         """Return model details from merged capabilities (no live upstream call).
@@ -125,7 +126,7 @@ class ModelService(BaseService):
         (debug) triggers a best-effort background refresh of the model's
         provider before reading; failures are non-fatal (stale-if-error).
         """
-        _, _, allowed_models, _ = auth_data
+        allowed_models = auth_context.allowed_models
         # INVARIANT: access check BEFORE existence to prevent information leakage.
         if allowed_models and model_id not in allowed_models:
             raise create_error(ErrorType.MODEL_NOT_ALLOWED, model_id=model_id)

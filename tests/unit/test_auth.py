@@ -13,6 +13,7 @@ from fastapi import Depends, FastAPI, HTTPException
 
 from src.api.main import custom_http_exception_handler
 from src.core.auth import get_api_key
+from src.core.context import AuthContext
 
 
 def _config_manager_with_keys(keys: dict[str, str]):
@@ -30,8 +31,8 @@ def app():
     application.add_exception_handler(HTTPException, custom_http_exception_handler)
 
     @application.get("/check")
-    async def check(auth_data: tuple = Depends(get_api_key)):
-        return {"project": auth_data[0]}
+    async def check(auth_context: AuthContext = Depends(get_api_key)):
+        return {"project": auth_context.project_name}
 
     return application
 

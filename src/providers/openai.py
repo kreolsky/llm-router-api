@@ -1,5 +1,4 @@
 """OpenAI-compatible provider for chat, embeddings, and transcription."""
-import io
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -60,7 +59,13 @@ class OpenAICompatibleProvider(BaseProvider):
         form = {k: v for k, v in params.items() if v is not None}
         form = self._apply_model_config(form, provider_model_name, model_config)
 
-        files = {"file": (audio["filename"], io.BytesIO(audio["data"]), audio["content_type"])}
+        # WHY raw bytes, not io.BytesIO: the 429 retry loop lives below this
+        # construction site (retry_on_rate_limit on _make_request_inner), so the
+        # files tuple is encoded once per attempt. httpx's multipart encoder
+        # happens to seek(0) seekable file objects today, but bytes make each
+        # attempt self-contained by construction instead of by accommodation —
+        # the provider layer must not depend on upload rewinding.
+        files = {"file": (audio["filename"], audio["data"], audio["content_type"])}
 
         transcription_read_timeout = self._get_timeout("openai_transcription_timeout", 3600.0)
         transcription_timeout = self._create_timeout(read=transcription_read_timeout)

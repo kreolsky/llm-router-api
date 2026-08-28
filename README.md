@@ -232,7 +232,6 @@ See [tests/README.md](tests/README.md) for details on what each test file covers
 | `CONFIG_RELOAD_INTERVAL` | 5 | Config poll interval (s) |
 | `MODEL_CACHE_ENABLED` | true | Populate the model capabilities auto-cache |
 | `MODEL_CACHE_REFRESH_INTERVAL` | 3600 | Capabilities cache refresh interval (s) |
-| `MODEL_CACHE_TTL` | 86400 | Capabilities cache entry TTL (s) |
 | `MODEL_CACHE_PATH` | data/model_cache.json | Persisted capabilities cache file |
 | `DEBUG` | false | Enable debug-level JSON logging |
 | `API_WORKERS` | 1 | Uvicorn worker processes. Keep at 1: the capabilities cache and usage writer are process-local |

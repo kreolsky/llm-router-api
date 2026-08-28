@@ -187,7 +187,6 @@ class ConfigManager:
         ("openai_embeddings_read_timeout", "OPENAI_EMBEDDINGS_READ_TIMEOUT", 30.0, float),
         # Model capabilities auto-cache (see src/core/model_capabilities.py)
         ("model_cache_refresh_interval", "MODEL_CACHE_REFRESH_INTERVAL", 3600, int),
-        ("model_cache_ttl", "MODEL_CACHE_TTL", 86400, int),
     )
 
     def _read_env_settings(self) -> dict[str, Any]:

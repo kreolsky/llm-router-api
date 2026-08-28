@@ -26,6 +26,27 @@ select = ["E4", "E7", "E9", "F", "I", "UP", "B", "SIM", "ASYNC", "C4"]
 # dependency signatures are how the framework declares optional parts.
 "src/api/main.py" = ["B008"]
 "src/core/auth.py" = ["B008"]
+# tests/: what is CORRECT in a test, not style churn. The ignore set below is the
+# plan-audited 53 of the original 58 findings; the other 5 (4x F841, 1x F811)
+# were real bugs and are fixed in code.
+#   ASYNC109/ASYNC230/ASYNC240 — async test bodies patch asyncio.sleep or hit
+#       tmp paths; the timeouts/opens they guard against are the code under test.
+#   B007  — loop vars named _ are conventional in parametrize drivers.
+#   B008  — FastAPI Depends()-in-default idiom, same as the src/ ignores above.
+#   B017/B018 — assert-raises-exception and bare attribute assertions ARE the
+#       test's assertion in driver-style tests.
+#   B904/B905 — re-raising caught client errors without `from` and zip() without
+#       strict= in test fixtures assert nothing about production behavior.
+#   E402  — late imports sit next to the subsystem under test on purpose.
+#   E722  — the ASGI drivers catch bare Exception to observe ServerErrorMiddleware.
+#   SIM103/SIM105/SIM117 — readability of arrange/act/assert blocks wins over
+#       branch compression in tests.
+"tests/**" = [
+    "ASYNC109", "ASYNC230", "ASYNC240",
+    "B007", "B008", "B017", "B018", "B904", "B905",
+    "E402", "E722",
+    "SIM103", "SIM105", "SIM117",
+]
 
 [tool.ruff.lint.isort]
 known-first-party = ["src"]

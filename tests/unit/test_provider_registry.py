@@ -176,3 +176,34 @@ class TestRebuildProviderCache:
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         old_instance.aclose.assert_awaited_once()
+
+    @patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False)
+    @pytest.mark.asyncio
+    async def test_rebuild_drain_task_tracked_until_done(self):
+        """The background close task is referenced until it finishes.
+
+        asyncio only keeps a weak reference to a running task: an unreferenced
+        ensure_future result can be garbage-collected mid-flight, dropping the
+        pool closes it was carrying. Mirrors the _usage_tasks pattern in
+        src/core/usage_db/writer.py.
+        """
+        import asyncio
+        await rebuild_provider_cache({"providers": {"ok": _make_config()}}, _cm())
+        old_instance = provider_registry._provider_cache["ok"]
+
+        release = asyncio.Event()
+
+        async def slow_aclose(drain_timeout=None):
+            await release.wait()
+
+        old_instance.aclose = slow_aclose
+
+        await rebuild_provider_cache({"providers": {"ok": _make_config()}}, _cm())
+        assert provider_registry._drain_tasks, "drain task must be tracked while pools close"
+        tracked = next(iter(provider_registry._drain_tasks))
+        assert not tracked.done()
+
+        release.set()
+        await asyncio.wait_for(tracked, timeout=2)
+        await asyncio.sleep(0)
+        assert not provider_registry._drain_tasks, "done drain task must discard itself"

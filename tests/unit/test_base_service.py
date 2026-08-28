@@ -6,17 +6,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from src.core.context import RequestContext
+from src.core.context import AuthContext, RequestContext
+from src.core.usage_db import RequestStats
 from src.services.base import BaseService
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_auth_data(project_name="test-project", api_key="sk-123",
-                    allowed_models=None, extra=None):
-    """Return a 4-tuple matching auth_data convention."""
-    return (project_name, api_key, allowed_models or [], extra or [])
+def _make_auth_context(project_name="test-project",
+                       allowed_models=None, allowed_endpoints=None):
+    """Return an AuthContext matching what auth.get_api_key builds."""
+    return AuthContext(project_name, allowed_models or [], allowed_endpoints or [])
 
 
 def _make_config_manager(models=None, providers=None):
@@ -104,17 +105,17 @@ class TestValidateAndGetConfig:
     def test_empty_model_raises_400(self):
         """Empty model string raises handle_model_not_specified (400)."""
         svc = _build_service()
-        auth_data = _make_auth_data()
+        auth_ctx = _make_auth_context()
         with pytest.raises(HTTPException) as exc_info:
-            svc._validate_and_get_config("", auth_data, model_id="")
+            svc._validate_and_get_config("", auth_ctx, model_id="")
         assert exc_info.value.status_code == 400
 
     def test_none_model_raises_400(self):
         """None model raises handle_model_not_specified (400)."""
         svc = _build_service()
-        auth_data = _make_auth_data()
+        auth_ctx = _make_auth_context()
         with pytest.raises(HTTPException) as exc_info:
-            svc._validate_and_get_config(None, auth_data, model_id=None)
+            svc._validate_and_get_config(None, auth_ctx, model_id=None)
         assert exc_info.value.status_code == 400
 
     def test_model_not_in_allowed_raises_403(self):
@@ -123,17 +124,17 @@ class TestValidateAndGetConfig:
             models={"gpt-4": {"provider": "openai"}},
             providers={"openai": {"type": "openai", "base_url": "https://api.openai.com"}}
         )
-        auth_data = _make_auth_data(allowed_models=["gpt-3.5-turbo"])
+        auth_ctx = _make_auth_context(allowed_models=["gpt-3.5-turbo"])
         with pytest.raises(HTTPException) as exc_info:
-            svc._validate_and_get_config("gpt-4", auth_data, model_id="gpt-4")
+            svc._validate_and_get_config("gpt-4", auth_ctx, model_id="gpt-4")
         assert exc_info.value.status_code == 403
 
     def test_model_not_in_config_raises_404(self):
         """Model not in config raises handle_model_not_found (404)."""
         svc = _build_service(models={})
-        auth_data = _make_auth_data()  # empty allowed_models = unrestricted
+        auth_ctx = _make_auth_context()  # empty allowed_models = unrestricted
         with pytest.raises(HTTPException) as exc_info:
-            svc._validate_and_get_config("nonexistent-model", auth_data, model_id="nonexistent-model")
+            svc._validate_and_get_config("nonexistent-model", auth_ctx, model_id="nonexistent-model")
         assert exc_info.value.status_code == 404
 
     def test_provider_not_in_config_raises_404(self):
@@ -142,9 +143,9 @@ class TestValidateAndGetConfig:
             models={"gpt-4": {"provider": "missing-provider"}},
             providers={}
         )
-        auth_data = _make_auth_data()
+        auth_ctx = _make_auth_context()
         with pytest.raises(HTTPException) as exc_info:
-            svc._validate_and_get_config("gpt-4", auth_data, model_id="gpt-4")
+            svc._validate_and_get_config("gpt-4", auth_ctx, model_id="gpt-4")
         assert exc_info.value.status_code == 404
 
     def test_happy_path_returns_tuple(self):
@@ -160,10 +161,10 @@ class TestValidateAndGetConfig:
             "openai": {"type": "openai", "base_url": "https://api.openai.com"}
         }
         svc = _build_service(models=models, providers=providers)
-        auth_data = _make_auth_data()
+        auth_ctx = _make_auth_context()
 
         model_config, provider_name, provider_model_name, provider_config = \
-            svc._validate_and_get_config("my-model", auth_data, model_id="my-model")
+            svc._validate_and_get_config("my-model", auth_ctx, model_id="my-model")
 
         assert model_config == models["my-model"]
         assert provider_name == "openai"
@@ -175,9 +176,9 @@ class TestValidateAndGetConfig:
         models = {"gpt-4": {"provider": "openai"}}
         providers = {"openai": {"type": "openai"}}
         svc = _build_service(models=models, providers=providers)
-        auth_data = _make_auth_data()
+        auth_ctx = _make_auth_context()
 
-        _, _, provider_model_name, _ = svc._validate_and_get_config("gpt-4", auth_data, model_id="gpt-4")
+        _, _, provider_model_name, _ = svc._validate_and_get_config("gpt-4", auth_ctx, model_id="gpt-4")
         assert provider_model_name == "gpt-4"
 
     def test_empty_allowed_models_unrestricted(self):
@@ -185,9 +186,9 @@ class TestValidateAndGetConfig:
         models = {"gpt-4": {"provider": "openai"}}
         providers = {"openai": {"type": "openai"}}
         svc = _build_service(models=models, providers=providers)
-        auth_data = _make_auth_data(allowed_models=[])
+        auth_ctx = _make_auth_context(allowed_models=[])
 
-        model_config, *_ = svc._validate_and_get_config("gpt-4", auth_data, model_id="gpt-4")
+        model_config, *_ = svc._validate_and_get_config("gpt-4", auth_ctx, model_id="gpt-4")
         assert model_config is not None
 
     def test_model_in_allowed_models_succeeds(self):
@@ -195,10 +196,10 @@ class TestValidateAndGetConfig:
         models = {"gpt-4": {"provider": "openai", "provider_model_name": "gpt-4-turbo"}}
         providers = {"openai": {"type": "openai", "base_url": "https://api.openai.com"}}
         svc = _build_service(models=models, providers=providers)
-        auth_data = _make_auth_data(allowed_models=["gpt-4"])
+        auth_ctx = _make_auth_context(allowed_models=["gpt-4"])
 
         model_config, provider_name, provider_model_name, provider_config = \
-            svc._validate_and_get_config("gpt-4", auth_data, model_id="gpt-4")
+            svc._validate_and_get_config("gpt-4", auth_ctx, model_id="gpt-4")
 
         assert model_config == models["gpt-4"]
         assert provider_name == "openai"
@@ -211,48 +212,138 @@ class TestValidateAndGetConfig:
         produce 403 (not 404), preventing information leakage.
         """
         svc = _build_service(models={})  # model does not exist in config
-        auth_data = _make_auth_data(allowed_models=["only-this-model"])
+        auth_ctx = _make_auth_context(allowed_models=["only-this-model"])
 
         with pytest.raises(HTTPException) as exc_info:
-            svc._validate_and_get_config("secret-model", auth_data, model_id="secret-model")
+            svc._validate_and_get_config("secret-model", auth_ctx, model_id="secret-model")
         # Must be 403 (access denied), not 404 (not found)
         assert exc_info.value.status_code == 403
 
 
 # ===================================================================
-# _get_provider
+# _prepare_dispatch — provider resolution
 # ===================================================================
 
-class TestGetProvider:
+class TestPrepareDispatchProviders:
+    """_prepare_dispatch resolves the provider via the registry directly.
+
+    The old pass-through _get_provider wrapper is gone (inlined); these tests
+    pin the resolution contract at its new call site.
+    """
 
     @pytest.mark.asyncio
     @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
-    async def test_valid_config_returns_provider(self, mock_get):
-        """Valid config returns a provider instance."""
+    async def test_resolves_provider_from_registry(self, mock_get):
+        """A valid config yields the registry's instance on PreparedDispatch."""
         mock_provider = MagicMock()
         mock_get.return_value = mock_provider
 
-        svc = _build_service()
-        provider_config = {"type": "openai", "base_url": "https://api.openai.com"}
-
-        result = await svc._get_provider("openai", provider_config)
-        assert result is mock_provider
-        mock_get.assert_called_once_with(
-            "openai", provider_config, svc.config_manager
+        svc = _build_service(
+            models={"gpt-4": {"provider": "openai"}},
+            providers={"openai": {"type": "openai", "base_url": "https://api.example.com"}}
         )
+        auth_ctx = _make_auth_context()
+        request = _make_request("req-1")
+        request.json = AsyncMock(return_value={"model": "gpt-4"})
+
+        prepared = await svc._prepare_dispatch(
+            request, auth_ctx, component="chat_service", log_title="Request JSON"
+        )
+
+        assert prepared.provider is mock_provider
+        mock_get.assert_called_once_with("openai", svc.config_manager.get_config()["providers"]["openai"], svc.config_manager)
 
     @pytest.mark.asyncio
     @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
-    async def test_invalid_type_raises(self, mock_get):
-        """Invalid provider type raises (factory raises HTTPException via create_error)."""
+    async def test_registry_error_propagates(self, mock_get):
+        """An invalid provider type raises (factory raises HTTPException via create_error)."""
         mock_get.side_effect = HTTPException(status_code=404, detail="not found")
 
-        svc = _build_service()
-        provider_config = {"type": "bad"}
+        svc = _build_service(
+            models={"gpt-4": {"provider": "bad"}},
+            providers={"bad": {"type": "bad"}}
+        )
+        auth_ctx = _make_auth_context()
+        request = _make_request("req-1")
+        request.json = AsyncMock(return_value={"model": "gpt-4"})
 
         with pytest.raises(HTTPException) as exc_info:
-            await svc._get_provider("bad", provider_config)
+            await svc._prepare_dispatch(
+                request, auth_ctx, component="chat_service", log_title="Request JSON"
+            )
         assert exc_info.value.status_code == 404
+
+
+# ===================================================================
+# _prepare_dispatch — preamble parity with the old duplicated lines
+# ===================================================================
+
+class TestPrepareDispatchPreamble:
+
+    def _svc(self):
+        return _build_service(
+            models={"m": {"provider": "openai"}},
+            providers={"openai": {"type": "openai", "base_url": "https://x.example.com"}}
+        )
+
+    def _request(self, body):
+        request = _make_request("req-1", project_name="proj")
+        request.json = AsyncMock(return_value=body)
+        return request
+
+    @pytest.mark.asyncio
+    async def test_malformed_json_answers_400(self):
+        svc = self._svc()
+        request = self._request({})
+        request.json = AsyncMock(side_effect=ValueError("bad utf-8"))
+        with pytest.raises(HTTPException) as exc_info:
+            await svc._prepare_dispatch(
+                request, _make_auth_context(),
+                component="c", log_title="t",
+            )
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
+    async def test_stats_enriched_and_identity_headers_built(self, mock_get):
+        mock_get.return_value = SimpleNamespace(identity="passthrough")
+        svc = self._svc()
+        request = self._request({"model": "m"})
+        request.headers = {"user-agent": "oc/1.0"}
+
+        prepared = await svc._prepare_dispatch(
+            request, _make_auth_context(), component="c", log_title="t"
+        )
+
+        assert prepared.requested_model == "m"
+        assert prepared.stats.model_id == "m"
+        assert prepared.stats.provider_name == "openai"
+        assert prepared.identity_headers == {"user-agent": "oc/1.0"}
+        assert prepared.error_ctx == {"request_id": "req-1", "user_id": "proj", "model_id": "m"}
+
+    @pytest.mark.asyncio
+    @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
+    async def test_non_string_model_blanks_stats_model_id(self, mock_get):
+        """A non-string "model" reaches the usage row as "", never as the raw value.
+
+        The stats holder is enriched BEFORE validation rejects the request, so
+        the blanking branch is observable on the real RequestStats even though
+        the call raises. A truthy non-string (123) is used deliberately: None
+        would short-circuit at MODEL_NOT_SPECIFIED without exercising it.
+        """
+        mock_get.return_value = SimpleNamespace(identity=None)
+        svc = self._svc()
+        request = self._request({"model": 123})
+        request.headers = {}
+        stats = RequestStats()
+        request.state.request_stats = stats
+
+        with pytest.raises(HTTPException) as exc_info:
+            await svc._prepare_dispatch(
+                request, _make_auth_context(), component="c", log_title="t"
+            )
+        assert exc_info.value.status_code == 404
+        assert stats.model_id == ""
 
 
 # ===================================================================

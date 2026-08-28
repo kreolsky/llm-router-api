@@ -5,7 +5,6 @@ Tests both streaming and non-streaming responses for all test models.
 
 import asyncio
 import logging
-import time
 
 import httpx
 import pytest
@@ -116,8 +115,6 @@ class TestChatCompletions:
             "max_tokens": streaming_test_config["max_tokens"]
         }
         
-        start_time = time.time()
-        
         async with httpx.AsyncClient(timeout=30.0) as client, client.stream(
             "POST",
             f"{base_url}/v1/chat/completions",
@@ -128,10 +125,7 @@ class TestChatCompletions:
             
             # Collect streaming data
             stream_data = await StreamingResponseParser.collect_stream_content(response)
-        
-        end_time = time.time()
-        total_time = end_time - start_time
-        
+
         # Verify streaming response
         assert stream_data["chunk_count"] > 0, "Should receive at least one chunk"
         assert len(stream_data["content"]) > 0, "Should receive some content"
