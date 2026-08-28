@@ -34,12 +34,14 @@ run_gate "invariant-why"  python3 .claude/scripts/invariant-why-gate.py
 run_gate "systems-index"  python3 .claude/scripts/systems-index.py --check
 run_gate "func-length"    python3 .claude/scripts/func-length-gate.py
 run_gate "debt-ledger"    python3 .claude/scripts/debt-gate.py
+run_gate "cyrillic-src"   python3 .claude/scripts/cyrillic-src-gate.py
 
-# ruff: BLOCKING over src/ only. The rule set is pinned in pyproject.toml and the
-# binary in requirements-dev.txt (ruff==0.16.0) — a gate whose rules depend on who
-# runs it is not a gate. tests/ still carries ~57 findings; linting tests is a
-# fresh task, so the gate deliberately does not cover them yet.
-run_gate "ruff-src"       ruff check src/
+# ruff: BLOCKING over src/ and tests/. The rule set is pinned in pyproject.toml
+# and the binary in requirements-dev.txt (ruff==0.16.0) — a gate whose rules
+# depend on who runs it is not a gate. tests/ carries per-file-ignores for the
+# patterns that are correct in a test (mocked async sleeps, positional unpacks,
+# assert-raises in drivers — see pyproject.toml); everything else is enforced.
+run_gate "ruff"           ruff check src/ tests/
 
 if [ ${#FAILED[@]} -gt 0 ]; then
   printf '\nBLOCKED — %d gate(s) failed: %s\n' "${#FAILED[@]}" "${FAILED[*]}"

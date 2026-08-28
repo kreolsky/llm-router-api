@@ -155,8 +155,9 @@ async def list_models(
     return await app.state.model_service.list_models(auth_context)
 
 
-# ARCH: endpoint string "/v1/models/{model_id:path}" отличается от "/v1/models" —
-# это позволяет давать доступ к списку моделей без доступа к деталям конкретной модели
+# ARCH: the endpoint string "/v1/models/{model_id:path}" differs from "/v1/models" —
+# this is what allows granting access to the model list without access to a
+# specific model's detail endpoint
 @app.get("/v1/models/{model_id:path}")
 async def retrieve_model(
     model_id: str,

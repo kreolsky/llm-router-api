@@ -101,11 +101,6 @@ class TestLoadConfig:
 
     def test_invalid_yaml_fail_on_error_true_raises(self):
         """Invalid YAML with fail_on_error=True raises RuntimeError."""
-        file_map = {
-            "providers.yaml": PROVIDERS_YAML,
-            "models.yaml": ": invalid: yaml: [[[",
-            "user_keys.yaml": USER_KEYS_YAML,
-        }
         # The ": invalid: yaml: [[[" is actually parseable by some YAML parsers
         # so let's force a YAML error via mock
         cm = _build_config_manager()
@@ -291,12 +286,16 @@ class TestPropertyGetters:
         cm = self._cm_with_env({})
         assert cm.model_cache_enabled is True
         assert cm.model_cache_refresh_interval == 3600
-        assert cm.model_cache_ttl == 86400
         assert cm.model_cache_path == "data/model_cache.json"
 
         cm = self._cm_with_env({"MODEL_CACHE_ENABLED": "false", "MODEL_CACHE_PATH": "/tmp/c.json"})
         assert cm.model_cache_enabled is False
         assert cm.model_cache_path == "/tmp/c.json"
+
+    def test_model_cache_ttl_is_gone(self):
+        """MODEL_CACHE_TTL was a dead knob (stale-if-error contradicts a TTL) — removed."""
+        with pytest.raises(AttributeError):
+            self._cm_with_env({"MODEL_CACHE_TTL": "1"}).model_cache_ttl
 
     def test_usage_db_path_settings(self):
         """usage_db_path resolves from env with the documented default."""

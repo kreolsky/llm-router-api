@@ -161,8 +161,6 @@ class TestRetryOnRateLimit:
         exc = HTTPException(status_code=429, detail="rate limited")
         call_count = 0
 
-        original_sleep = asyncio.sleep
-
         async def mock_sleep(delay):
             recorded_delays.append(delay)
 
@@ -502,9 +500,6 @@ class TestProxySupport:
 # ===================================================================
 # list_models
 # ===================================================================
-
-from src.providers.openai import OpenAICompatibleProvider
-
 
 def _build_openai_provider(config_manager=None):
     config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY"}

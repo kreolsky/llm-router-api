@@ -54,7 +54,7 @@ All env-backed settings are read via `ConfigManager` **once, at construction** (
 * **Transcription**: `DEFAULT_STT_MODEL` (default `stt/dummy`) — fallback model when none is requested.
 * **Stats**: `STAT_API_KEY` (default unset) — when set, every `/stat/api/*` JSON endpoint requires an `X-Stat-Key` **header** with the same value (never a query param: the logging middleware logs full URLs). `GET /stat/` and `/stat/static` stay open — the page is what prompts for the key. Usage stats: one row per request (errors included, cost frozen at write time from merged capabilities pricing) in the SQLite file `USAGE_DB_PATH` (default `data/usage.db`), opened by the container process only — see `INVARIANT(data-loss)` on the `usage_data` volume in `docker-compose.yml`.
 * **Per-provider concurrency**: optional `max_concurrent` key per provider in `providers.yaml` gates outbound requests via an `asyncio.Semaphore`; queued requests fail fast with 503 after `QUEUE_WAIT_TIMEOUT` (default `30.0`). Takes effect only after a config reload rebuilds the cache (semaphore is per-instance).
-* **Model capabilities cache**: `MODEL_CACHE_ENABLED` (default `true`), `MODEL_CACHE_REFRESH_INTERVAL` (default `3600`s), `MODEL_CACHE_TTL` (default `86400`s), `MODEL_CACHE_PATH` (default `data/model_cache.json`). `data/` is mounted in `docker-compose.yml`, so the cache survives restarts.
+* **Model capabilities cache**: `MODEL_CACHE_ENABLED` (default `true`), `MODEL_CACHE_REFRESH_INTERVAL` (default `3600`s), `MODEL_CACHE_PATH` (default `data/model_cache.json`). `data/` is mounted in `docker-compose.yml`, so the cache survives restarts.
 
 ## Architecture Discovery
 
