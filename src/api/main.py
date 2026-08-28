@@ -15,7 +15,7 @@ from ..core.context import AuthContext, request_context
 from ..core.error_handling import ErrorType, create_error
 from ..core.logging import logger
 from ..core.model_capabilities import CapabilitiesCache, capabilities_refresh_loop
-from ..core.usage_db import close_db, init_db, request_stats
+from ..core.usage_db import close_db, drain_pending_flushes, init_db, request_stats
 from ..providers import clear_provider_cache_async, rebuild_provider_cache
 from ..services.chat_service.chat_service import ChatService
 from ..services.embedding_service import EmbeddingService
@@ -76,8 +76,11 @@ async def lifespan(app: FastAPI):
     capabilities_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await capabilities_task
-    # Close every provider-owned pool on shutdown (awaited so pools drain).
+    # Close every provider-owned pool on shutdown (awaited so pools drain),
+    # then drain pending usage flushes BEFORE the DB connection closes — an
+    # in-flight _flush_row would otherwise race close_db() and silently no-op.
     await clear_provider_cache_async()
+    await drain_pending_flushes()
     await close_db()
 
 app = FastAPI(lifespan=lifespan)

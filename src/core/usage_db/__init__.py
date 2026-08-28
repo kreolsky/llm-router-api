@@ -26,6 +26,7 @@ from .queries import (
 from .writer import (
     RequestStats,
     close_db,
+    drain_pending_flushes,
     init_db,
     request_stats,
     schedule_flush,
@@ -35,6 +36,7 @@ __all__ = [
     "ERROR_CODE_NULL",
     "RequestStats",
     "close_db",
+    "drain_pending_flushes",
     "get_connection",
     "get_distinct_models",
     "get_distinct_users",

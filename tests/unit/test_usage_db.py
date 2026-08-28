@@ -6,6 +6,7 @@ src/core/usage_db/__init__.py).
 """
 
 import asyncio
+import contextlib
 import hashlib
 import time
 from types import SimpleNamespace
@@ -412,6 +413,80 @@ class TestScheduleFlush:
             app_state=None,
         )
         assert task is None
+
+
+class TestDrainPendingFlushes:
+    """Shutdown drain: pending flush tasks complete BEFORE close_db()."""
+
+    @pytest.mark.asyncio
+    async def test_drain_awaits_pending_flush(self, db):
+        """A gated _flush_row finishes only after release; drain must wait for it.
+
+        Two tasks are scheduled so one completes (its done callback mutates
+        _usage_tasks) while drain is still awaiting the other — a drain that
+        iterated the live set would race its own completion.
+        """
+        entered = asyncio.Event()
+        gate = asyncio.Event()
+
+        async def slow_flush(*a, **k):
+            entered.set()
+            await gate.wait()
+
+        async def fast_flush(*a, **k):
+            return None
+
+        with patch("src.core.usage_db.writer._flush_row", new=slow_flush):
+            gated = writer.schedule_flush(
+                RequestStats(endpoint="chat"), request_id="r-gated",
+                project_name="p", duration_ms=1.0, status_code=200,
+                app_state=None,
+            )
+            await asyncio.wait_for(entered.wait(), timeout=1.0)
+        with patch("src.core.usage_db.writer._flush_row", new=fast_flush):
+            writer.schedule_flush(
+                RequestStats(endpoint="chat"), request_id="r-fast",
+                project_name="p", duration_ms=1.0, status_code=200,
+                app_state=None,
+            )
+            await asyncio.sleep(0)  # let the fast task finish (done callback fires)
+
+            drained = asyncio.create_task(writer.drain_pending_flushes(drain_timeout=1.0))
+            await asyncio.sleep(0.05)
+            assert not drained.done(), "drain returned while a flush was pending"
+
+            gate.set()
+            await asyncio.wait_for(drained, timeout=1.0)
+        assert gated.done() and not gated.cancelled()
+
+    @pytest.mark.asyncio
+    async def test_drain_no_pending_returns_at_once(self, db):
+        await asyncio.wait_for(writer.drain_pending_flushes(drain_timeout=1.0), timeout=1.0)
+
+    @pytest.mark.asyncio
+    async def test_drain_timeout_logs_warning_and_abandons(self, db):
+        """A stuck flush cannot block shutdown: WARNING, then abandon."""
+        entered = asyncio.Event()
+
+        async def stuck_flush(*a, **k):
+            entered.set()
+            await asyncio.Event().wait()
+
+        with patch("src.core.usage_db.writer._flush_row", new=stuck_flush), \
+             patch("src.core.usage_db.writer.logger") as mock_logger:
+            stuck = writer.schedule_flush(
+                RequestStats(endpoint="chat"), request_id="r",
+                project_name="p", duration_ms=1.0, status_code=200,
+                app_state=None,
+            )
+            await asyncio.wait_for(entered.wait(), timeout=1.0)
+
+            await asyncio.wait_for(writer.drain_pending_flushes(drain_timeout=0.05), timeout=1.0)
+            mock_logger.warning.assert_called_once()
+
+        stuck.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await stuck
 
 
 # ---------------------------------------------------------------------------
