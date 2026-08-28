@@ -1,7 +1,7 @@
 {
   "limit": 50,
   "scan_dir": "src",
-  "total": 18,
+  "total": 17,
   "violations": {
     "src/api/main.py::create_transcription": {
       "label": "src/api/main.py::create_transcription",
@@ -13,35 +13,35 @@
     },
     "src/core/auth.py::get_api_key": {
       "label": "src/core/auth.py::get_api_key",
-      "span": 84
+      "span": 92
     },
     "src/core/model_capabilities.py::refresh_provider_capabilities": {
       "label": "src/core/model_capabilities.py::refresh_provider_capabilities",
       "span": 80
     },
-    "src/core/usage_db.py::_flush_row": {
-      "label": "src/core/usage_db.py::_flush_row",
-      "span": 71
-    },
-    "src/core/usage_db.py::get_requests": {
-      "label": "src/core/usage_db.py::get_requests",
+    "src/core/usage_db/queries.py::get_requests": {
+      "label": "src/core/usage_db/queries.py::get_requests",
       "span": 88
     },
-    "src/core/usage_db.py::get_summary": {
-      "label": "src/core/usage_db.py::get_summary",
+    "src/core/usage_db/queries.py::get_summary": {
+      "label": "src/core/usage_db/queries.py::get_summary",
       "span": 116
     },
-    "src/core/usage_db.py::get_usage_data": {
-      "label": "src/core/usage_db.py::get_usage_data",
-      "span": 76
+    "src/core/usage_db/queries.py::get_usage_data": {
+      "label": "src/core/usage_db/queries.py::get_usage_data",
+      "span": 80
     },
-    "src/core/usage_db.py::init_db": {
-      "label": "src/core/usage_db.py::init_db",
-      "span": 51
+    "src/core/usage_db/writer.py::_flush_row": {
+      "label": "src/core/usage_db/writer.py::_flush_row",
+      "span": 71
+    },
+    "src/core/usage_db/writer.py::init_db": {
+      "label": "src/core/usage_db/writer.py::init_db",
+      "span": 52
     },
     "src/providers/base.py::BaseProvider.__init__": {
       "label": "src/providers/base.py::BaseProvider.__init__",
-      "span": 98
+      "span": 97
     },
     "src/providers/base.py::BaseProvider._make_request_inner": {
       "label": "src/providers/base.py::BaseProvider._make_request_inner",
@@ -51,21 +51,17 @@
       "label": "src/providers/base.py::BaseProvider._stream_request_inner",
       "span": 87
     },
-    "src/providers/base.py::retry_on_rate_limit": {
-      "label": "src/providers/base.py::retry_on_rate_limit",
-      "span": 58
-    },
     "src/services/chat_service/chat_service.py::ChatService.chat_completions": {
       "label": "src/services/chat_service/chat_service.py::ChatService.chat_completions",
-      "span": 98
+      "span": 87
     },
     "src/services/chat_service/stream_processor.py::StreamProcessor.process_stream": {
       "label": "src/services/chat_service/stream_processor.py::StreamProcessor.process_stream",
-      "span": 75
+      "span": 60
     },
     "src/services/embedding_service.py::EmbeddingService.create_embeddings": {
       "label": "src/services/embedding_service.py::EmbeddingService.create_embeddings",
-      "span": 61
+      "span": 66
     },
     "src/services/model_service.py::ModelService.retrieve_model": {
       "label": "src/services/model_service.py::ModelService.retrieve_model",
@@ -73,7 +69,7 @@
     },
     "src/services/transcription_service.py::TranscriptionService.create_transcription": {
       "label": "src/services/transcription_service.py::TranscriptionService.create_transcription",
-      "span": 87
+      "span": 89
     }
   }
 }

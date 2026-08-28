@@ -1,4 +1,9 @@
-"""Unit tests for src/core/usage_db.py — holder, flush, cost, migration, queries."""
+"""Unit tests for the src/core/usage_db package — holder, flush, cost, migration, queries.
+
+Patch targets point at the SUBMODULE the caller resolves the name from, never
+the package re-export in __init__ (an alias patch is inert; see the WHY in
+src/core/usage_db/__init__.py).
+"""
 
 import asyncio
 import hashlib
@@ -15,14 +20,14 @@ from pytest_asyncio import fixture as asyncio_fixture
 
 from src.api.main import verify_stat_key
 from src.core import usage_db
-from src.core.usage_db import RequestStats
+from src.core.usage_db import RequestStats, writer
 
 
 @pytest.fixture(autouse=True)
 def reset_tasks():
-    usage_db._usage_tasks.clear()
+    writer._usage_tasks.clear()
     yield
-    usage_db._usage_tasks.clear()
+    writer._usage_tasks.clear()
 
 
 @pytest.fixture
@@ -44,14 +49,14 @@ async def fetch_rows(conn, sql="SELECT * FROM usage_events", params=()):
 
 
 async def drain_tasks():
-    tasks = list(usage_db._usage_tasks)
+    tasks = list(writer._usage_tasks)
     if tasks:
         await asyncio.gather(*tasks)
 
 
 async def flush(stats, *, request_id="r", project_name="p", duration_ms=1.0,
                 status_code=200, app_state=None):
-    await usage_db._flush_row(
+    await writer._flush_row(
         stats, request_id=request_id, project_name=project_name,
         duration_ms=duration_ms, status_code=status_code, app_state=app_state,
     )
@@ -236,54 +241,54 @@ class TestComputeCost:
     def test_priced_event(self):
         stats = RequestStats(prompt_tokens=1000, completion_tokens=200, cached_tokens=0)
         state = pricing_state({"prompt": 1e-6, "completion": 2e-6, "input_cache_read": 0.1e-6})
-        cost = usage_db._compute_cost_usd(stats, state)
+        cost = writer._compute_cost_usd(stats, state)
         assert cost == pytest.approx(1000 * 1e-6 + 200 * 2e-6)
 
     def test_cached_tokens_use_cache_rate(self):
         stats = RequestStats(prompt_tokens=1000, completion_tokens=0, cached_tokens=400)
         state = pricing_state({"prompt": 1e-6, "completion": 2e-6, "input_cache_read": 0.1e-6})
-        cost = usage_db._compute_cost_usd(stats, state)
+        cost = writer._compute_cost_usd(stats, state)
         assert cost == pytest.approx(600 * 1e-6 + 400 * 0.1e-6)
 
     def test_missing_input_cache_read_falls_back_to_prompt_rate(self):
         """An absent cache rate must NOT be treated as free."""
         stats = RequestStats(prompt_tokens=1000, completion_tokens=0, cached_tokens=400)
         state = pricing_state({"prompt": 1e-6, "completion": 2e-6})
-        cost = usage_db._compute_cost_usd(stats, state)
+        cost = writer._compute_cost_usd(stats, state)
         assert cost == pytest.approx(1000 * 1e-6)
 
     def test_unpriced_model_returns_none(self):
         stats = RequestStats(prompt_tokens=10, completion_tokens=5)
-        assert usage_db._compute_cost_usd(stats, pricing_state(None)) is None
+        assert writer._compute_cost_usd(stats, pricing_state(None)) is None
 
     def test_zero_token_event_returns_none(self):
         stats = RequestStats(prompt_tokens=0, completion_tokens=0)
         state = pricing_state({"prompt": 1e-6, "completion": 2e-6})
-        assert usage_db._compute_cost_usd(stats, state) is None
+        assert writer._compute_cost_usd(stats, state) is None
 
     def test_no_model_service_returns_none(self):
         stats = RequestStats(prompt_tokens=10, completion_tokens=5)
-        assert usage_db._compute_cost_usd(stats, SimpleNamespace()) is None
-        assert usage_db._compute_cost_usd(stats, None) is None
+        assert writer._compute_cost_usd(stats, SimpleNamespace()) is None
+        assert writer._compute_cost_usd(stats, None) is None
 
     def test_get_pricing_failure_degrades_to_none(self):
         stats = RequestStats(prompt_tokens=10, completion_tokens=5)
         model_service = MagicMock()
         model_service.get_pricing = MagicMock(side_effect=RuntimeError("boom"))
-        cost = usage_db._compute_cost_usd(stats, SimpleNamespace(model_service=model_service))
+        cost = writer._compute_cost_usd(stats, SimpleNamespace(model_service=model_service))
         assert cost is None
 
     def test_missing_prompt_or_completion_rate_returns_none(self):
         stats = RequestStats(prompt_tokens=10, completion_tokens=5)
-        assert usage_db._compute_cost_usd(stats, pricing_state({"prompt": 1e-6})) is None
-        assert usage_db._compute_cost_usd(stats, pricing_state({"completion": 1e-6})) is None
+        assert writer._compute_cost_usd(stats, pricing_state({"prompt": 1e-6})) is None
+        assert writer._compute_cost_usd(stats, pricing_state({"completion": 1e-6})) is None
 
     def test_pricing_is_per_token_not_per_million(self):
         # INVARIANT: stored pricing is USD per token. 1M tokens at $3/M must
         # cost $3 — a "per 1M" stored value would inflate this by 10^6.
         stats = RequestStats(prompt_tokens=1_000_000, completion_tokens=0)
         state = pricing_state({"prompt": 3e-6, "completion": 15e-6})
-        assert usage_db._compute_cost_usd(stats, state) == pytest.approx(3.0)
+        assert writer._compute_cost_usd(stats, state) == pytest.approx(3.0)
 
 
 # ---------------------------------------------------------------------------
@@ -353,7 +358,7 @@ class TestFlushRow:
     async def test_no_connection_noop(self, db_path):
         """After close_db (or before init) the flush is a silent no-op."""
         stats = RequestStats(endpoint="chat")
-        with patch("src.core.usage_db.logger") as mock_logger:
+        with patch("src.core.usage_db.writer.logger") as mock_logger:
             await flush(stats)
         mock_logger.error.assert_not_called()
 
@@ -361,8 +366,8 @@ class TestFlushRow:
     async def test_db_failure_logged_throttled(self, db):
         conn = MagicMock()
         conn.execute = AsyncMock(side_effect=RuntimeError("db down"))
-        with patch("src.core.usage_db.get_connection", return_value=conn), \
-             patch("src.core.usage_db.logger") as mock_logger:
+        with patch("src.core.usage_db.writer.get_connection", return_value=conn), \
+             patch("src.core.usage_db.writer.logger") as mock_logger:
             await flush(RequestStats(endpoint="chat"))
         mock_logger.error.assert_called_once()
 
@@ -371,23 +376,23 @@ class TestScheduleFlush:
 
     @pytest.mark.asyncio
     async def test_task_tracked_and_discarded_on_success(self):
-        with patch("src.core.usage_db._flush_row", new=AsyncMock()):
-            task = usage_db.schedule_flush(
+        with patch("src.core.usage_db.writer._flush_row", new=AsyncMock()):
+            task = writer.schedule_flush(
                 RequestStats(endpoint="chat"), request_id="r",
                 project_name="p", duration_ms=1.0, status_code=200,
                 app_state=None,
             )
             assert task is not None
-            assert task in usage_db._usage_tasks
+            assert task in writer._usage_tasks
             await task
-            assert task not in usage_db._usage_tasks
+            assert task not in writer._usage_tasks
 
     @pytest.mark.asyncio
     async def test_failing_task_logs_warning(self):
-        with patch("src.core.usage_db._flush_row",
+        with patch("src.core.usage_db.writer._flush_row",
                    new=AsyncMock(side_effect=RuntimeError("boom"))), \
-             patch("src.core.usage_db.logger") as mock_logger:
-            task = usage_db.schedule_flush(
+             patch("src.core.usage_db.writer.logger") as mock_logger:
+            task = writer.schedule_flush(
                 RequestStats(endpoint="chat"), request_id="r",
                 project_name="p", duration_ms=1.0, status_code=200,
                 app_state=None,
@@ -397,11 +402,11 @@ class TestScheduleFlush:
             except RuntimeError:
                 pass
             await asyncio.sleep(0)
-        assert task not in usage_db._usage_tasks
+        assert task not in writer._usage_tasks
         mock_logger.warning.assert_called_once()
 
     def test_no_running_loop_returns_none(self):
-        task = usage_db.schedule_flush(
+        task = writer.schedule_flush(
             RequestStats(endpoint="chat"), request_id="r",
             project_name="p", duration_ms=1.0, status_code=200,
             app_state=None,

@@ -22,4 +22,4 @@ and read the entry file(s). Aliases are hand-maintained in
 | service-layer | validate access, resolve provider, dispatch | `src/services/base.py:2` | сервисы, сервисный слой |
 | sse-stream | passthrough streaming body | `src/services/chat_service/stream_processor.py:2` | стрим, streaming, sse, чанки |
 | stat-dashboard | /stat/ usage page and its JSON endpoints | `src/api/stat_page.py:2` | статистика, дашборд, usage |
-| usage-stats | SQLite per-request usage rows and cost freezing | `src/core/usage_db.py:12` | статистика, usage, токены, стоимость |
+| usage-stats | SQLite per-request usage rows and cost freezing | `src/core/usage_db/__init__.py:15` | статистика, usage, токены, стоимость |
