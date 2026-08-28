@@ -2,7 +2,7 @@
 
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -80,9 +80,9 @@ class TestIdentityHeadersForwarded:
 
         provider_instance = SimpleNamespace(identity="passthrough")
         provider_instance.embeddings = AsyncMock(return_value={"data": [], "usage": {}})
-        service._get_provider = AsyncMock(return_value=provider_instance)
-
-        await service.create_embeddings(request, _make_auth_context("proj"))
+        with patch("src.services.base.get_provider_instance",
+                   new=AsyncMock(return_value=provider_instance)):
+            await service.create_embeddings(request, _make_auth_context("proj"))
 
         kwargs = provider_instance.embeddings.call_args.kwargs
         assert kwargs["extra_headers"] == {"user-agent": "Kilo-Code/7.5.5"}

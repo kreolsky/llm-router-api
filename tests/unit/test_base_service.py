@@ -220,39 +220,121 @@ class TestValidateAndGetConfig:
 
 
 # ===================================================================
-# _get_provider
+# _prepare_dispatch — provider resolution
 # ===================================================================
 
-class TestGetProvider:
+class TestPrepareDispatchProviders:
+    """_prepare_dispatch resolves the provider via the registry directly.
+
+    The old pass-through _get_provider wrapper is gone (inlined); these tests
+    pin the resolution contract at its new call site.
+    """
 
     @pytest.mark.asyncio
     @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
-    async def test_valid_config_returns_provider(self, mock_get):
-        """Valid config returns a provider instance."""
+    async def test_resolves_provider_from_registry(self, mock_get):
+        """A valid config yields the registry's instance on PreparedDispatch."""
         mock_provider = MagicMock()
         mock_get.return_value = mock_provider
 
-        svc = _build_service()
-        provider_config = {"type": "openai", "base_url": "https://api.openai.com"}
-
-        result = await svc._get_provider("openai", provider_config)
-        assert result is mock_provider
-        mock_get.assert_called_once_with(
-            "openai", provider_config, svc.config_manager
+        svc = _build_service(
+            models={"gpt-4": {"provider": "openai"}},
+            providers={"openai": {"type": "openai", "base_url": "https://api.example.com"}}
         )
+        auth_ctx = _make_auth_context()
+        request = _make_request("req-1")
+        request.json = AsyncMock(return_value={"model": "gpt-4"})
+
+        prepared = await svc._prepare_dispatch(
+            request, auth_ctx, component="chat_service", log_title="Request JSON"
+        )
+
+        assert prepared.provider is mock_provider
+        mock_get.assert_called_once_with("openai", svc.config_manager.get_config()["providers"]["openai"], svc.config_manager)
 
     @pytest.mark.asyncio
     @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
-    async def test_invalid_type_raises(self, mock_get):
-        """Invalid provider type raises (factory raises HTTPException via create_error)."""
+    async def test_registry_error_propagates(self, mock_get):
+        """An invalid provider type raises (factory raises HTTPException via create_error)."""
         mock_get.side_effect = HTTPException(status_code=404, detail="not found")
 
-        svc = _build_service()
-        provider_config = {"type": "bad"}
+        svc = _build_service(
+            models={"gpt-4": {"provider": "bad"}},
+            providers={"bad": {"type": "bad"}}
+        )
+        auth_ctx = _make_auth_context()
+        request = _make_request("req-1")
+        request.json = AsyncMock(return_value={"model": "gpt-4"})
 
         with pytest.raises(HTTPException) as exc_info:
-            await svc._get_provider("bad", provider_config)
+            await svc._prepare_dispatch(
+                request, auth_ctx, component="chat_service", log_title="Request JSON"
+            )
         assert exc_info.value.status_code == 404
+
+
+# ===================================================================
+# _prepare_dispatch — preamble parity with the old duplicated lines
+# ===================================================================
+
+class TestPrepareDispatchPreamble:
+
+    def _svc(self):
+        return _build_service(
+            models={"m": {"provider": "openai"}},
+            providers={"openai": {"type": "openai", "base_url": "https://x.example.com"}}
+        )
+
+    def _request(self, body):
+        request = _make_request("req-1", project_name="proj")
+        request.json = AsyncMock(return_value=body)
+        return request
+
+    @pytest.mark.asyncio
+    async def test_malformed_json_answers_400(self):
+        svc = self._svc()
+        request = self._request({})
+        request.json = AsyncMock(side_effect=ValueError("bad utf-8"))
+        with pytest.raises(HTTPException) as exc_info:
+            await svc._prepare_dispatch(
+                request, _make_auth_context(),
+                component="c", log_title="t",
+            )
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
+    async def test_stats_enriched_and_identity_headers_once(self, mock_get):
+        mock_get.return_value = SimpleNamespace(identity="passthrough")
+        svc = self._svc()
+        request = self._request({"model": "m"})
+        request.headers = {"user-agent": "oc/1.0"}
+
+        prepared = await svc._prepare_dispatch(
+            request, _make_auth_context(), component="c", log_title="t"
+        )
+
+        assert prepared.requested_model == "m"
+        assert prepared.stats.model_id == "m"
+        assert prepared.stats.provider_name == "openai"
+        assert prepared.identity_headers == {"user-agent": "oc/1.0"}
+        assert prepared.error_ctx == {"request_id": "req-1", "user_id": "proj", "model_id": "m"}
+
+    @pytest.mark.asyncio
+    @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
+    async def test_non_string_model_blanks_stats_model_id(self, mock_get):
+        mock_get.return_value = SimpleNamespace(identity=None)
+        svc = _build_service(models={"": {"provider": "openai"}},
+                             providers={"openai": {"type": "openai"}})
+        request = self._request({"model": None})
+        request.headers = {}
+
+        # model None → 400 (model not specified) before stats matter
+        with pytest.raises(HTTPException) as exc_info:
+            await svc._prepare_dispatch(
+                request, _make_auth_context(), component="c", log_title="t"
+            )
+        assert exc_info.value.status_code == 400
 
 
 # ===================================================================

@@ -6,6 +6,7 @@ from fastapi import Request, UploadFile
 from ..core.context import AuthContext
 from ..core.logging import logger
 from ..core.usage_db import request_stats
+from ..providers import get_provider_instance
 from ..services.model_service import ModelService
 from .base import BaseService
 
@@ -77,7 +78,9 @@ class TranscriptionService(BaseService):
                 self._validate_and_get_config(model_id, auth_context, **error_ctx)
             stats.provider_name = provider_name
 
-            provider_instance = await self._get_provider(provider_name, provider_config, **error_ctx)
+            provider_instance = await get_provider_instance(
+                provider_name, provider_config, self.config_manager
+            )
             identity_headers = self._build_identity_headers(provider_instance, request)
 
             provider_request_body = {

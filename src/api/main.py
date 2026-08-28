@@ -2,11 +2,10 @@
 # SYSTEM: api-app — FastAPI app, lifespan, routes, eager provider validation
 import asyncio
 import contextlib
-import hmac
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -16,16 +15,7 @@ from ..core.context import AuthContext, request_context
 from ..core.error_handling import ErrorType, create_error
 from ..core.logging import logger
 from ..core.model_capabilities import CapabilitiesCache, capabilities_refresh_loop
-from ..core.usage_db import (
-    close_db,
-    get_distinct_models,
-    get_distinct_users,
-    get_requests,
-    get_summary,
-    get_usage_data,
-    init_db,
-    request_stats,
-)
+from ..core.usage_db import close_db, init_db, request_stats
 from ..providers import clear_provider_cache_async, rebuild_provider_cache
 from ..services.chat_service.chat_service import ChatService
 from ..services.embedding_service import EmbeddingService
@@ -35,6 +25,7 @@ from ..utils.client_address import client_host
 from ..utils.generate_key import generate_key
 from .middleware import RequestLoggerMiddleware
 from .stat_page import STATIC_DIR, stat_page
+from .stat_routes import router as stat_router
 
 
 async def _validate_providers(config_manager: ConfigManager) -> None:
@@ -91,6 +82,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 app.mount("/stat/static", StaticFiles(directory=STATIC_DIR), name="stat_static")
+app.include_router(stat_router)
 
 @app.exception_handler(HTTPException)
 async def custom_http_exception_handler(request: Request, exc: HTTPException):
@@ -268,114 +260,12 @@ async def generate_key_endpoint(
     return {"key": key}
 
 
-async def verify_stat_key(
-    request: Request,
-    x_stat_key: str | None = Header(None, alias="X-Stat-Key"),
-) -> None:
-    """Require X-Stat-Key on /stat/api/* when STAT_API_KEY is configured.
-
-    WHY header only, never a ?stat_key= query param: the logging middleware
-    logs the full URL including the query string, so a query-param key would
-    leak into request logs. When STAT_API_KEY is unset everything stays open.
-    """
-    config_manager = getattr(request.app.state, "config_manager", None)
-    expected = getattr(config_manager, "stat_api_key", "") or ""
-    if expected and not hmac.compare_digest(
-            (x_stat_key or "").encode(), expected.encode()):
-        raise HTTPException(
-            status_code=401,
-            detail={"error": {"code": 401,
-                              "message": "Invalid or missing X-Stat-Key header"}},
-        )
-
-
-def _parse_days_param(days: str) -> int | None:
-    """Parse the `days` query param shared by the /stat/api endpoints.
-
-    WHY kept a string: the dashboard's "All" button sends an EMPTY value
-    (stat.html), which must mean "no day filter" — a bare `days: int | None`
-    would 422 that button. Non-numeric input answers 422 in the OpenRouter
-    envelope instead of a ValueError-driven 500.
-    """
-    if not days or not days.strip():
-        return None
-    try:
-        return int(days)
-    except ValueError:
-        # from None: the ValueError is the client's own bad input — nothing
-        # to chain for the server log.
-        raise HTTPException(
-            status_code=422,
-            detail={"error": {"code": 422,
-                              "message": f"Query parameter 'days' must be an integer, got {days!r}",
-                              "metadata": {}}},
-        ) from None
-
-
 @app.get("/stat/")
 async def stat_dashboard(request: Request):
     # The page stays open even with STAT_API_KEY set: it is what prompts for
     # the key. /stat/static is a mount and cannot carry a dependency at all.
+    # The /stat/api/* JSON endpoints live in stat_routes.py (stat_router).
     return await stat_page(request)
-
-
-@app.get("/stat/api/users")
-async def stat_users(_: None = Depends(verify_stat_key)):
-    return await get_distinct_users()
-
-
-@app.get("/stat/api/models")
-async def stat_models(_: None = Depends(verify_stat_key)):
-    return await get_distinct_models()
-
-
-@app.get("/stat/api/usage")
-async def stat_usage(
-    users: str = "",
-    models: str = "",
-    days: str = "",
-    _: None = Depends(verify_stat_key),
-):
-    user_list = [u.strip() for u in users.split(",") if u.strip()] if users else []
-    model_list = [m.strip() for m in models.split(",") if m.strip()] if models else []
-    days_int = _parse_days_param(days)
-    return await get_usage_data(user_list, model_list, days_int)
-
-
-@app.get("/stat/api/summary")
-async def stat_summary(
-    users: str = "",
-    models: str = "",
-    days: str = "",
-    _: None = Depends(verify_stat_key),
-):
-    user_list = [u.strip() for u in users.split(",") if u.strip()] if users else []
-    model_list = [m.strip() for m in models.split(",") if m.strip()] if models else []
-    days_int = _parse_days_param(days)
-    return await get_summary(user_list, model_list, days_int)
-
-
-@app.get("/stat/api/requests")
-async def stat_requests(
-    users: str = "",
-    models: str = "",
-    providers: str = "",
-    status: str = "all",
-    error_code: str = "",
-    request_id: str = "",
-    days: str = "",
-    limit: int = 50,
-    offset: int = 0,
-    _: None = Depends(verify_stat_key),
-):
-    user_list = [u.strip() for u in users.split(",") if u.strip()] if users else []
-    model_list = [m.strip() for m in models.split(",") if m.strip()] if models else []
-    provider_list = [p.strip() for p in providers.split(",") if p.strip()] if providers else []
-    days_int = _parse_days_param(days)
-    return await get_requests(
-        user_list, model_list, provider_list, status, error_code,
-        request_id, days_int, limit=limit, offset=offset,
-    )
 
 
 if __name__ == "__main__":

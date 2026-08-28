@@ -18,7 +18,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pytest_asyncio import fixture as asyncio_fixture
 
-from src.api.main import verify_stat_key
+from src.api.stat_routes import verify_stat_key
 from src.core import usage_db
 from src.core.usage_db import RequestStats, writer
 

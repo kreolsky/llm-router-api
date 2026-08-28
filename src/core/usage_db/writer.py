@@ -175,7 +175,7 @@ async def close_db() -> None:
 # ---------------------------------------------------------------------------
 
 # INVARIANT: stored pricing is USD PER TOKEN (OpenRouter's convention).
-# model_info.yaml is hand-curated — a "per 1M tokens" value would silently
+# Why: model_info.yaml is hand-curated — a "per 1M tokens" value would silently
 # inflate every recorded cost by 10^6, and costs are frozen at write time so
 # the error would be invisible and permanent. Pinned by tests.
 def _compute_cost_usd(stats: RequestStats, app_state: Any | None) -> float | None:
