@@ -161,10 +161,13 @@ class BaseProvider:
         # still reading from them — closing mid-stream aborts live generations.
         # aclose() therefore waits for _idle before closing. Counted from entry
         # into _acquire_slot (before the semaphore wait), so a queued request can
-        # never slip past a drain that already observed zero.
+        # never slip past a drain that already observed zero. _closed flips True
+        # the moment aclose() starts; _acquire_slot refuses to count new requests
+        # after that (see the INVARIANT in _acquire_slot).
         self._inflight = 0
         self._idle = asyncio.Event()
         self._idle.set()
+        self._closed = False
 
         max_concurrent = config.get("max_concurrent")
         if isinstance(max_concurrent, int) and max_concurrent > 0:
@@ -218,7 +221,14 @@ class BaseProvider:
         in-flight request and stream to finish, so a config reload does not abort
         live SSE generations. On timeout the pool is closed anyway — a stuck
         request must never block shutdown forever.
+
+        INVARIANT: _closed is set BEFORE the drain wait starts.
+        Why: the drain only awaits requests counted into _inflight by then; a
+        request acquiring a slot after the drain waiter woke would run on a
+        pool that closes under it. Late acquirers get a 503 from
+        _acquire_slot instead.
         """
+        self._closed = True
         if self.client is None or self.client.is_closed:
             return
         if self._inflight > 0:
@@ -245,7 +255,18 @@ class BaseProvider:
         SERVICE_UNAVAILABLE on timeout. Both the slot and the in-flight count are
         released in the finally block (exception-safe, and reached on generator
         close, so a client disconnect frees them too).
+
+        INVARIANT: once aclose() has started, no new request may acquire a slot.
+        Why: the drain waiter only awaits requests it could count — a late
+        acquirer would enter a pool that closes under it. The check runs before
+        counting into _inflight and again after the semaphore wait (a request
+        queued before the close must not proceed on the drained pool either).
+        Deliberately SERVICE_UNAVAILABLE with error_details="provider pool is
+        closing", NOT PROVIDER_CONCURRENCY_LIMIT — the queue-timeout 503 and
+        the pool-closing 503 must stay distinguishable in the stats rows.
         """
+        if self._closed:
+            raise self._pool_closing_error(request_id)
         self._inflight += 1
         self._idle.clear()
         acquired = False
@@ -264,6 +285,8 @@ class BaseProvider:
                         request_id=request_id,
                         provider_name=self.provider_name,
                     ) from None
+                if self._closed:
+                    raise self._pool_closing_error(request_id)
             yield
         finally:
             if acquired:
@@ -271,6 +294,20 @@ class BaseProvider:
             self._inflight -= 1
             if self._inflight == 0:
                 self._idle.set()
+
+    def _pool_closing_error(self, request_id: str):
+        """503 for a request arriving while the provider pool is draining.
+
+        error_details is always supplied: the SERVICE_UNAVAILABLE template is
+        keyed on it, and omitting it would leak the raw `{error_details}`
+        placeholder to the client.
+        """
+        return create_error(
+            ErrorType.SERVICE_UNAVAILABLE,
+            error_details="provider pool is closing",
+            request_id=request_id,
+            provider_name=self.provider_name,
+        )
 
     def _log_provider_data(self, title: str, data: dict[str, Any], request_id: str, data_flow: str, component: str = None) -> None:
         """Log request/response data with standardized provider context."""

@@ -1087,6 +1087,103 @@ class TestGracefulDrain:
 
 
 # ===================================================================
+# Late slot acquisitions fail fast once a pool starts closing
+# ===================================================================
+
+class TestLateAcquisitionDuringDrain:
+    """Once aclose() begins, a late _acquire_slot must 503, not enter a closing pool.
+
+    A config reload swaps the provider cache, but a coroutine holding a
+    pre-swap instance can call into it after aclose()'s drain waiter woke —
+    without the gate it would run on a pool that closes under it.
+    """
+
+    def _slow_post(self, entered, release):
+        async def post(*a, **k):
+            entered.set()
+            await release.wait()
+            return _mock_response()
+        return post
+
+    @pytest.mark.asyncio
+    async def test_late_acquirer_gets_503_no_placeholder(self):
+        """Holder keeps _idle clear, aclose() is waiting: a NEW acquisition
+        raises 503 whose message carries no `{` token and whose error_code is
+        service_unavailable (not provider_concurrency_limit)."""
+        provider = _build_provider()
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        provider.client.post = self._slow_post(entered, release)
+
+        holder = asyncio.create_task(
+            provider._make_request("POST", "/x", request_body={}, request_id="r1"))
+        await asyncio.wait_for(entered.wait(), timeout=1.0)
+
+        closing = asyncio.create_task(provider.aclose())
+        await asyncio.sleep(0.05)
+        assert not closing.done()
+
+        with pytest.raises(HTTPException) as exc_info:
+            async with provider._acquire_slot("r2"):
+                pass
+        assert exc_info.value.status_code == 503
+        message = exc_info.value.detail["error"]["message"]
+        # The SERVICE_UNAVAILABLE template is keyed on {error_details}; a raw
+        # brace means the kwarg was not supplied.
+        assert "{" not in message
+        assert "closing" in message
+        assert exc_info.value.detail["error"]["metadata"]["error_code"] == "service_unavailable"
+
+        release.set()
+        await asyncio.wait_for(holder, timeout=1.0)
+        await asyncio.wait_for(closing, timeout=1.0)
+        assert provider.client.is_closed
+
+    @pytest.mark.asyncio
+    async def test_queued_acquirer_rechecks_after_semaphore_wait(self):
+        """A request counted BEFORE the close (so the drain waits for it) but
+        still queued on the semaphore re-checks _closed after the wait and
+        fails with 503 instead of proceeding on the drained pool."""
+        provider = _build_limited_provider(1, config_manager=_make_cm(queue_wait_timeout=5.0))
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        provider.client.post = self._slow_post(entered, release)
+
+        holder = asyncio.create_task(
+            provider._make_request("POST", "/x", request_id="r1"))
+        await asyncio.wait_for(entered.wait(), timeout=1.0)
+
+        # r2 counts into _inflight and queues on the semaphore BEFORE aclose.
+        queued = asyncio.create_task(
+            provider._make_request("POST", "/x", request_id="r2"))
+        await asyncio.sleep(0.05)
+        assert not queued.done()
+
+        closing = asyncio.create_task(provider.aclose())
+        await asyncio.sleep(0.05)
+
+        release.set()  # holder finishes → r2's semaphore wait completes → re-check
+        with pytest.raises(HTTPException) as exc_info:
+            await asyncio.wait_for(queued, timeout=1.0)
+        assert exc_info.value.status_code == 503
+        assert exc_info.value.detail["error"]["metadata"]["error_code"] == "service_unavailable"
+
+        await asyncio.wait_for(holder, timeout=1.0)
+        await asyncio.wait_for(closing, timeout=1.0)
+        assert provider.client.is_closed
+
+    @pytest.mark.asyncio
+    async def test_acquisition_before_close_proceeds_untouched(self):
+        """The gate only bites once aclose() started: a normal acquisition on
+        an open provider is unaffected."""
+        provider = _build_provider()
+        async with provider._acquire_slot("r1"):
+            assert provider._inflight == 1
+        assert provider._inflight == 0
+        await provider.aclose()
+
+
+# ===================================================================
 # _create_timeout fallback semantics and call-site timeouts
 # ===================================================================
 
