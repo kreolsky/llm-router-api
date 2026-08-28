@@ -163,7 +163,7 @@ Self-initiate `/review` — never wait to be asked, never auto-fix. Trigger when
 - New module / new provider type / new endpoint / cross-cutting change.
 - **Hot-path touch regardless of diff size** — danger, not volume:
   `src/core/auth.py`, `src/core/config_manager.py`, `src/providers/base.py`,
-  `src/services/chat_service/stream_processor.py`, `src/core/usage_db.py`,
+  `src/services/chat_service/stream_processor.py`, `src/core/usage_db/`,
   `src/api/middleware.py`, `config/user_keys.yaml`.
 - User says "done", "ready", "push", "задеплой", or asks for a commit.
 

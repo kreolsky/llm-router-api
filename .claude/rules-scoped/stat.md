@@ -1,8 +1,8 @@
-# Usage stats — rules for `src/core/usage_db.py`, `src/api/stat_page.py`, `/stat/**`
+# Usage stats — rules for `src/core/usage_db/`, `src/api/stat_page.py`, `/stat/**`
 
 * **One row per request**, errors included; cost is frozen at write time from the merged
   capabilities pricing. The middleware creates the per-request holder, services only enrich
-  it — see the `ARCH:` block at the top of `usage_db.py` before touching either side.
+  it — see the `ARCH:` block at the top of `usage_db/writer.py` before touching either side.
 * The gateway runs **one uvicorn worker** on purpose: the OpenCode session registry, the
   capabilities cache and the SQLite writer are process-local singletons that extra workers
   would silently fork into independent copies. `PRAGMA busy_timeout=5000` is set regardless.

@@ -57,8 +57,8 @@ classes — only the local-`ARCH:` → `WHY:` demotion is in scope.
 ## Single home for contracts
 
 A contract lives in ONE place — the in-code marker on the load-bearing line. `CLAUDE.md`,
-rules files and lessons REFERENCE it (`see INVARIANT in src/core/usage_db.py`), never restate
-it: a copied contract drifts from the code silently.
+rules files and lessons REFERENCE it (`see INVARIANT in src/core/usage_db/writer.py`),
+never restate it: a copied contract drifts from the code silently.
 
 ## Docstrings
 
