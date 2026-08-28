@@ -18,12 +18,26 @@ from ..utils.deep_merge import deep_merge
 from ..utils.mask import mask_headers
 
 
+def _is_rate_limit_error(e: BaseException) -> bool:
+    """429 detection for retry_on_rate_limit.
+
+    Either the exception itself carries status 429, or it wraps one
+    (original_exception.response.status_code == 429, wrapped httpx errors) —
+    the wrapped response may be None, which must mean "not a rate limit",
+    not a crash.
+    """
+    if hasattr(e, 'status_code') and e.status_code == 429:
+        return True
+    original = getattr(e, 'original_exception', None)
+    response = getattr(original, 'response', None)
+    return response is not None and getattr(response, 'status_code', None) == 429
+
+
 def retry_on_rate_limit(max_retries: int | None = None, base_delay: float | None = None, max_delay: float | None = None):
     """Retry decorator for 429 (Too Many Requests) with exponential backoff.
 
     Backoff formula: min(base_delay * 2^attempt, max_delay).
-    Rate-limit detection checks both e.status_code == 429 and
-    e.original_exception.response.status_code == 429 (wrapped httpx errors).
+    Rate-limit detection lives in _is_rate_limit_error.
     Config is read from self.config_manager (first arg); otherwise the decorator
     args / hardcoded defaults are used.
     """
@@ -47,14 +61,7 @@ def retry_on_rate_limit(max_retries: int | None = None, base_delay: float | None
                 try:
                     return await func(*args, **kwargs)
                 except Exception as e:
-                    # Check if this is a rate limit error (429)
-                    is_rate_limit = False
-                    
-                    # Check for HTTPException with rate limit status code
-                    if hasattr(e, 'status_code') and e.status_code == 429 or hasattr(e, 'original_exception') and hasattr(e.original_exception, 'response') and e.original_exception.response.status_code == 429:
-                        is_rate_limit = True
-                    
-                    if is_rate_limit and attempt < actual_max_retries:
+                    if _is_rate_limit_error(e) and attempt < actual_max_retries:
                         delay = min(actual_base_delay * (2 ** attempt), actual_max_delay)
                         last_exception = e
 
@@ -249,12 +256,14 @@ class BaseProvider:
                     await asyncio.wait_for(self._semaphore.acquire(), timeout=wait)
                     acquired = True
                 except TimeoutError:
+                    # from None: the semaphore wait timing out is expected
+                    # control flow, fully described by the error itself.
                     raise create_error(
                         ErrorType.PROVIDER_CONCURRENCY_LIMIT,
                         error_details="Concurrency limit reached for provider; retry later.",
                         request_id=request_id,
                         provider_name=self.provider_name,
-                    )
+                    ) from None
             yield
         finally:
             if acquired:
@@ -279,16 +288,19 @@ class BaseProvider:
     def _create_timeout(self, connect: float = None, read: float = None,
                         write: float = None, pool: float = None) -> httpx.Timeout:
         """
-        Create an httpx.Timeout with sensible defaults from the client.
+        Create an httpx.Timeout with the client's defaults for anything unspecified.
 
-        Unspecified connect/pool values inherit from the client's timeout.
-        Unspecified read/write values default to None (no timeout).
+        WHY: every unspecified field — read and write included, exactly like
+        connect/pool — inherits from the client's timeout. Passing None would
+        mean "no timeout", letting a silent upstream hold its concurrency slot
+        and in-flight count until the aclose() drain timeout.
         """
+        client_timeout = self.client.timeout
         return httpx.Timeout(
-            connect=connect if connect is not None else self.client.timeout.connect,
-            read=read,
-            write=write,
-            pool=pool if pool is not None else self.client.timeout.pool
+            connect=connect if connect is not None else client_timeout.connect,
+            read=read if read is not None else client_timeout.read,
+            write=write if write is not None else client_timeout.write,
+            pool=pool if pool is not None else client_timeout.pool
         )
 
     def _apply_model_config(self, request_body: dict[str, Any], provider_model_name: str,
@@ -360,13 +372,17 @@ class BaseProvider:
             merged[name] = value
         return merged
 
+    # WHY noqa ASYNC109 (both _make_request defs): `timeout` is the provider
+    # API parameter passed straight to httpx (per-request httpx.Timeout), not
+    # a wait bound this function owns — wrapping the body in asyncio.timeout()
+    # would double-cap streaming-adjacent calls for no benefit.
     async def _make_request(
         self,
         method: str,
         path: str,
         request_body: dict[str, Any] = None,
         extra_headers: dict[str, str] = None,
-        timeout: httpx.Timeout = None,
+        timeout: httpx.Timeout = None,  # noqa: ASYNC109
         files: dict[str, Any] = None,
         data: dict[str, Any] = None,
         request_id: str = "unknown"
@@ -394,7 +410,7 @@ class BaseProvider:
         path: str,
         request_body: dict[str, Any] = None,
         extra_headers: dict[str, str] = None,
-        timeout: httpx.Timeout = None,
+        timeout: httpx.Timeout = None,  # noqa: ASYNC109
         files: dict[str, Any] = None,
         data: dict[str, Any] = None,
         request_id: str = "unknown"
@@ -455,12 +471,12 @@ class BaseProvider:
         except json.JSONDecodeError as e:
             raise create_error(ErrorType.PROVIDER_INVALID_RESPONSE, original_exception=e,
                              error_details=f"Non-JSON response (status {response.status_code})",
-                             request_id=request_id, provider_name=self.provider_name)
+                             request_id=request_id, provider_name=self.provider_name) from e
         except httpx.HTTPStatusError as e:
             self._raise_provider_http_error(e, request_id)
         except httpx.RequestError as e:
             raise create_error(ErrorType.PROVIDER_NETWORK_ERROR, original_exception=e,
-                             error_details=str(e), request_id=request_id, provider_name=self.provider_name)
+                             error_details=str(e), request_id=request_id, provider_name=self.provider_name) from e
 
     async def _stream_request(self, client: httpx.AsyncClient, url_path: str,
                               request_body: dict[str, Any], request_id: str = "unknown",

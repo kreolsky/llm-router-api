@@ -14,7 +14,11 @@ class OpenAICompatibleProvider(BaseProvider):
         request_body = self._apply_model_config(request_body, provider_model_name, model_config)
 
         connect_timeout = self._get_timeout("openai_connect_timeout", 60.0)
-        non_stream_timeout = self._create_timeout(connect=connect_timeout)
+        # WHY: read is capped by stream_read_timeout — the same env knob aclose()
+        # drains on as "the longest a legitimate request may run" — so a silent
+        # upstream cannot hold the concurrency slot and _inflight forever.
+        read_timeout = self._get_timeout("stream_read_timeout", 300.0)
+        non_stream_timeout = self._create_timeout(connect=connect_timeout, read=read_timeout)
 
         return await self._make_request(
             method="POST",
@@ -78,7 +82,9 @@ class OpenAICompatibleProvider(BaseProvider):
         request_body = self._apply_model_config(request_body, provider_model_name, model_config)
 
         read_timeout = self._get_timeout("openai_embeddings_read_timeout", 30.0)
-        embeddings_timeout = self._create_timeout(connect=10.0, read=read_timeout, write=10.0, pool=10.0)
+        # WHY: no hardcoded connect/write/pool — the client's own defaults
+        # (HTTPX_CONNECT_TIMEOUT etc.) cover them via _create_timeout fallback.
+        embeddings_timeout = self._create_timeout(read=read_timeout)
 
         return await self._make_request(
             method="POST",

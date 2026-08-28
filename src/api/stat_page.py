@@ -11,5 +11,8 @@ _HTML_PATH = os.path.join(STATIC_DIR, "stat.html")
 
 
 async def stat_page(request: Request) -> HTMLResponse:
-    with open(_HTML_PATH) as f:
+    # WHY noqa ASYNC230: the HTML is (re)read per request on purpose — editing
+    # src/static/stat.html shows up on the next reload without a container
+    # restart; a home-lab dashboard is worth that blocking millisecond.
+    with open(_HTML_PATH) as f:  # noqa: ASYNC230
         return HTMLResponse(content=f.read())

@@ -1,6 +1,7 @@
 """YAML-based configuration management with hot-reload support."""
 # SYSTEM: config — YAML load, 5s hot reload, env-backed settings
 import asyncio
+import contextlib
 import os
 from typing import Any
 
@@ -170,7 +171,9 @@ class ConfigManager:
         ("httpx_max_keepalive_connections", "HTTPX_MAX_KEEPALIVE_CONNECTIONS", 20, int),
         ("httpx_connect_timeout", "HTTPX_CONNECT_TIMEOUT", 60.0, float),
         ("httpx_pool_timeout", "HTTPX_POOL_TIMEOUT", 5.0, float),
-        # WHY: without a read timeout, requests hang indefinitely when providers are unreachable
+        # WHY: HTTPX_READ_TIMEOUT is only the client-default READ fallback —
+        # every field _create_timeout leaves unspecified lands here; stream and
+        # non-stream chat override it per call site with stream_read_timeout.
         ("httpx_read_timeout", "HTTPX_READ_TIMEOUT", 60.0, float),
         # WHY: streaming can be long-lived; a separate read timeout keeps non-stream requests snappy
         ("stream_read_timeout", "STREAM_READ_TIMEOUT", 300.0, float),
@@ -281,10 +284,8 @@ class ConfigManager:
         """Read mtimes of the watched files, skipping the ones that are absent."""
         mtimes = {}
         for fpath in self._watched_files:
-            try:
+            with contextlib.suppress(FileNotFoundError):
                 mtimes[fpath] = os.path.getmtime(fpath)
-            except FileNotFoundError:
-                pass
         return mtimes
 
     def _initialize_mtimes(self):

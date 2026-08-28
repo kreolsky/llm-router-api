@@ -1,6 +1,7 @@
 """FastAPI application, lifespan management, and route definitions."""
 # SYSTEM: api-app — FastAPI app, lifespan, routes, eager provider validation
 import asyncio
+import contextlib
 import hmac
 from contextlib import asynccontextmanager
 
@@ -79,15 +80,11 @@ async def lifespan(app: FastAPI):
     yield
 
     reload_task.cancel()
-    try:
+    with contextlib.suppress(asyncio.CancelledError):
         await reload_task
-    except asyncio.CancelledError:
-        pass
     capabilities_task.cancel()
-    try:
+    with contextlib.suppress(asyncio.CancelledError):
         await capabilities_task
-    except asyncio.CancelledError:
-        pass
     # Close every provider-owned pool on shutdown (awaited so pools drain).
     await clear_provider_cache_async()
     await close_db()
@@ -129,6 +126,31 @@ async def custom_http_exception_handler(request: Request, exc: HTTPException):
     )
 
 app.add_middleware(RequestLoggerMiddleware)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """OpenRouter envelope for unhandled exceptions (ServerErrorMiddleware's layer).
+
+    Starlette re-raises after this handler responds (uvicorn still logs the
+    traceback), so the response is sent exactly once. Usage-stats flushing is
+    unaffected: RequestLoggerMiddleware sits BELOW ServerErrorMiddleware, so
+    its ``finally`` still records the row as a 500. The message is generic on
+    purpose — the traceback lives in the server log, not the client response.
+    No exc_info here on purpose: RequestLoggerMiddleware below already logs
+    the full traceback with the request_id, and uvicorn logs the re-raise.
+    """
+    logger.error(
+        f"Unhandled exception: {type(exc).__name__}: {exc}",
+        request_id=request_context(request).request_id,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"error": {"code": 500,
+                           "message": "Internal server error",
+                           "metadata": {"error_code": "internal_server_error"}}},
+    )
+
 
 @app.get("/health")
 async def health_check():
@@ -267,6 +289,29 @@ async def verify_stat_key(
         )
 
 
+def _parse_days_param(days: str) -> int | None:
+    """Parse the `days` query param shared by the /stat/api endpoints.
+
+    WHY kept a string: the dashboard's "All" button sends an EMPTY value
+    (stat.html), which must mean "no day filter" — a bare `days: int | None`
+    would 422 that button. Non-numeric input answers 422 in the OpenRouter
+    envelope instead of a ValueError-driven 500.
+    """
+    if not days or not days.strip():
+        return None
+    try:
+        return int(days)
+    except ValueError:
+        # from None: the ValueError is the client's own bad input — nothing
+        # to chain for the server log.
+        raise HTTPException(
+            status_code=422,
+            detail={"error": {"code": 422,
+                              "message": f"Query parameter 'days' must be an integer, got {days!r}",
+                              "metadata": {}}},
+        ) from None
+
+
 @app.get("/stat/")
 async def stat_dashboard(request: Request):
     # The page stays open even with STAT_API_KEY set: it is what prompts for
@@ -293,7 +338,7 @@ async def stat_usage(
 ):
     user_list = [u.strip() for u in users.split(",") if u.strip()] if users else []
     model_list = [m.strip() for m in models.split(",") if m.strip()] if models else []
-    days_int = int(days) if days else None
+    days_int = _parse_days_param(days)
     return await get_usage_data(user_list, model_list, days_int)
 
 
@@ -306,7 +351,7 @@ async def stat_summary(
 ):
     user_list = [u.strip() for u in users.split(",") if u.strip()] if users else []
     model_list = [m.strip() for m in models.split(",") if m.strip()] if models else []
-    days_int = int(days) if days else None
+    days_int = _parse_days_param(days)
     return await get_summary(user_list, model_list, days_int)
 
 
@@ -326,7 +371,7 @@ async def stat_requests(
     user_list = [u.strip() for u in users.split(",") if u.strip()] if users else []
     model_list = [m.strip() for m in models.split(",") if m.strip()] if models else []
     provider_list = [p.strip() for p in providers.split(",") if p.strip()] if providers else []
-    days_int = int(days) if days else None
+    days_int = _parse_days_param(days)
     return await get_requests(
         user_list, model_list, provider_list, status, error_code,
         request_id, days_int, limit=limit, offset=offset,

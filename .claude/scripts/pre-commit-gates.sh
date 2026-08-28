@@ -35,14 +35,11 @@ run_gate "systems-index"  python3 .claude/scripts/systems-index.py --check
 run_gate "func-length"    python3 .claude/scripts/func-length-gate.py
 run_gate "debt-ledger"    python3 .claude/scripts/debt-gate.py
 
-# ADVISORY, never blocking: the tree carries ~526 pre-existing ruff findings under
-# default rules and no ruff config. Making that a gate on day one would mean a red
-# block nobody can clear, which is how a gate becomes something people route around.
-# Promote it once the backlog is cleaned or a baseline is committed.
-if command -v ruff >/dev/null 2>&1; then
-  N=$(ruff check src tests 2>/dev/null | grep -cE '^(src|tests)/' || true)
-  [ "${N:-0}" -gt 0 ] && printf '  note  ruff: %s finding(s) — advisory, not gated (see this script)\n' "$N"
-fi
+# ruff: BLOCKING over src/ only. The rule set is pinned in pyproject.toml and the
+# binary in requirements-dev.txt (ruff==0.16.0) — a gate whose rules depend on who
+# runs it is not a gate. tests/ still carries ~57 findings; linting tests is a
+# fresh task, so the gate deliberately does not cover them yet.
+run_gate "ruff-src"       ruff check src/
 
 if [ ${#FAILED[@]} -gt 0 ]; then
   printf '\nBLOCKED — %d gate(s) failed: %s\n' "${#FAILED[@]}" "${FAILED[*]}"

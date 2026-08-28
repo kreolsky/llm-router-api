@@ -57,7 +57,12 @@ that was properly tested. Optional tooling: `.claude/scripts/size-estimate.py` (
 - **Phase 2 — TDD as a GATE** (L only). Failing tests BEFORE implementation. S and M still
   write tests — what L adds is the red run as a gate. Never read this as "S/M may skip
   testing": the tests are what makes committing straight to `dev` safe.
-- **Phase 3 — Implement.** Run tests after each logical step; breadth from the entanglement
+- **Phase 3 — Implement.** A running plan does not wait on a human: ambiguities, conflicts
+  and plan defects are RULED ON, logged as `Ruling: <what> — <why> — <cost if wrong>`, and
+  execution continues. Four things still stop it: an irreversible or destructive operation, a
+  security-sensitive action, a side effect outside this tree (merge, push, deploy), and a plan
+  where every path forward is a guess (that last one is Error recovery's *Pivot*, which does
+  stop and ask). Run tests after each logical step; breadth from the entanglement
   table, commands in `.claude/rules-scoped/testing-ops.md`. Add `ARCH:`/`INVARIANT:`/`WHY:`
   markers (`documentation.md`). If you add/rename/remove/move a `SYSTEM:` marker,
   regenerate `SYSTEMS.md` (`python3 .claude/scripts/systems-index.py --write`) and commit
@@ -83,6 +88,12 @@ that was properly tested. Optional tooling: `.claude/scripts/size-estimate.py` (
 1. **Understand** — restate current vs expected behaviour + the code paths. Get confirmation.
    A wrong cause baked into a plan survives every later turn.
 2. **Write failing tests** — run them; all must fail for the right reasons.
+   A regression test written AFTER the fix has never been seen to fail, so it may be asserting
+   nothing: in a repeatedly-regressing area — the same trigger that owes an `INVARIANT:` per
+   `documentation.md` — prove it red by reverting the fix, running, seeing it fail, restoring,
+   running again. Elsewhere this is not owed; acceptance stays proportional (Phase 4). Why: a
+   test that passes with AND against the fix is the "no failing branch" defect in `testing.md`,
+   arrived at from the other side.
 3. **Review from tests** — adjust the approach based on what writing them revealed.
 4. **Implement** — run new + existing tests after each step.
 5. **Review vs plan** — missed edge cases, incomplete guards.
@@ -181,6 +192,10 @@ contradicting the user's latest stated rule (stop and ask which is wrong).
 1. **Retry** — re-read the error; check types/imports/signatures. Max 3.
 2. **Instrument** — add logging, reproduce, read actual output before coding another fix. Max 2.
 3. **Pivot** — step back; propose a simpler approach. Do NOT implement without approval.
+   Past attempt 3 the accumulated context is mostly wrong hypotheses, and each new one is
+   conditioned on them: re-approach from a FRESH context (a subagent given the symptom and the
+   file paths, not the transcript), on a more capable model. Carry over the falsified
+   hypotheses as a list of what is already ruled out — never the reasoning that produced them.
 4. **Stop** — write up tried/observed/hypotheses to `lessons/`, ask for guidance.
 
 ## Hard rules (non-negotiable)

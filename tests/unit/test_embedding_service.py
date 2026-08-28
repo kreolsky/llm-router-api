@@ -44,6 +44,21 @@ class TestInvalidJsonBody:
         assert exc_info.value.status_code == 400
         assert "valid JSON body" in exc_info.value.detail["error"]["message"]
 
+    @pytest.mark.asyncio
+    async def test_invalid_utf8_body_raises_400_not_500(self):
+        """Non-UTF-8 bytes raise UnicodeDecodeError (not JSONDecodeError) — still a 400."""
+        request = _make_request(b"\xff\xfe")
+        request.json = AsyncMock(
+            side_effect=UnicodeDecodeError("utf-8", b"\xff\xfe", 0, 1, "invalid start byte")
+        )
+        service = EmbeddingService(_make_config_manager())
+
+        with pytest.raises(HTTPException) as exc_info:
+            await service.create_embeddings(request, ("proj", "sk-1", [], []))
+
+        assert exc_info.value.status_code == 400
+        assert "valid JSON body" in exc_info.value.detail["error"]["message"]
+
 
 class TestIdentityHeadersForwarded:
 
