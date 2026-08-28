@@ -151,6 +151,8 @@ function renderSummary(data) {
     card('Completion tokens', fmtTokens(t.completion_tokens),
          fmtTokens(t.reasoning_tokens) + ' reasoning'),
     card('Total tokens', fmtTokens(t.total_tokens), null),
+    card('Cached tokens', fmtTokens(t.cached_tokens),
+         'hit ' + fmtRate(t.cache_hit_rate)),
     card('Cost', fmtCost(t.cost_usd),
          t.unpriced ? t.unpriced + ' requests unpriced' : null),
   ];
@@ -288,7 +290,16 @@ function renderChart(series) {
         legend: {
           labels: { color: '#c9d1d9', boxWidth: 12, padding: 4, font: { size: 10 } },
         },
-        tooltip: { mode: 'index', intersect: false },
+        tooltip: {
+          mode: 'index',
+          intersect: false,
+          // WHY: 46 user/model series x 3 metrics = 138 tooltip lines, most of
+          // them zero on any given day. The screen fits ~25, alphabetically
+          // first, so a real peak reads as "all zeros". Drop the empty ones and
+          // put the largest first.
+          filter: item => item.parsed.y > 0,
+          itemSort: (a, b) => b.parsed.y - a.parsed.y,
+        },
       },
       scales: {
         x: {
