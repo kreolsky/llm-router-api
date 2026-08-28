@@ -130,6 +130,31 @@ async def custom_http_exception_handler(request: Request, exc: HTTPException):
 
 app.add_middleware(RequestLoggerMiddleware)
 
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """OpenRouter envelope for unhandled exceptions (ServerErrorMiddleware's layer).
+
+    Starlette re-raises after this handler responds (uvicorn still logs the
+    traceback), so the response is sent exactly once. Usage-stats flushing is
+    unaffected: RequestLoggerMiddleware sits BELOW ServerErrorMiddleware, so
+    its ``finally`` still records the row as a 500. The message is generic on
+    purpose — the traceback lives in the server log, not the client response.
+    No exc_info here on purpose: RequestLoggerMiddleware below already logs
+    the full traceback with the request_id, and uvicorn logs the re-raise.
+    """
+    logger.error(
+        f"Unhandled exception: {type(exc).__name__}: {exc}",
+        request_id=request_context(request).request_id,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"error": {"code": 500,
+                           "message": "Internal server error",
+                           "metadata": {"error_code": "internal_server_error"}}},
+    )
+
+
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
