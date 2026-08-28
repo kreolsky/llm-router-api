@@ -17,6 +17,7 @@ duplicated by the cache — unlike ``utils.deep_merge`` which concatenates lists
 """
 # SYSTEM: model-capabilities — manual layer + auto-cache + render
 import asyncio
+import contextlib
 import json
 import os
 import tempfile
@@ -334,11 +335,12 @@ class CapabilitiesCache:
     def persist(self) -> None:
         """Atomically write the cache to disk.
 
-        Uses a UNIQUE temp file per write (mkstemp) so that concurrent uvicorn
-        workers — each running their own refresh task and writing the same final
-        path — never rename each other's source file (which would raise ENOENT
-        on os.replace). Last writer wins on the final path; content is
-        equivalent across workers.
+        Uses a UNIQUE temp file per write (mkstemp) plus os.replace, so a crash
+        between write and rename never leaves a truncated cache. Uniqueness also
+        keeps concurrent writers (a stray second process against the same data/
+        volume) from renaming each other's source file (ENOENT on os.replace);
+        last writer wins on the final path. Within the one-worker invariant
+        (see Dockerfile) there is exactly one writer.
         """
         directory = os.path.dirname(self._path) or "."
         os.makedirs(directory, exist_ok=True)
@@ -348,10 +350,8 @@ class CapabilitiesCache:
                 json.dump(self._data, f)
             os.replace(tmp, self._path)
         except Exception:
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(tmp)
-            except OSError:
-                pass
             raise
 
 

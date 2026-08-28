@@ -10,8 +10,8 @@ from ..core.config_manager import ConfigManager
 from ..core.context import RequestContext, request_context
 from ..core.error_handling import ErrorType, create_error
 from ..core.header_policy import (
-    FORWARDED_HEADER_DENYLIST,
     FORWARDED_HEADER_DENY_PREFIXES,
+    FORWARDED_HEADER_DENYLIST,
 )
 from ..core.logging import logger
 from ..providers import get_provider_instance
@@ -40,7 +40,7 @@ class BaseService:
                 original_exception=e,
                 error_details=str(e),
                 **error_ctx,
-            )
+            ) from e
 
     def _get_request_context(self, request: Request | None) -> RequestContext:
         """Return the typed RequestContext carried by the request."""

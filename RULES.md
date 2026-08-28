@@ -53,11 +53,23 @@ missed, the next move is a hook, not a firmer sentence.
 ## Gates (`.claude/scripts/`)
 
 `pre-commit-gates.sh` runs them all in a couple of seconds — **run it unpiped before any
-push**: `invariant-why`, `systems-index --check`, `func-length`, `debt-ledger`. Each is
-zero-net-growth against a committed baseline in `.claude/baselines/`; intentional growth is a
-`--update` in the same commit with justification. `plan-shape-gate.py` deliberately does NOT
-gate the commit — it fires on the plan write and at `/implement` load, the two moments where
-a reshape is still free. ruff is advisory only (a ~526-finding backlog and no config).
+push**: `invariant-why`, `systems-index --check`, `func-length`, `debt-ledger`, `ruff-src`.
+Each is zero-net-growth against a committed baseline in `.claude/baselines/`; intentional
+growth is a `--update` in the same commit with justification. `plan-shape-gate.py`
+deliberately does NOT gate the commit — it fires on the plan write and at `/implement`
+load, the two moments where a reshape is still free. ruff gates `src/` (rules pinned in
+`pyproject.toml`, binary in `requirements-dev.txt`); `tests/` is not covered yet.
+
+  Observation: $ ruff check src/          # 2026-08-27, audit-debt branch, before the fix batch
+               Found 26 errors.
+               [*] 1 fixable with the `--fix` option (9 hidden fixes can be enabled with the `--unsafe-fixes` option).
+               $ ruff check src/          # after: fixes + per-file-ignores + targeted noqa/WHY
+               All checks passed!
+  Rule:        `ruff check src/` is a BLOCKING pre-commit gate (`ruff-src` in
+               pre-commit-gates.sh). The old "~526 findings, advisory only" note described
+               the pre-config tree; the explicit pyproject rule set + pinned ruff made it
+               false. tests/ (~57 findings) stays out of the gate until linted as its own task.
+  File:        .claude/scripts/pre-commit-gates.sh — advisory block replaced by the gate.
 
 ## Skills (invoke via `/command`)
 

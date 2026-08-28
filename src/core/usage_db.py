@@ -458,7 +458,11 @@ async def get_usage_data(
 
     series = []
     for s in series_map.values():
-        date_map = dict(zip(s["dates"], zip(s["prompt"], s["cached"], s["completion"])))
+        # strict=True: dates and the metric triples are appended together row by
+        # row, so unequal lengths would mean corrupted series data — fail loudly.
+        date_map = dict(zip(s["dates"],
+                            zip(s["prompt"], s["cached"], s["completion"], strict=True),
+                            strict=True))
         aligned_prompt = []
         aligned_cached = []
         aligned_completion = []

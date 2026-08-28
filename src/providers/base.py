@@ -256,12 +256,14 @@ class BaseProvider:
                     await asyncio.wait_for(self._semaphore.acquire(), timeout=wait)
                     acquired = True
                 except TimeoutError:
+                    # from None: the semaphore wait timing out is expected
+                    # control flow, fully described by the error itself.
                     raise create_error(
                         ErrorType.PROVIDER_CONCURRENCY_LIMIT,
                         error_details="Concurrency limit reached for provider; retry later.",
                         request_id=request_id,
                         provider_name=self.provider_name,
-                    )
+                    ) from None
             yield
         finally:
             if acquired:
@@ -370,13 +372,17 @@ class BaseProvider:
             merged[name] = value
         return merged
 
+    # WHY noqa ASYNC109 (both _make_request defs): `timeout` is the provider
+    # API parameter passed straight to httpx (per-request httpx.Timeout), not
+    # a wait bound this function owns — wrapping the body in asyncio.timeout()
+    # would double-cap streaming-adjacent calls for no benefit.
     async def _make_request(
         self,
         method: str,
         path: str,
         request_body: dict[str, Any] = None,
         extra_headers: dict[str, str] = None,
-        timeout: httpx.Timeout = None,
+        timeout: httpx.Timeout = None,  # noqa: ASYNC109
         files: dict[str, Any] = None,
         data: dict[str, Any] = None,
         request_id: str = "unknown"
@@ -404,7 +410,7 @@ class BaseProvider:
         path: str,
         request_body: dict[str, Any] = None,
         extra_headers: dict[str, str] = None,
-        timeout: httpx.Timeout = None,
+        timeout: httpx.Timeout = None,  # noqa: ASYNC109
         files: dict[str, Any] = None,
         data: dict[str, Any] = None,
         request_id: str = "unknown"
@@ -465,12 +471,12 @@ class BaseProvider:
         except json.JSONDecodeError as e:
             raise create_error(ErrorType.PROVIDER_INVALID_RESPONSE, original_exception=e,
                              error_details=f"Non-JSON response (status {response.status_code})",
-                             request_id=request_id, provider_name=self.provider_name)
+                             request_id=request_id, provider_name=self.provider_name) from e
         except httpx.HTTPStatusError as e:
             self._raise_provider_http_error(e, request_id)
         except httpx.RequestError as e:
             raise create_error(ErrorType.PROVIDER_NETWORK_ERROR, original_exception=e,
-                             error_details=str(e), request_id=request_id, provider_name=self.provider_name)
+                             error_details=str(e), request_id=request_id, provider_name=self.provider_name) from e
 
     async def _stream_request(self, client: httpx.AsyncClient, url_path: str,
                               request_body: dict[str, Any], request_id: str = "unknown",

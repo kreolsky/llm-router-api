@@ -69,7 +69,7 @@ class TranscriptionService(BaseService):
         stats = request_stats(request)
         stats.model_id = model_id
 
-        error_ctx = dict(request_id=request_id, user_id=user_id, model_id=model_id)
+        error_ctx = {"request_id": request_id, "user_id": user_id, "model_id": model_id}
 
         async with self._guard_service_errors(error_ctx):
             model_config, provider_name, provider_model_name, provider_config = \

@@ -21,5 +21,11 @@ exclude = [".venv", "data", "logs", ".kilo"]
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I", "UP", "B", "SIM", "ASYNC", "C4"]
 
+[tool.ruff.lint.per-file-ignores]
+# B008: FastAPI's own idiom — File()/Form()/Security() defaults in endpoint and
+# dependency signatures are how the framework declares optional parts.
+"src/api/main.py" = ["B008"]
+"src/core/auth.py" = ["B008"]
+
 [tool.ruff.lint.isort]
 known-first-party = ["src"]

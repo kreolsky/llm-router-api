@@ -1,6 +1,7 @@
 """FastAPI application, lifespan management, and route definitions."""
 # SYSTEM: api-app — FastAPI app, lifespan, routes, eager provider validation
 import asyncio
+import contextlib
 import hmac
 from contextlib import asynccontextmanager
 
@@ -79,15 +80,11 @@ async def lifespan(app: FastAPI):
     yield
 
     reload_task.cancel()
-    try:
+    with contextlib.suppress(asyncio.CancelledError):
         await reload_task
-    except asyncio.CancelledError:
-        pass
     capabilities_task.cancel()
-    try:
+    with contextlib.suppress(asyncio.CancelledError):
         await capabilities_task
-    except asyncio.CancelledError:
-        pass
     # Close every provider-owned pool on shutdown (awaited so pools drain).
     await clear_provider_cache_async()
     await close_db()

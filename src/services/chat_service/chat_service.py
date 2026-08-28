@@ -48,7 +48,7 @@ class ChatService(BaseService):
             data_flow="incoming"
         )
 
-        error_ctx = dict(request_id=request_id, user_id=user_id, model_id=requested_model)
+        error_ctx = {"request_id": request_id, "user_id": user_id, "model_id": requested_model}
 
         model_config, provider_name, provider_model_name, provider_config = \
             self._validate_and_get_config(requested_model, auth_data, **error_ctx)

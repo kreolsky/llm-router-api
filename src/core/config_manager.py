@@ -1,6 +1,7 @@
 """YAML-based configuration management with hot-reload support."""
 # SYSTEM: config — YAML load, 5s hot reload, env-backed settings
 import asyncio
+import contextlib
 import os
 from typing import Any
 
@@ -283,10 +284,8 @@ class ConfigManager:
         """Read mtimes of the watched files, skipping the ones that are absent."""
         mtimes = {}
         for fpath in self._watched_files:
-            try:
+            with contextlib.suppress(FileNotFoundError):
                 mtimes[fpath] = os.path.getmtime(fpath)
-            except FileNotFoundError:
-                pass
         return mtimes
 
     def _initialize_mtimes(self):
