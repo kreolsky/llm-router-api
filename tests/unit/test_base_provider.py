@@ -10,6 +10,7 @@ import pytest
 from fastapi import HTTPException
 
 from src.providers.base import BaseProvider, retry_on_rate_limit
+from src.providers.openai import OpenAICompatibleProvider
 
 # ---------------------------------------------------------------------------
 # Concrete subclass so we can instantiate the (otherwise abstract-ish) base
@@ -72,6 +73,10 @@ def _make_cm(**overrides):
     cm.httpx_connect_timeout = overrides.get("httpx_connect_timeout", 60.0)
     cm.httpx_read_timeout = overrides.get("httpx_read_timeout", 60.0)
     cm.httpx_pool_timeout = overrides.get("httpx_pool_timeout", 5.0)
+    cm.stream_read_timeout = overrides.get("stream_read_timeout", 300.0)
+    cm.openai_connect_timeout = overrides.get("openai_connect_timeout", 60.0)
+    cm.openai_transcription_timeout = overrides.get("openai_transcription_timeout", 3600.0)
+    cm.openai_embeddings_read_timeout = overrides.get("openai_embeddings_read_timeout", 30.0)
     return cm
 
 
@@ -1084,3 +1089,141 @@ class TestGracefulDrain:
 
         await asyncio.wait_for(provider.aclose(), timeout=1.0)
         assert provider.client.is_closed
+
+
+# ===================================================================
+# _create_timeout fallback semantics and call-site timeouts
+# ===================================================================
+
+class TestCreateTimeoutFallback:
+    """Unspecified values inherit from the client's timeout — read and write included."""
+
+    def test_unspecified_read_write_inherit_from_client(self):
+        cm = _make_cm(httpx_connect_timeout=11.0, httpx_read_timeout=77.0, httpx_pool_timeout=4.0)
+        provider = _build_provider(config_manager=cm)
+
+        t = provider._create_timeout()
+
+        assert t.connect == 11.0
+        assert t.read == 77.0
+        assert t.write == provider.client.timeout.write
+        assert t.pool == 4.0
+
+    def test_explicit_values_win_over_client(self):
+        provider = _build_provider(config_manager=_make_cm())
+
+        t = provider._create_timeout(connect=1.0, read=2.0, write=3.0, pool=4.0)
+
+        assert (t.connect, t.read, t.write, t.pool) == (1.0, 2.0, 3.0, 4.0)
+
+
+class TestCallSiteTimeouts:
+    """Every provider call site must produce a Timeout with a real read cap."""
+
+    def _openai_provider(self, cm):
+        config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY"}
+        with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
+            provider = OpenAICompatibleProvider(config, config_manager=cm)
+        captured = {}
+
+        async def fake_make_request(**kwargs):
+            captured.update(kwargs)
+            return {"ok": True}
+
+        provider._make_request = fake_make_request
+        return provider, captured
+
+    @pytest.mark.asyncio
+    async def test_chat_non_stream_read_is_stream_read_timeout(self):
+        """Non-stream chat is capped by stream_read_timeout — a silent upstream must
+        not hold its concurrency slot and in-flight count forever."""
+        cm = _make_cm(httpx_connect_timeout=60.0, httpx_read_timeout=60.0,
+                      httpx_pool_timeout=5.0, stream_read_timeout=300.0)
+        provider, captured = self._openai_provider(cm)
+
+        await provider.chat_completions({"messages": []}, "m", {})
+
+        t = captured["timeout"]
+        assert t.read == 300.0
+        assert t.connect == 60.0
+        assert t.pool == 5.0
+        assert t.write == provider.client.timeout.write
+
+    @pytest.mark.asyncio
+    async def test_transcription_read_is_transcription_timeout(self):
+        cm = _make_cm(httpx_connect_timeout=60.0, httpx_pool_timeout=5.0,
+                      openai_transcription_timeout=3600.0)
+        provider, captured = self._openai_provider(cm)
+
+        await provider.transcriptions(
+            {"audio": {"filename": "a.ogg", "content_type": "audio/ogg", "data": b"x"},
+             "params": {}},
+            "m", {})
+
+        t = captured["timeout"]
+        assert t.read == 3600.0
+        assert t.connect == 60.0
+        assert t.pool == 5.0
+
+    @pytest.mark.asyncio
+    async def test_embeddings_hardcoded_timeouts_dropped(self):
+        """The old hardcoded connect=10/write=10/pool=10 are gone; client defaults cover them."""
+        cm = _make_cm(httpx_connect_timeout=60.0, httpx_read_timeout=60.0,
+                      httpx_pool_timeout=5.0, openai_embeddings_read_timeout=30.0)
+        provider, captured = self._openai_provider(cm)
+
+        await provider.embeddings({"input": "hi"}, "m", {})
+
+        t = captured["timeout"]
+        assert t.read == 30.0
+        assert t.connect == 60.0
+        assert t.pool == 5.0
+        assert t.write == provider.client.timeout.write
+
+    @pytest.mark.asyncio
+    async def test_stream_read_is_stream_read_timeout(self):
+        cm = _make_cm(httpx_connect_timeout=60.0, httpx_read_timeout=60.0,
+                      httpx_pool_timeout=5.0, stream_read_timeout=321.0)
+        provider = self._openai_provider(cm)[0]
+
+        captured = {}
+
+        class _FakeStreamResponse:
+            status_code = 200
+            headers: dict = {}
+
+            def raise_for_status(self):
+                return None
+
+            async def aiter_bytes(self):
+                if False:
+                    yield b""
+
+        class _FakeStreamCM:
+            def __init__(self, resp):
+                self._resp = resp
+
+            async def __aenter__(self):
+                return self._resp
+
+            async def __aexit__(self, *exc):
+                return False
+
+        fake_client = MagicMock()
+        fake_client.timeout = httpx.Timeout(connect=60.0, read=60.0, write=None, pool=5.0)
+
+        def stream(*args, **kwargs):
+            captured.update(kwargs)
+            return _FakeStreamCM(_FakeStreamResponse())
+
+        fake_client.stream = stream
+        provider.client = fake_client
+
+        chunks = [c async for c in provider._stream_request(fake_client, "/chat/completions", {})]
+        assert chunks == []
+
+        t = captured["timeout"]
+        assert t.read == 321.0
+        assert t.connect == 60.0
+        assert t.pool == 5.0
+

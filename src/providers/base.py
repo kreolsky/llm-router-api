@@ -279,16 +279,19 @@ class BaseProvider:
     def _create_timeout(self, connect: float = None, read: float = None,
                         write: float = None, pool: float = None) -> httpx.Timeout:
         """
-        Create an httpx.Timeout with sensible defaults from the client.
+        Create an httpx.Timeout with the client's defaults for anything unspecified.
 
-        Unspecified connect/pool values inherit from the client's timeout.
-        Unspecified read/write values default to None (no timeout).
+        WHY: every unspecified field — read and write included, exactly like
+        connect/pool — inherits from the client's timeout. Passing None would
+        mean "no timeout", letting a silent upstream hold its concurrency slot
+        and in-flight count until the aclose() drain timeout.
         """
+        client_timeout = self.client.timeout
         return httpx.Timeout(
-            connect=connect if connect is not None else self.client.timeout.connect,
-            read=read,
-            write=write,
-            pool=pool if pool is not None else self.client.timeout.pool
+            connect=connect if connect is not None else client_timeout.connect,
+            read=read if read is not None else client_timeout.read,
+            write=write if write is not None else client_timeout.write,
+            pool=pool if pool is not None else client_timeout.pool
         )
 
     def _apply_model_config(self, request_body: dict[str, Any], provider_model_name: str,

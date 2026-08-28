@@ -170,7 +170,9 @@ class ConfigManager:
         ("httpx_max_keepalive_connections", "HTTPX_MAX_KEEPALIVE_CONNECTIONS", 20, int),
         ("httpx_connect_timeout", "HTTPX_CONNECT_TIMEOUT", 60.0, float),
         ("httpx_pool_timeout", "HTTPX_POOL_TIMEOUT", 5.0, float),
-        # WHY: without a read timeout, requests hang indefinitely when providers are unreachable
+        # WHY: HTTPX_READ_TIMEOUT is only the client-default READ fallback —
+        # every field _create_timeout leaves unspecified lands here; stream and
+        # non-stream chat override it per call site with stream_read_timeout.
         ("httpx_read_timeout", "HTTPX_READ_TIMEOUT", 60.0, float),
         # WHY: streaming can be long-lived; a separate read timeout keeps non-stream requests snappy
         ("stream_read_timeout", "STREAM_READ_TIMEOUT", 300.0, float),
