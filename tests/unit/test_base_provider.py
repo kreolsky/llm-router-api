@@ -1229,6 +1229,59 @@ class TestCallSiteTimeouts:
 
 
 
+class TestRetryUploadSafety:
+    """A retried multipart upload must resend the file, not an empty body.
+
+    Regression: the files tuple used to carry an io.BytesIO; httpx consumed it
+    on the first attempt, so a 429 retry posted an empty file part. Driven
+    through httpx.MockTransport so the REAL multipart encoder runs on every
+    attempt — mocking client.post would hide exactly this defect.
+    """
+
+    def _provider_with_mock_transport(self, handler, cm=None):
+        config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY"}
+        with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
+            provider = OpenAICompatibleProvider(config, config_manager=cm or _make_cm(
+                provider_retry_base_delay=0.001, provider_retry_max_delay=0.01))
+        provider.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        return provider
+
+    @pytest.mark.asyncio
+    async def test_retried_429_upload_resends_the_audio(self):
+        """429-then-200: BOTH encoded multipart bodies contain the audio bytes."""
+        audio = b"OggS-fake-audio-payload" * 64
+        seen_bodies: list[bytes] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen_bodies.append(request.read())
+            if len(seen_bodies) == 1:
+                return httpx.Response(429, json={"error": {"message": "rate limited"}})
+            return httpx.Response(200, json={"text": "transcribed"})
+
+        provider = self._provider_with_mock_transport(handler)
+        body = {"audio": {"filename": "a.ogg", "content_type": "audio/ogg", "data": audio},
+                "params": {}}
+        result = await provider.transcriptions(body, "stt/dummy", {}, request_id="r1")
+
+        assert result == {"text": "transcribed"}
+        assert len(seen_bodies) == 2, "the 429 must have been retried exactly once"
+        for attempt, raw in enumerate(seen_bodies, start=1):
+            assert audio in raw, f"attempt {attempt} lost the audio payload"
+
+    @pytest.mark.asyncio
+    async def test_first_attempt_429_is_surfaced_only_after_retries(self):
+        """Sanity for the driver: the mocked 429 really flows through the retry path."""
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(429, json={"error": {"message": "rate limited"}})
+
+        provider = self._provider_with_mock_transport(handler)
+        body = {"audio": {"filename": "a.ogg", "content_type": "audio/ogg", "data": b"x"},
+                "params": {}}
+        with pytest.raises(HTTPException) as exc_info:
+            await provider.transcriptions(body, "stt/dummy", {}, request_id="r1")
+        assert exc_info.value.status_code == 429
+
+
 # ===================================================================
 # Retry 429-detection robustness
 # ===================================================================
