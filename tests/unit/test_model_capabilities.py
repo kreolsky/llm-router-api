@@ -415,3 +415,61 @@ class TestRefreshProviderCapabilities:
 
         # existing entry retained
         assert cache.get("local/chat") == {"context_length": 32768}
+
+    @pytest.mark.asyncio
+    async def test_routing_suffix_falls_back_to_base_id(self, tmp_path, monkeypatch):
+        """An OpenRouter routing suffix (":floor") is absent from /models; the
+        model must still get the base id's pricing instead of no entry."""
+        models = {
+            "gemini/pro": {
+                "provider": "openrouter",
+                "provider_model_name": "google/gemini-3.7-flash:floor",
+            },
+        }
+        cm = _FakeCM(models)
+        cache = CapabilitiesCache(str(tmp_path / "c.json"))
+        # two entries: the single-model fallback must NOT be what makes this pass
+        upstream = {
+            "data": [
+                {"id": "other/model", "pricing": {"prompt": "0.9", "completion": "0.9"}},
+                {
+                    "id": "google/gemini-3.7-flash",
+                    "context_length": 1048576,
+                    "pricing": {"prompt": "0.0000005", "completion": "0.000003"},
+                },
+            ]
+        }
+
+        async def fake_gpi(*a, **k):
+            return _FakeProvider(upstream)
+
+        monkeypatch.setattr("src.core.model_capabilities.get_provider_instance", fake_gpi)
+        await refresh_provider_capabilities(cm, cache, "openrouter")
+
+        data = cache.get("gemini/pro")
+        assert data is not None
+        assert data["pricing"]["prompt"] == 0.0000005
+
+    @pytest.mark.asyncio
+    async def test_exact_variant_id_wins_over_base(self, tmp_path, monkeypatch):
+        """A variant that EXISTS upstream (":free") keeps its own pricing —
+        the base-id fallback must not overwrite it with the paid rate."""
+        models = {
+            "m/free": {"provider": "openrouter", "provider_model_name": "vendor/model:free"},
+        }
+        cm = _FakeCM(models)
+        cache = CapabilitiesCache(str(tmp_path / "c.json"))
+        upstream = {
+            "data": [
+                {"id": "vendor/model", "pricing": {"prompt": "0.000001", "completion": "0.000002"}},
+                {"id": "vendor/model:free", "pricing": {"prompt": "0", "completion": "0"}},
+            ]
+        }
+
+        async def fake_gpi(*a, **k):
+            return _FakeProvider(upstream)
+
+        monkeypatch.setattr("src.core.model_capabilities.get_provider_instance", fake_gpi)
+        await refresh_provider_capabilities(cm, cache, "openrouter")
+
+        assert cache.get("m/free")["pricing"]["prompt"] == 0.0

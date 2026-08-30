@@ -443,6 +443,14 @@ async def refresh_provider_capabilities(
 
     for model_id, provider_model_name in entries:
         raw = raw_by_id.get(provider_model_name)
+        # OpenRouter routing suffixes (":floor", ":nitro", ":online") select a
+        # provider for the SAME model and are absent from /models, so an exact
+        # lookup misses and the model silently loses its pricing.
+        # INVARIANT: the base-id fallback runs ONLY when the exact id is absent.
+        # Why: variant ids that DO exist upstream (":free", ":batch") carry
+        # their own pricing, and must never be overwritten by the base rate.
+        if raw is None and ":" in provider_model_name:
+            raw = raw_by_id.get(provider_model_name.split(":", 1)[0])
         if raw is None and single_model is not None:
             raw = single_model
         if raw:
