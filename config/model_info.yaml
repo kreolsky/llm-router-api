@@ -24,6 +24,8 @@
 #     reasoning:
 #       supported: bool
 #       default_enabled: bool
+#       effort_levels: [low, medium, high]  # optional; derived from models.yaml reasoning_effort
+#       default_effort: str                 # optional; derived from models.yaml reasoning_effort
 #     pricing:                             # numbers per-token; serialized to strings
 #       prompt: float
 #       completion: float
@@ -33,6 +35,10 @@
 # Derived fields (architecture.modality, supports_vision, top_provider,
 # flat-duplicated max_completion_tokens, string pricing, per_request_limits) are
 # NOT stored here — they are computed by render_capabilities() on serialization.
+# reasoning.effort_levels / default_effort are likewise derived — from the
+# models.yaml `reasoning_effort` block (src/services/reasoning_effort.py), the
+# same key the dispatch funnel enforces; entries here override the derived
+# values (deep merge, lists replaced).
 model_info:
   deepseek/flash:
     description: "DeepSeek V4 Flash — efficiency-optimized MoE, 284B total / 13B active params, thinking mode, tool calling"
@@ -101,4 +107,4 @@ model_info:
       input_modalities: [text, image]
       output_modalities: [text]
     reasoning:
-      supported: false
+      supported: true

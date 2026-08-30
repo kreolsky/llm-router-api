@@ -28,7 +28,7 @@ OpenAI-compatible API gateway for multiple LLM providers. Routes requests to Ope
 
 **Request Context**: A typed `RequestContext` (`request_id`, `project_name`) frozen dataclass is stored on `request.state.request_context` by middleware and rebuilt by auth (to attach `project_name`). `core.context.request_context(request)` is the single accessor (services reach it via `BaseService._get_request_context`), and it returns the dataclass — no raw `request.state.request_id`/`project_name` keys, and no dict-shaped copy of the context.
 
-**Configuration (YAML)**: Three files in `config/` — `providers.yaml` (connections), `models.yaml` (model registry), `user_keys.yaml` (API key access control). Hot-reloaded via background task.
+**Configuration (YAML)**: Three files in `config/` — `providers.yaml` (connections), `models.yaml` (model registry, incl. the optional per-model `reasoning_effort` policy), `user_keys.yaml` (API key access control). Hot-reloaded via background task.
 
 **Access Control**: Per-key model restrictions. Access check runs BEFORE model existence check to prevent information leakage. Keys use `nnp-v1-<hex>` format.
 
@@ -42,6 +42,8 @@ OpenAI-compatible API gateway for multiple LLM providers. Routes requests to Ope
 2. **Auto-cache** — `src/core/model_capabilities.py` `CapabilitiesCache`, persisted to `data/model_cache.json`. A background task (`capabilities_refresh_loop`) calls one `list_models()` per provider, normalizes the raw upstream response (`normalize_provider_model`, shape-dispatched: OpenRouter / llama-server / generic-empty), and stores it. Stale-if-error: on upstream failure the old entry is retained.
 
 Priority: `model_info.yaml` **always wins** over the auto-cache (deep-merge where lists are *replaced*, not concatenated — `merge_capabilities`, distinct from `utils.deep_merge`). The single serializer `render_capabilities()` produces the response shape (derives `supports_vision`, `architecture.modality`, `top_provider`, string `pricing` without exponent). The **hot path never touches the network** — `?refresh=true` is a debug-only best-effort refresh. `reasoning{}` is manual-only; upstream `supported_parameters` is not translated into it.
+
+**Reasoning Effort Policy** (per model, `models.yaml`): an optional `reasoning_effort:` block — `allowed: [low, medium, high]`, `default: high`, `param: reasoning_effort | reasoning.effort` — gates what effort values may leave for the upstream and injects the default when the client sends none (client value read from both dialects, left where the client put it; a value outside `allowed` is a 400 `invalid_parameter_value`, never a clamp). Enforced in the one funnel (`BaseService._prepare_dispatch` → `src/services/reasoning_effort.py`); `options.reasoning_effort` still wins over the injected default. Soft-validated at load (`ConfigManager._validate_models` — warn + drop the block on a typo; hot-reload safe). `/v1/models` derives `reasoning.effort_levels`/`default_effort` from the same key (beats the auto-cache, loses to `model_info.yaml`).
 
 ## Configuration (env vars)
 

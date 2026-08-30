@@ -16,6 +16,7 @@ class ErrorType(Enum):
     # Validation Errors (400)
     MODEL_NOT_SPECIFIED = ("model_not_specified", status.HTTP_400_BAD_REQUEST, "Model not specified in request")
     MISSING_REQUIRED_FIELD = ("missing_required_field", status.HTTP_400_BAD_REQUEST, "Missing required field: {field_name}")
+    INVALID_PARAMETER_VALUE = ("invalid_parameter_value", status.HTTP_400_BAD_REQUEST, "Invalid value for '{parameter_name}': {parameter_value}. Allowed values: {allowed_values}")
 
     # Authorization Errors (401)
     MISSING_API_KEY = ("missing_api_key", status.HTTP_401_UNAUTHORIZED, "API key missing")

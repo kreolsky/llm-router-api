@@ -24,6 +24,10 @@ models:
   local/reasoner:
     provider: orange
     provider_model_name: dummy
+    reasoning_effort:
+      allowed: [low, medium, high]   # values permitted to reach the upstream
+      default: high                  # injected when the client sends none
+      param: reasoning_effort        # wire location: reasoning_effort | reasoning.effort
     options:
       chat_template_kwargs:
         reasoning_strength: high

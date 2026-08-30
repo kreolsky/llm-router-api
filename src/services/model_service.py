@@ -22,6 +22,7 @@ from ..core.model_capabilities import (
     render_capabilities,
 )
 from .base import BaseService
+from .reasoning_effort import parse_effort_policy
 
 
 class ModelService(BaseService):
@@ -58,16 +59,36 @@ class ModelService(BaseService):
         }
 
     def _resolve_stored_capabilities(self, model_id: str) -> dict[str, Any]:
-        """Merge the auto-cache and manual model_info into the STORED form.
+        """Merge the auto-cache, the derived effort policy, and manual model_info
+        into the STORED form.
 
         INVARIANT: model_info.yaml always wins over the auto-cache (deep merge
         where lists are replaced, not concatenated).
+
+        Layering: merge_capabilities(merge_capabilities(cache, derived), model_info)
+        — the reasoning_effort key derived from models.yaml beats the auto-cache,
+        model_info.yaml still beats everything, so the invariant holds unchanged.
+        The derived block (reasoning.supported/effort_levels/default_effort) comes
+        from the SAME key the dispatch funnel enforces, never re-typed, so
+        list_models and retrieve_model cannot diverge from the wire behaviour.
         """
         cache_data: dict[str, Any] = {}
         if self.capabilities_cache is not None:
             cache_data = self.capabilities_cache.get(model_id) or {}
-        model_info = self.config_manager.get_config().get("model_info", {}).get(model_id) or {}
-        return merge_capabilities(cache_data, model_info)
+        config = self.config_manager.get_config()
+        model_info = config.get("model_info", {}).get(model_id) or {}
+        derived: dict[str, Any] = {}
+        model_cfg = config.get("models", {}).get(model_id) or {}
+        policy, _ = parse_effort_policy(model_cfg)
+        if policy is not None:
+            reasoning: dict[str, Any] = {
+                "supported": True,
+                "effort_levels": policy["allowed"],
+            }
+            if policy["default"] is not None:
+                reasoning["default_effort"] = policy["default"]
+            derived = {"reasoning": reasoning}
+        return merge_capabilities(merge_capabilities(cache_data, derived), model_info)
 
     def get_pricing(self, model_id: str) -> dict[str, Any] | None:
         """Stored per-token pricing for a model, or None when unknown.

@@ -101,6 +101,7 @@ class ConfigManager:
                 if fail_on_error and required:
                     raise RuntimeError(f"Failed to parse config: {path}") from e
         self._validate_model_info(config)
+        self._validate_models(config)
         return config
 
     # Allowed top-level keys per model_info entry (normalized schema; see
@@ -151,6 +152,48 @@ class ConfigManager:
                         f"model_info entry '{model_id}'.architecture has unknown keys: {sorted(arch_unknown)}",
                         extra={"config": {"model_info_key": model_id, "unknown_keys": sorted(arch_unknown)}},
                     )
+
+    # Allowed keys inside a model's reasoning_effort block (see
+    # src/services/reasoning_effort.py, the single source of validity).
+    _EFFORT_BLOCK_KEYS = {"allowed", "default", "param"}
+
+    @staticmethod
+    def _validate_models(config: dict[str, Any]) -> None:
+        """Soft-validate models.yaml: warn and DROP an invalid reasoning_effort block.
+
+        Why soft: models.yaml is hot-reloaded every 5s; a hard raise there
+        kills a running router on a typo. Dropping (not just warning) makes
+        "ignore the whole block" real for every downstream consumer — the
+        funnel and /v1/models never see a malformed block. A model carrying
+        BOTH options.reasoning_effort and a reasoning_effort block gets the
+        same verdict: options wins at merge time (providers/base.py
+        _apply_model_config), so the block would advertise a policy the
+        upstream never sees.
+        """
+        # WHY function-level import: core must not import services at module
+        # level (services import core); parse_effort_policy is the shared
+        # single source of validity with the request-path enforcement.
+        from ..services.reasoning_effort import parse_effort_policy
+
+        models = config.get("models") or {}
+        for model_id, model_cfg in models.items():
+            if not isinstance(model_cfg, dict) or "reasoning_effort" not in model_cfg:
+                continue
+            block = model_cfg["reasoning_effort"]
+            if isinstance(block, dict):
+                unknown = set(block) - ConfigManager._EFFORT_BLOCK_KEYS
+                if unknown:
+                    logger.warning(
+                        f"models.yaml '{model_id}': reasoning_effort has unknown keys: {sorted(unknown)}",
+                        extra={"config": {"model": model_id, "unknown_keys": sorted(unknown)}},
+                    )
+            _, reason = parse_effort_policy(model_cfg)
+            if reason is not None:
+                logger.warning(
+                    f"models.yaml '{model_id}': ignoring reasoning_effort block — {reason}",
+                    extra={"config": {"model": model_id}},
+                )
+                del model_cfg["reasoning_effort"]
 
     def get_config(self) -> dict[str, Any]:
         return self.config

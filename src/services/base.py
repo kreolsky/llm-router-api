@@ -18,6 +18,7 @@ from ..core.logging import logger
 from ..core.usage_db import RequestStats, request_stats
 from ..providers import get_provider_instance
 from ..providers.base import BaseProvider
+from .reasoning_effort import apply_reasoning_effort
 
 
 @dataclass(frozen=True)
@@ -182,6 +183,9 @@ class BaseService:
         model_config, provider_name, provider_model_name, provider_config = \
             self._validate_and_get_config(requested_model, auth_context, **error_ctx)
         stats.provider_name = provider_name
+
+        # ARCH: the effort policy rides the one dispatch funnel (services/reasoning_effort.py).
+        request_body = apply_reasoning_effort(request_body, model_config, **error_ctx)
 
         provider_instance = await get_provider_instance(
             provider_name, provider_config, self.config_manager

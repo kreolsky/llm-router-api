@@ -3,6 +3,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import yaml
 from fastapi import HTTPException
 
 from src.core.context import AuthContext
@@ -410,6 +411,78 @@ class TestRetrieveModel:
             await svc.retrieve_model("model-a", auth_ctx, refresh=False)
 
         mock_refresh.assert_not_called()
+
+
+# ===================================================================
+# reasoning effort — derived layer from models.yaml
+# ===================================================================
+
+class TestReasoningEffortDerived:
+    """reasoning.effort_levels / default_effort derive from the models.yaml
+    reasoning_effort key — the same key the dispatch funnel enforces."""
+
+    @pytest.mark.asyncio
+    async def test_list_and_detail_carry_effort_fields_from_models_yaml(self):
+        """Asserted against the value read from the loaded models.yaml — the
+        contract mirrors what the operator configured, not a literal."""
+        with open("config/models.yaml") as f:
+            models = yaml.safe_load(f)["models"]
+        with open("config/providers.yaml") as f:
+            providers = yaml.safe_load(f)["providers"]
+        cfg = models["local/reasoner"]["reasoning_effort"]
+        svc = _build_service(models=models, providers=providers)
+        auth_ctx = _make_auth_context(allowed_models=[])
+
+        listed = await svc.list_models(auth_ctx)
+        listed_r = next(m for m in listed["data"] if m["id"] == "local/reasoner")
+        assert listed_r["reasoning"]["effort_levels"] == cfg["allowed"]
+        assert listed_r["reasoning"]["default_effort"] == cfg["default"]
+        assert listed_r["reasoning"]["supported"] is True
+
+        # list and detail render from the same stored form — they cannot diverge
+        detail = await svc.retrieve_model("local/reasoner", auth_ctx)
+        assert detail["reasoning"] == listed_r["reasoning"]
+
+    @pytest.mark.asyncio
+    async def test_model_without_policy_has_no_reasoning_block(self):
+        svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS)
+        auth_ctx = _make_auth_context(allowed_models=[])
+
+        listed = await svc.list_models(auth_ctx)
+        model_a = next(m for m in listed["data"] if m["id"] == "model-a")
+        assert "reasoning" not in model_a
+
+    @pytest.mark.asyncio
+    async def test_derived_beats_auto_cache(self):
+        """The derived layer wins over the auto-cache for the reasoning block."""
+        cache = _make_cache({"model-a": {"reasoning": {"supported": False,
+                                                       "effort_levels": ["cache"]}}})
+        models = {"model-a": {"provider": "prov-a", "provider_model_name": "a-real",
+                              "reasoning_effort": {"allowed": ["low", "high"],
+                                                   "default": "high"}}}
+        svc = _build_service(models=models, providers=SAMPLE_PROVIDERS, cache=cache)
+        auth_ctx = _make_auth_context(allowed_models=[])
+
+        detail = await svc.retrieve_model("model-a", auth_ctx)
+        assert detail["reasoning"]["effort_levels"] == ["low", "high"]
+        assert detail["reasoning"]["supported"] is True
+
+    @pytest.mark.asyncio
+    async def test_model_info_reasoning_still_overrides_derived(self):
+        """INVARIANT: model_info.yaml beats everything — per key, deep merge."""
+        models = {"model-a": {"provider": "prov-a", "provider_model_name": "a-real",
+                              "reasoning_effort": {"allowed": ["low", "high"],
+                                                   "default": "low"}}}
+        model_info = {"model-a": {"reasoning": {"supported": False,
+                                                "effort_levels": ["minimal", "full"]}}}
+        svc = _build_service(models=models, providers=SAMPLE_PROVIDERS, model_info=model_info)
+        auth_ctx = _make_auth_context(allowed_models=[])
+
+        detail = await svc.retrieve_model("model-a", auth_ctx)
+        assert detail["reasoning"]["supported"] is False  # model_info wins
+        assert detail["reasoning"]["effort_levels"] == ["minimal", "full"]  # list replaced
+        # deep merge: a derived key model_info does not mention survives
+        assert detail["reasoning"]["default_effort"] == "low"
 
 
 # ===================================================================
