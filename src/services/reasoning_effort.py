@@ -28,6 +28,21 @@ from ..core.error_handling import ErrorType, create_error
 # default. The second is the OpenRouter-style reasoning.effort nesting.
 EFFORT_PARAMS = ("reasoning_effort", "reasoning.effort")
 DEFAULT_EFFORT_PARAM = "reasoning_effort"
+# Keys a reasoning_effort block may carry; anything else is a typo and drops the
+# whole block (see parse_effort_policy).
+EFFORT_BLOCK_KEYS = frozenset({"allowed", "default", "param"})
+
+
+def _read_param(body: dict[str, Any], param: str) -> Any:
+    """Read a wire location out of a body-shaped dict; None when absent.
+
+    One reader for both dialects, so every consumer (the client-value gate, the
+    options-conflict guard) covers the same set — EFFORT_PARAMS is the only list.
+    """
+    if param == "reasoning_effort":
+        return body.get("reasoning_effort")
+    reasoning = body.get("reasoning")
+    return reasoning.get("effort") if isinstance(reasoning, dict) else None
 
 
 def parse_effort_policy(model_config: Any) -> tuple[dict[str, Any] | None, str | None]:
@@ -44,11 +59,20 @@ def parse_effort_policy(model_config: Any) -> tuple[dict[str, Any] | None, str |
     if not isinstance(model_config, dict) or "reasoning_effort" not in model_config:
         return None, None
     options = model_config.get("options")
-    if isinstance(options, dict) and "reasoning_effort" in options:
-        return None, "'options.reasoning_effort' is also set (options wins at merge time)"
+    if isinstance(options, dict):
+        # INVARIANT: BOTH dialects are checked, not just the OpenAI one.
+        # Why: options merges into the outgoing body wholesale, so an
+        # options.reasoning.effort next to an injected reasoning_effort ships
+        # the double declaration this guard exists to prevent.
+        conflicts = [p for p in EFFORT_PARAMS if _read_param(options, p) is not None]
+        if conflicts:
+            return None, f"'options.{conflicts[0]}' is also set (options wins at merge time)"
     block = model_config["reasoning_effort"]
     if not isinstance(block, dict):
         return None, "reasoning_effort is not a mapping"
+    unknown = sorted(set(block) - EFFORT_BLOCK_KEYS)
+    if unknown:
+        return None, f"unknown key(s) {unknown}; allowed: {sorted(EFFORT_BLOCK_KEYS)}"
     allowed = block.get("allowed")
     if (not isinstance(allowed, list) or not allowed
             or not all(isinstance(v, str) for v in allowed)):
@@ -62,27 +86,26 @@ def parse_effort_policy(model_config: Any) -> tuple[dict[str, Any] | None, str |
     return {"allowed": list(allowed), "default": default, "param": param}, None
 
 
-def _client_efforts(request_body: dict[str, Any]) -> list[Any]:
-    """Every client-sent effort value present, across both dialects.
+def _client_efforts(request_body: dict[str, Any]) -> list[tuple[str, Any]]:
+    """Every client-sent effort value present, as ``(wire location, value)`` pairs.
 
     INVARIANT: EVERY present dialect is returned, not the first one found.
     Why: a body carrying an allowed `reasoning_effort` next to a disallowed
     `reasoning.effort` would otherwise ship the disallowed value upstream —
     the gate has to see all of them to refuse any of them.
 
+    INVARIANT: the location travels with the value.
+    Why: the 400 must name the field the client actually sent; naming the other
+    dialect points them at a parameter that is not in their request.
+
     A JSON null in either location counts as absent (unset), matching
     ``request_body.get`` semantics on the top level.
     """
-    values = []
-    top = request_body.get("reasoning_effort")
-    if top is not None:
-        values.append(top)
-    reasoning = request_body.get("reasoning")
-    if isinstance(reasoning, dict):
-        nested = reasoning.get("effort")
-        if nested is not None:
-            values.append(nested)
-    return values
+    return [
+        (param, value)
+        for param in EFFORT_PARAMS
+        if (value := _read_param(request_body, param)) is not None
+    ]
 
 
 def _render_value(value: Any) -> str:
@@ -133,11 +156,11 @@ def apply_reasoning_effort(
 
     client_values = _client_efforts(request_body)
     if client_values:
-        for value in client_values:
+        for location, value in client_values:
             if value not in policy["allowed"]:
                 raise create_error(
                     ErrorType.INVALID_PARAMETER_VALUE,
-                    parameter_name="reasoning_effort",
+                    parameter_name=location,
                     parameter_value=_render_value(value),
                     allowed_values=", ".join(policy["allowed"]),
                     **error_ctx,

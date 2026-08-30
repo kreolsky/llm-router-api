@@ -8,6 +8,8 @@ from fastapi import HTTPException
 
 from src.core.config_manager import ConfigManager
 from src.services.reasoning_effort import (
+    EFFORT_BLOCK_KEYS,
+    EFFORT_PARAMS,
     apply_reasoning_effort,
     parse_effort_policy,
 )
@@ -61,12 +63,35 @@ class TestParseEffortPolicy:
         assert policy is None
         assert fragment in reason
 
-    def test_options_conflict_rejected(self):
-        cfg = {"reasoning_effort": {"allowed": ["low"]},
-               "options": {"reasoning_effort": "low"}}
+    @pytest.mark.parametrize("options, named", [
+        ({"reasoning_effort": "low"}, "options.reasoning_effort"),
+        ({"reasoning": {"effort": "low"}}, "options.reasoning.effort"),
+    ])
+    def test_options_conflict_rejected_in_either_dialect(self, options, named):
+        """Both wire locations are guarded: options merges into the body
+        wholesale, so either one would ship a second effort declaration."""
+        cfg = {"reasoning_effort": {"allowed": ["low"]}, "options": options}
         policy, reason = parse_effort_policy(cfg)
         assert policy is None
-        assert "options.reasoning_effort" in reason
+        assert named in reason
+
+    def test_every_wire_location_is_guarded_in_options(self):
+        """Asserted over EFFORT_PARAMS, so a third dialect cannot be added to
+        the gate without also being covered by the options conflict guard."""
+        for param in EFFORT_PARAMS:
+            options: dict = ({"reasoning_effort": "low"} if param == "reasoning_effort"
+                             else {"reasoning": {"effort": "low"}})
+            policy, reason = parse_effort_policy(
+                {"reasoning_effort": {"allowed": ["low"]}, "options": options})
+            assert policy is None, param
+            assert f"options.{param}" in reason
+
+    def test_unrelated_options_do_not_trip_the_guard(self):
+        cfg = {"reasoning_effort": {"allowed": ["low"]},
+               "options": {"reasoning": {"strength": "high"}, "temperature": 0.2}}
+        policy, reason = parse_effort_policy(cfg)
+        assert reason is None
+        assert policy["allowed"] == ["low"]
 
 
 # ===================================================================
@@ -161,6 +186,20 @@ class TestRefusedValues:
         with pytest.raises(HTTPException) as exc_info:
             apply_reasoning_effort(body, _model_config(), **ERROR_CTX)
         assert exc_info.value.status_code == 400
+
+    @pytest.mark.parametrize("body, named", [
+        ({"messages": [], "reasoning_effort": "max"}, "reasoning_effort"),
+        ({"messages": [], "reasoning": {"effort": "max"}}, "reasoning.effort"),
+    ])
+    def test_400_names_the_field_the_client_actually_sent(self, body, named):
+        """The envelope must not point a client at a parameter absent from
+        their request — the location travels with the refused value."""
+        with pytest.raises(HTTPException) as exc_info:
+            apply_reasoning_effort(body, _model_config(), **ERROR_CTX)
+        message = exc_info.value.detail["error"]["message"]
+        assert named in message
+        other = "reasoning.effort" if named == "reasoning_effort" else "reasoning_effort"
+        assert other not in message.replace(named, "")
 
     def test_disallowed_nested_value_refused_next_to_an_allowed_top_level(self):
         """Both dialects are gated — an allowed value in one location must not
@@ -275,12 +314,27 @@ class TestLoadTimeValidation:
         assert "reasoning_effort" not in models["m"]
         assert mock_logger.warning.called
 
-    def test_unknown_block_keys_warn_only_not_dropped(self):
+    def test_unknown_block_key_is_dropped_not_merely_warned(self):
+        """A typo drops the whole block: a misspelled ``param`` would otherwise
+        send the effort to the wrong wire location while /v1/models kept
+        advertising the policy."""
         cfg = {"provider": "p", "reasoning_effort": {
-            "allowed": ["low"], "default": "low", "futur": True}}
+            "allowed": ["low"], "default": "low", "parm": "reasoning.effort"}}
         models, mock_logger = _validated_models({"m": cfg})
-        assert models["m"]["reasoning_effort"]["allowed"] == ["low"]  # kept
-        assert any("unknown keys" in str(c) for c in mock_logger.warning.call_args_list)
+        assert "reasoning_effort" not in models["m"]
+        warning = str(mock_logger.warning.call_args)
+        assert "ignoring reasoning_effort block" in warning
+        assert "parm" in warning
+
+    def test_every_documented_block_key_is_accepted(self):
+        """Asserted over EFFORT_BLOCK_KEYS itself, so a key added to the schema
+        without being accepted here fails instead of silently dropping blocks."""
+        block = {"allowed": ["low"], "default": "low", "param": "reasoning.effort"}
+        assert set(block) == set(EFFORT_BLOCK_KEYS)
+        models, mock_logger = _validated_models({"m": {"provider": "p",
+                                                       "reasoning_effort": block}})
+        assert models["m"]["reasoning_effort"] == block
+        mock_logger.warning.assert_not_called()
 
     def test_model_without_block_untouched(self):
         cfg = {"provider": "p", "options": {"stream": True}}
