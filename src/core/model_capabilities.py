@@ -178,6 +178,20 @@ def _has_llama_server_meta(raw: dict[str, Any]) -> bool:
     return isinstance(raw.get("capabilities"), list)
 
 
+def _normalize_openrouter_architecture(arch: Any) -> dict[str, Any]:
+    """Keep only the architecture keys the stored schema defines; {} when empty."""
+    if not isinstance(arch, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key in ("input_modalities", "output_modalities"):
+        if arch.get(key):
+            out[key] = list(arch[key])
+    for key in ("tokenizer", "instruct_type"):
+        if arch.get(key):
+            out[key] = arch[key]
+    return out
+
+
 def _normalize_openrouter(raw: dict[str, Any]) -> dict[str, Any]:
     """Normalize an OpenRouter /models entry into the STORED form."""
     out: dict[str, Any] = {}
@@ -192,22 +206,19 @@ def _normalize_openrouter(raw: dict[str, Any]) -> dict[str, Any]:
         if "is_moderated" in tp:
             out["is_moderated"] = bool(tp["is_moderated"])
 
-    arch = raw.get("architecture")
-    if isinstance(arch, dict):
-        new_arch: dict[str, Any] = {}
-        if arch.get("input_modalities"):
-            new_arch["input_modalities"] = list(arch["input_modalities"])
-        if arch.get("output_modalities"):
-            new_arch["output_modalities"] = list(arch["output_modalities"])
-        if arch.get("tokenizer"):
-            new_arch["tokenizer"] = arch["tokenizer"]
-        if arch.get("instruct_type"):
-            new_arch["instruct_type"] = arch["instruct_type"]
-        if new_arch:
-            out["architecture"] = new_arch
+    arch = _normalize_openrouter_architecture(raw.get("architecture"))
+    if arch:
+        out["architecture"] = arch
 
     if isinstance(raw.get("supported_parameters"), list):
-        out["supported_parameters"] = list(raw["supported_parameters"])
+        params = list(raw["supported_parameters"])
+        out["supported_parameters"] = params
+        # WHY: upstream advertises reasoning SUPPORT inside supported_parameters
+        # ("reasoning" / "reasoning_effort") and never a list of effort levels,
+        # so only reasoning.supported is derivable here; effort_levels and
+        # default_effort stay operator policy (models.yaml reasoning_effort).
+        if {"reasoning", "reasoning_effort"} & {str(x).lower() for x in params}:
+            out["reasoning"] = {"supported": True}
 
     pricing = raw.get("pricing")
     if isinstance(pricing, dict):
@@ -258,9 +269,11 @@ def normalize_provider_model(raw: dict[str, Any]) -> dict[str, Any]:
     capabilities.multimodal -> vision), or generic OpenAI (only
     id/object/owned_by -> empty, e.g. deepseek/kimi).
 
-    Decision: upstream 'reasoning' in supported_parameters is NOT translated
-    into our reasoning{} block — that block is manual-only (default_enabled is
-    not expressible in the upstream shape).
+    Upstream 'reasoning'/'reasoning_effort' in supported_parameters IS
+    translated into ``reasoning: {"supported": True}``. Only that flag is
+    derivable: no upstream shape carries the effort enum or default_enabled,
+    which stay manual (model_info.yaml) or derived from the models.yaml
+    reasoning_effort policy.
     """
     if not isinstance(raw, dict):
         return {}

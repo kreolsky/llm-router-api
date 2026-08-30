@@ -22,8 +22,8 @@
 #       instruct_type: str                 # optional
 #     supported_parameters: [tools, tool_choice, max_tokens, temperature, top_p, stream]
 #     reasoning:
-#       supported: bool
-#       default_enabled: bool
+#       supported: bool                     # auto-derived from upstream supported_parameters
+#       default_enabled: bool               # manual only — no upstream shape expresses it
 #       effort_levels: [low, medium, high]  # optional; derived from models.yaml reasoning_effort
 #       default_effort: str                 # optional; derived from models.yaml reasoning_effort
 #     pricing:                             # numbers per-token; serialized to strings
@@ -88,8 +88,8 @@ model_info:
     architecture:
       input_modalities: [text, image]
       output_modalities: [text]
-    reasoning:
-      supported: false
+    # reasoning.supported is auto-derived from the upstream supported_parameters
+    # (reasoning / reasoning_effort) — do not pin it back here.
   local/chat:
     description: "Local LLM via llama-server — GPU-accelerated inference (low reasoning)"
     context_length: 32768

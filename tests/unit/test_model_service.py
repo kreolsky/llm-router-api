@@ -7,7 +7,7 @@ import yaml
 from fastapi import HTTPException
 
 from src.core.context import AuthContext
-from src.core.model_capabilities import CapabilitiesCache
+from src.core.model_capabilities import CapabilitiesCache, normalize_provider_model
 from src.services.model_service import ModelService
 
 # ---------------------------------------------------------------------------
@@ -466,6 +466,41 @@ class TestReasoningEffortDerived:
         detail = await svc.retrieve_model("model-a", auth_ctx)
         assert detail["reasoning"]["effort_levels"] == ["low", "high"]
         assert detail["reasoning"]["supported"] is True
+
+    @pytest.mark.asyncio
+    async def test_cached_supported_surfaces_without_any_policy(self):
+        """A model with no reasoning_effort policy still advertises the
+        auto-derived reasoning.supported coming from the upstream normalizer."""
+        cache = _make_cache({"model-a": normalize_provider_model({
+            "id": "model-a",
+            "context_length": 8192,
+            "supported_parameters": ["reasoning_effort", "tools"],
+        })})
+        svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS, cache=cache)
+        auth_ctx = _make_auth_context(allowed_models=[])
+
+        detail = await svc.retrieve_model("model-a", auth_ctx)
+        assert detail["reasoning"] == {"supported": True}
+
+    @pytest.mark.asyncio
+    async def test_policy_effort_levels_layer_over_cached_supported(self):
+        """The models.yaml policy supplies effort_levels on top of the cached
+        supported flag — the two layers merge key-wise, neither replaces the other."""
+        cache = _make_cache({"model-a": normalize_provider_model({
+            "id": "model-a",
+            "context_length": 8192,
+            "supported_parameters": ["reasoning", "tools"],
+        })})
+        models = {"model-a": {"provider": "prov-a", "provider_model_name": "a-real",
+                              "reasoning_effort": {"allowed": ["low", "high"],
+                                                   "default": "high"}}}
+        svc = _build_service(models=models, providers=SAMPLE_PROVIDERS, cache=cache)
+        auth_ctx = _make_auth_context(allowed_models=[])
+
+        detail = await svc.retrieve_model("model-a", auth_ctx)
+        assert detail["reasoning"] == {
+            "supported": True, "effort_levels": ["low", "high"], "default_effort": "high",
+        }
 
     @pytest.mark.asyncio
     async def test_model_info_reasoning_still_overrides_derived(self):

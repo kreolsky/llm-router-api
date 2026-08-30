@@ -140,16 +140,34 @@ class TestNormalizeOpenRouter:
         assert out["supported_parameters"] == ["tools", "temperature", "stream"]
         assert out["name"] == "Google: Gemini 2.0 Flash"
 
-    def test_reasoning_not_translated_from_supported_parameters(self):
-        # decision 3: upstream "reasoning" stays out of our reasoning{} block
+    def test_reasoning_supported_derived_from_supported_parameters(self):
+        # upstream advertises SUPPORT only; the effort enum is never upstream
         raw = {
             "id": "m",
             "context_length": 8192,
             "supported_parameters": ["reasoning", "tools"],
         }
         out = normalize_provider_model(raw)
-        assert "reasoning" not in out
+        assert out["reasoning"] == {"supported": True}
+        assert "effort_levels" not in out["reasoning"]
+        assert "default_enabled" not in out["reasoning"]
         assert "reasoning" in out["supported_parameters"]
+
+    def test_reasoning_supported_derived_from_reasoning_effort_param(self):
+        raw = {
+            "id": "m",
+            "context_length": 8192,
+            "supported_parameters": ["reasoning_effort", "tools"],
+        }
+        assert normalize_provider_model(raw)["reasoning"] == {"supported": True}
+
+    def test_no_reasoning_key_without_a_reasoning_parameter(self):
+        raw = {
+            "id": "m",
+            "context_length": 8192,
+            "supported_parameters": ["tools", "temperature"],
+        }
+        assert "reasoning" not in normalize_provider_model(raw)
 
     def test_partial_openrouter(self):
         raw = {"id": "m", "context_length": 4096}
