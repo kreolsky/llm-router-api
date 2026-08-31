@@ -60,7 +60,7 @@ class OpenAICompatibleProvider(BaseProvider):
         form = self._apply_model_config(form, provider_model_name, model_config)
 
         # WHY raw bytes, not io.BytesIO: the 429 retry loop lives below this
-        # construction site (retry_on_rate_limit on _make_request_inner), so the
+        # construction site (in _make_request_inner), so the
         # files tuple is encoded once per attempt. httpx's multipart encoder
         # happens to seek(0) seekable file objects today, but bytes make each
         # attempt self-contained by construction instead of by accommodation —

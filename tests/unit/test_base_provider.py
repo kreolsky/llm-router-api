@@ -1,4 +1,4 @@
-"""Unit tests for src/providers/base.py — BaseProvider and retry_on_rate_limit."""
+"""Unit tests for src/providers/base.py — BaseProvider and the inline retry loop."""
 
 import asyncio
 import json
@@ -10,7 +10,7 @@ import pytest
 from fastapi import HTTPException
 
 from src.core.config_manager import Settings
-from src.providers.base import BaseProvider, retry_on_rate_limit
+from src.providers.base import BaseProvider
 from src.providers.openai import OpenAICompatibleProvider
 
 # ---------------------------------------------------------------------------
@@ -87,122 +87,128 @@ def _mock_response(json_body=None):
 
 
 # ===================================================================
-# retry_on_rate_limit decorator
+# Inline 429 retry loop (_make_request_inner)
 # ===================================================================
 
-class TestRetryOnRateLimit:
-    """Tests for the retry_on_rate_limit decorator."""
+class TestRetryLoop:
+    """429 backoff loop inlined in _make_request_inner, bounds from settings."""
+
+    def _provider(self, **settings_overrides):
+        provider = _build_provider(settings=_make_settings(**settings_overrides))
+        return provider
+
+    @staticmethod
+    def _rate_limited_post(status_code=429):
+        def post(*a, **k):
+            raise HTTPException(status_code=status_code, detail="rate limited")
+        return post
 
     @pytest.mark.asyncio
     async def test_successful_first_try_no_retries(self):
-        """Successful call on first try -- no retries."""
-        call_count = 0
-
-        @retry_on_rate_limit(max_retries=3, base_delay=0.01, max_delay=0.1)
-        async def fn():
-            nonlocal call_count
-            call_count += 1
-            return "ok"
-
-        result = await fn()
-        assert result == "ok"
-        assert call_count == 1
+        """Successful call on first try — no sleeps, one HTTP call."""
+        provider = self._provider()
+        provider.client.post = AsyncMock(return_value=_mock_response())
+        with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            result = await provider._make_request("POST", "/x", request_id="r1")
+        assert result == {"ok": True}
+        provider.client.post.assert_awaited_once()
+        mock_sleep.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_429_retried_up_to_max_then_raised(self):
         """429 error retried up to max_retries, then re-raised."""
-        call_count = 0
-        exc = HTTPException(status_code=429, detail="rate limited")
+        provider = self._provider(provider_max_retries=2,
+                                  provider_retry_base_delay=0.001,
+                                  provider_retry_max_delay=0.01)
+        calls = []
 
-        @retry_on_rate_limit(max_retries=2, base_delay=0.001, max_delay=0.01)
-        async def fn():
-            nonlocal call_count
-            call_count += 1
-            raise exc
+        async def post(*a, **k):
+            calls.append(1)
+            raise HTTPException(status_code=429, detail="rate limited")
 
-        with pytest.raises(HTTPException) as exc_info:
-            await fn()
+        provider.client.post = post
+        with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock):
+            with pytest.raises(HTTPException) as exc_info:
+                await provider._make_request("POST", "/x", request_id="r1")
         assert exc_info.value.status_code == 429
         # initial attempt + 2 retries = 3 calls
-        assert call_count == 3
+        assert len(calls) == 3
 
     @pytest.mark.asyncio
     async def test_non_429_error_raised_immediately(self):
         """Non-429 error raised immediately (no retry)."""
-        call_count = 0
+        provider = self._provider(provider_max_retries=3)
+        calls = []
 
-        @retry_on_rate_limit(max_retries=3, base_delay=0.001, max_delay=0.01)
-        async def fn():
-            nonlocal call_count
-            call_count += 1
+        async def post(*a, **k):
+            calls.append(1)
             raise HTTPException(status_code=500, detail="server error")
 
-        with pytest.raises(HTTPException) as exc_info:
-            await fn()
+        provider.client.post = post
+        with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            with pytest.raises(HTTPException) as exc_info:
+                await provider._make_request("POST", "/x", request_id="r1")
         assert exc_info.value.status_code == 500
-        assert call_count == 1
+        assert len(calls) == 1
+        mock_sleep.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_exponential_backoff_formula(self):
         """Backoff delay = min(base * 2^attempt, max)."""
+        provider = self._provider(provider_max_retries=4, provider_retry_base_delay=1.0,
+                                  provider_retry_max_delay=10.0)
         recorded_delays = []
-        exc = HTTPException(status_code=429, detail="rate limited")
-        call_count = 0
 
         async def mock_sleep(delay):
             recorded_delays.append(delay)
 
-        @retry_on_rate_limit(max_retries=4, base_delay=1.0, max_delay=10.0)
-        async def fn():
-            nonlocal call_count
-            call_count += 1
-            raise exc
-
-        with patch("src.providers.base.asyncio.sleep", side_effect=mock_sleep), pytest.raises(HTTPException):
-            await fn()
+        provider.client.post = self._rate_limited_post()
+        with patch("src.providers.base.asyncio.sleep", side_effect=mock_sleep), \
+             pytest.raises(HTTPException):
+            await provider._make_request("POST", "/x", request_id="r1")
 
         # attempts 0..3 → delays: min(1*2^0,10)=1, min(1*2^1,10)=2, min(1*2^2,10)=4, min(1*2^3,10)=8
         assert recorded_delays == [1.0, 2.0, 4.0, 8.0]
 
     @pytest.mark.asyncio
-    async def test_config_resolution_settings_used_when_closure_arg_is_none(self):
-        """Bounds from self.settings are used when decorator args are None."""
-        settings = Settings(provider_max_retries=1, provider_retry_base_delay=0.001,
-                            provider_retry_max_delay=0.01)
+    async def test_bounds_come_from_settings(self):
+        """provider_max_retries=1 in settings → exactly one retry."""
+        provider = self._provider(provider_max_retries=1,
+                                  provider_retry_base_delay=0.001,
+                                  provider_retry_max_delay=0.01)
+        calls = []
 
-        call_count = 0
-
-        # Decorator args are None → settings values used
-        @retry_on_rate_limit()
-        async def fn(self_obj):
-            nonlocal call_count
-            call_count += 1
+        async def post(*a, **k):
+            calls.append(1)
             raise HTTPException(status_code=429, detail="rate limited")
 
-        obj = SimpleNamespace(settings=settings)
-
-        with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock), pytest.raises(HTTPException):
-            await fn(obj)
-
-        # provider_max_retries=1 → 1 initial + 1 retry = 2
-        assert call_count == 2
+        provider.client.post = post
+        with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock):
+            with pytest.raises(HTTPException):
+                await provider._make_request("POST", "/x", request_id="r1")
+        assert len(calls) == 2
 
     @pytest.mark.asyncio
-    async def test_config_resolution_defaults_when_no_settings(self):
-        """Without settings and without closure args, a bare Settings() supplies the defaults (3 retries)."""
-        call_count = 0
+    async def test_defaults_from_bare_settings(self):
+        """A bare Settings() gives the documented 3 retries."""
+        provider = self._provider()
+        calls = []
 
-        @retry_on_rate_limit()
-        async def fn():
-            nonlocal call_count
-            call_count += 1
+        async def post(*a, **k):
+            calls.append(1)
             raise HTTPException(status_code=429, detail="rate limited")
 
-        with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock), pytest.raises(HTTPException):
-            await fn()
-
+        provider.client.post = post
+        with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock):
+            with pytest.raises(HTTPException):
+                await provider._make_request("POST", "/x", request_id="r1")
         # default max_retries=3 → 1 initial + 3 retries = 4
-        assert call_count == 4
+        assert len(calls) == 4
+
+    def test_retry_decorator_is_gone(self):
+        """retry_on_rate_limit no longer exists — the loop is inlined."""
+        import src.providers.base as base_module
+        assert not hasattr(base_module, "retry_on_rate_limit")
 
 
 # ===================================================================
@@ -1369,34 +1375,52 @@ class TestRetryUploadSafety:
 # ===================================================================
 
 class TestRetryRateLimitDetection:
-    """429 detection must survive a wrapped exception whose .response is None."""
+    """429 detection must survive a wrapped exception whose .response is None.
+
+    Driven through _make_request with client.post raising the wrapped error —
+    the same shape create_error produces when it re-raises an httpx error.
+    """
+
+    def _provider(self):
+        return _build_provider(settings=_make_settings(provider_max_retries=2,
+                                                       provider_retry_base_delay=0.001,
+                                                       provider_retry_max_delay=0.01))
 
     @pytest.mark.asyncio
     async def test_wrapped_exception_with_none_response_is_not_rate_limit(self):
+        provider = self._provider()
         inner = SimpleNamespace(response=None)
         wrapped = HTTPException(status_code=500, detail="wrapped network failure")
         wrapped.original_exception = inner
+        calls = []
 
-        @retry_on_rate_limit(max_retries=2, base_delay=0.01, max_delay=0.05)
-        async def fn():
+        async def post(*a, **k):
+            calls.append(1)
             raise wrapped
 
-        with pytest.raises(HTTPException):
-            await fn()
+        provider.client.post = post
+        with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            with pytest.raises(HTTPException):
+                await provider._make_request("POST", "/x", request_id="r1")
+        assert len(calls) == 1
+        mock_sleep.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_wrapped_429_response_still_retries(self):
+        provider = self._provider()
         inner = SimpleNamespace(response=SimpleNamespace(status_code=429))
         wrapped = HTTPException(status_code=502, detail="upstream 429")
         wrapped.original_exception = inner
-        calls = {"n": 0}
+        calls = []
 
-        @retry_on_rate_limit(max_retries=2, base_delay=0.01, max_delay=0.05)
-        async def fn():
-            calls["n"] += 1
-            if calls["n"] < 3:
+        async def post(*a, **k):
+            calls.append(1)
+            if len(calls) < 3:
                 raise wrapped
-            return "ok"
+            return _mock_response()
 
-        assert await fn() == "ok"
-        assert calls["n"] == 3
+        provider.client.post = post
+        with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock):
+            result = await provider._make_request("POST", "/x", request_id="r1")
+        assert result == {"ok": True}
+        assert len(calls) == 3

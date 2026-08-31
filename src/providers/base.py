@@ -6,7 +6,6 @@ import json
 import os
 import time
 from collections.abc import AsyncGenerator
-from functools import wraps
 from typing import Any
 
 import httpx
@@ -33,49 +32,6 @@ def _is_rate_limit_error(e: BaseException) -> bool:
     response = getattr(original, 'response', None)
     return response is not None and getattr(response, 'status_code', None) == 429
 
-
-def retry_on_rate_limit(max_retries: int | None = None, base_delay: float | None = None, max_delay: float | None = None):
-    """Retry decorator for 429 (Too Many Requests) with exponential backoff.
-
-    Backoff formula: min(base_delay * 2^attempt, max_delay).
-    Rate-limit detection lives in _is_rate_limit_error.
-    Bounds come from self.settings (first arg); otherwise the decorator
-    args / a bare Settings() are used.
-    """
-    def decorator(func):
-        @wraps(func)
-        async def wrapper(*args, **kwargs):
-            # Try to get settings from the first argument (self)
-            settings = args[0].settings if args and hasattr(args[0], 'settings') else Settings()
-
-            actual_max_retries = settings.provider_max_retries if max_retries is None else max_retries
-            actual_base_delay = settings.provider_retry_base_delay if base_delay is None else base_delay
-            actual_max_delay = settings.provider_retry_max_delay if max_delay is None else max_delay
-
-            last_exception = None
-            for attempt in range(actual_max_retries + 1):
-                try:
-                    return await func(*args, **kwargs)
-                except Exception as e:
-                    if _is_rate_limit_error(e) and attempt < actual_max_retries:
-                        delay = min(actual_base_delay * (2 ** attempt), actual_max_delay)
-                        last_exception = e
-
-                        logger.warning(f"Rate limit exceeded, retrying in {delay}s (attempt {attempt + 1}/{actual_max_retries})", extra={
-                            "delay_seconds": delay,
-                            "attempt": attempt + 1,
-                            "max_retries": actual_max_retries,
-                            "component": "base_provider"
-                        })
-                        await asyncio.sleep(delay)
-                        continue
-                    else:
-                        raise e
-            if last_exception:
-                raise last_exception
-            raise RuntimeError("retry_on_rate_limit: exhausted without exception")
-        return wrapper
-    return decorator
 
 # INVARIANT: self.headers["Authorization"] is set once in __init__ from
 # os.environ[api_key_env]. It is never replaced per-request. Client API keys
@@ -413,8 +369,8 @@ class BaseProvider:
         """Unified non-streaming HTTP request to provider APIs.
 
         Holds a per-provider concurrency slot across the whole call. The retry
-        loop (on @retry_on_rate_limit on _make_request_inner) runs inside the
-        held slot, so retries reuse the same slot and it is released exactly once.
+        loop in _make_request_inner runs inside the held slot, so retries
+        reuse the same slot and it is released exactly once.
         HTTPStatusError: extracts error message from provider JSON response.
         RequestError: maps to a network error. extra_headers may add non-credential
         headers (e.g. Accept) but cannot overwrite Authorization — see INVARIANT
@@ -426,7 +382,6 @@ class BaseProvider:
                 timeout=timeout, files=files, data=data, request_id=request_id,
             )
 
-    @retry_on_rate_limit()
     async def _make_request_inner(
         self,
         method: str,
@@ -438,7 +393,49 @@ class BaseProvider:
         data: dict[str, Any] = None,
         request_id: str = "unknown"
     ) -> dict[str, Any]:
-        """Actual HTTP request implementation. See _make_request for the slot wrapper."""
+        """Single HTTP attempt wrapped in the 429 backoff loop.
+
+        Backoff formula: min(base_delay * 2^attempt, max_delay), bounds from
+        settings. Rate-limit detection lives in _is_rate_limit_error. Only
+        429-shaped errors are retried; everything else surfaces on the first
+        attempt. See _make_request for the slot wrapper.
+        """
+        max_retries = self.settings.provider_max_retries
+        for attempt in range(max_retries + 1):
+            try:
+                return await self._make_request_attempt(
+                    method, path, request_body=request_body, extra_headers=extra_headers,
+                    timeout=timeout, files=files, data=data, request_id=request_id,
+                )
+            except Exception as e:
+                if _is_rate_limit_error(e) and attempt < max_retries:
+                    delay = min(self.settings.provider_retry_base_delay * (2 ** attempt),
+                                self.settings.provider_retry_max_delay)
+                    logger.warning(
+                        f"Rate limit exceeded, retrying in {delay}s (attempt {attempt + 1}/{max_retries})",
+                        extra={
+                            "delay_seconds": delay,
+                            "attempt": attempt + 1,
+                            "max_retries": max_retries,
+                            "component": "base_provider"
+                        })
+                    await asyncio.sleep(delay)
+                    continue
+                raise
+        raise RuntimeError("retry loop exhausted without an exception")
+
+    async def _make_request_attempt(
+        self,
+        method: str,
+        path: str,
+        request_body: dict[str, Any] = None,
+        extra_headers: dict[str, str] = None,
+        timeout: httpx.Timeout = None,  # noqa: ASYNC109
+        files: dict[str, Any] = None,
+        data: dict[str, Any] = None,
+        request_id: str = "unknown"
+    ) -> dict[str, Any]:
+        """One HTTP attempt: send, raise_for_status, parse the JSON response."""
         merged_headers = self._merge_request_headers(extra_headers)
 
         self._log_provider_data(
@@ -521,6 +518,13 @@ class BaseProvider:
                               extra_headers: dict[str, str] = None) -> AsyncGenerator[bytes, None]:
         """Actual streaming implementation. See _stream_request for the slot wrapper.
 
+        WHY: no retry loop here, unlike _make_request_inner — streaming is
+        driven through open_provider_stream, which primes the first chunk
+        BEFORE the response starts, so an upstream 429 already surfaces to the
+        client as its real HTTP status instead of a 200 with an error frame;
+        a retry loop at this layer would be unreachable for connection-time
+        failures and would double-send a generation the client may already
+        have partially received.
         Uses client.stream() context manager for memory-efficient chunk iteration.
         Headers go through _merge_request_headers so the stream and non-stream
         paths send an identical set.

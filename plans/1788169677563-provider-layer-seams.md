@@ -144,3 +144,9 @@ container on `:8777`:
   ruff clean. Ruling logged: env-name convention derived from field names
   (every legacy var already matched), so no second defaults map exists and
   the drift test has nothing left to pin.
+- Step 2 (inline retry) DONE: `retry_on_rate_limit` deleted; explicit backoff
+  loop in `_make_request_inner` over a new `_make_request_attempt`; bounds
+  from settings; `WHY:` added on `_stream_request_inner` (streaming carries
+  no retry — open_provider_stream already surfaces upstream status).
+  Decorator tests ported to drive through `_make_request`. Full suite green
+  (632 passed, 1 skipped), ruff clean.
