@@ -22,15 +22,15 @@ from .reasoning_effort import apply_reasoning_effort
 
 
 @dataclass(frozen=True)
-class PreparedDispatch:
-    """Result of the shared service preamble (BaseService._prepare_dispatch).
+class ResolvedTarget:
+    """Result of the body-agnostic dispatch resolver (BaseService._resolve_target).
 
-    Hoists the ~33 identical opening lines chat_completions and
-    create_embeddings duplicated. `stats` is the mutable per-request holder —
-    frozen here only means the fields cannot be rebound, not deep immutability.
+    Everything a dispatch needs once the model id is known: validated config,
+    the registry's provider instance, and the per-request identity headers.
+    Carries no request body — JSON (chat/embeddings) and multipart
+    (transcription) dispatches both ride it, so a cross-cutting policy added
+    here reaches every endpoint by construction.
     """
-    request_body: dict[str, Any]
-    requested_model: str | None
     request_id: str
     user_id: str
     stats: RequestStats
@@ -41,6 +41,19 @@ class PreparedDispatch:
     provider_config: dict[str, Any]
     provider: BaseProvider
     identity_headers: dict[str, str] | None
+
+
+@dataclass(frozen=True)
+class PreparedDispatch(ResolvedTarget):
+    """Result of the shared service preamble (BaseService._prepare_dispatch).
+
+    The JSON wrapper around ResolvedTarget: adds the parsed body and the
+    requested model, and applies the reasoning-effort policy (a body-shaped
+    concern that must NOT ride the shared resolver — multipart endpoints
+    carry no such policy).
+    """
+    request_body: dict[str, Any]
+    requested_model: str | None
 
 
 class BaseService:
@@ -149,16 +162,18 @@ class BaseService:
             raise create_error(ErrorType.MISSING_REQUIRED_FIELD, field_name="valid JSON body",
                              request_id=ctx.request_id, user_id=ctx.user_id) from None
 
-    async def _prepare_dispatch(
+    async def _resolve_target(
         self,
         request: Request,
         auth_context: AuthContext,
-        *,
-        component: str,
-        log_title: str,
-    ) -> PreparedDispatch:
-        """Shared preamble: parse the JSON body, enrich stats, validate access,
+        model_id: Any,
+    ) -> ResolvedTarget:
+        """Body-agnostic dispatch funnel: enrich stats, validate access,
         resolve the provider, and build the identity headers.
+
+        A non-string model id (client sent JSON garbage) reaches the usage row
+        as "" but keeps its raw value in error_ctx — the error messages quote
+        what the client actually sent.
 
         INVARIANT: identity_headers is computed exactly ONCE per request here,
         and the SAME object feeds the stream and non-stream branches.
@@ -170,32 +185,59 @@ class BaseService:
         request_id = ctx.request_id
         user_id = ctx.user_id
 
-        request_body = await self._parse_json_request(request)
-        requested_model = request_body.get("model")
         stats = request_stats(request)
-        stats.model_id = requested_model if isinstance(requested_model, str) else ""
+        stats.model_id = model_id if isinstance(model_id, str) else ""
 
-        error_ctx = {"request_id": request_id, "user_id": user_id, "model_id": requested_model}
-
-        self._log_service_data(title=log_title, data=request_body, request_id=request_id,
-                               component=component, data_flow="incoming")
+        error_ctx = {"request_id": request_id, "user_id": user_id, "model_id": model_id}
 
         model_config, provider_name, provider_model_name, provider_config = \
-            self._validate_and_get_config(requested_model, auth_context, **error_ctx)
+            self._validate_and_get_config(model_id, auth_context, **error_ctx)
         stats.provider_name = provider_name
-
-        # ARCH: the effort policy rides the one dispatch funnel (services/reasoning_effort.py).
-        request_body = apply_reasoning_effort(request_body, model_config, **error_ctx)
 
         provider_instance = await get_provider_instance(provider_name)
         identity_headers = self._build_identity_headers(provider_instance, request)
 
-        return PreparedDispatch(
-            request_body=request_body, requested_model=requested_model,
+        return ResolvedTarget(
             request_id=request_id, user_id=user_id, stats=stats, error_ctx=error_ctx,
             model_config=model_config, provider_name=provider_name,
             provider_model_name=provider_model_name, provider_config=provider_config,
             provider=provider_instance, identity_headers=identity_headers,
+        )
+
+    async def _prepare_dispatch(
+        self,
+        request: Request,
+        auth_context: AuthContext,
+        *,
+        component: str,
+        log_title: str,
+    ) -> PreparedDispatch:
+        """Thin JSON wrapper over _resolve_target: parse the body, log it,
+        delegate, then apply the reasoning-effort policy to the parsed body.
+
+        The effort policy is deliberately HERE and not in the resolver: it is
+        body-shaped (reads/writes the JSON body), and multipart endpoints
+        riding the resolver must never get it.
+        """
+        request_body = await self._parse_json_request(request)
+        requested_model = request_body.get("model")
+
+        self._log_service_data(title=log_title, data=request_body,
+                               request_id=self._get_request_context(request).request_id,
+                               component=component, data_flow="incoming")
+
+        target = await self._resolve_target(request, auth_context, requested_model)
+
+        # ARCH: the effort policy rides the one dispatch funnel (services/reasoning_effort.py).
+        request_body = apply_reasoning_effort(request_body, target.model_config, **target.error_ctx)
+
+        return PreparedDispatch(
+            request_body=request_body, requested_model=requested_model, **{
+                field: getattr(target, field) for field in (
+                    "request_id", "user_id", "stats", "error_ctx", "model_config",
+                    "provider_name", "provider_model_name", "provider_config",
+                    "provider", "identity_headers",
+                )}
         )
 
     def _log_service_data(

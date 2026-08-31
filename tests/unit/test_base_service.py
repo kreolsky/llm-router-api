@@ -346,6 +346,110 @@ class TestPrepareDispatchPreamble:
 
 
 # ===================================================================
+# _resolve_target — the body-agnostic dispatch funnel
+# ===================================================================
+
+class TestResolveTarget:
+    """The shared resolver: enrich stats, validate access, resolve the
+    provider, build identity headers — without touching any request body.
+
+    JSON (chat/embeddings) and multipart (transcription) both ride it, which
+    is what makes the dispatch funnel true by construction.
+    """
+
+    def _svc(self, models=None, providers=None):
+        return _build_service(
+            models=models or {"m": {"provider": "openai"}},
+            providers=providers or {"openai": {"type": "openai", "base_url": "https://x.example.com"}},
+        )
+
+    @pytest.mark.asyncio
+    @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
+    async def test_resolves_target_without_parsing_a_body(self, mock_get):
+        """A body-agnostic call resolves everything the dispatch needs."""
+        mock_get.return_value = SimpleNamespace(identity="passthrough")
+        svc = self._svc()
+        request = _make_identity_request({"user-agent": "oc/1.0"})
+
+        target = await svc._resolve_target(request, _make_auth_context(), "m")
+
+        assert target.provider is mock_get.return_value
+        assert target.provider_name == "openai"
+        assert target.provider_model_name == "m"
+        assert target.model_config == {"provider": "openai"}
+        assert target.identity_headers == {"user-agent": "oc/1.0"}
+        assert target.request_id == "req-1"
+        assert target.user_id == "proj"
+        assert target.error_ctx == {"request_id": "req-1", "user_id": "proj", "model_id": "m"}
+        # stats enrichment rides the resolver (the JSON wrapper no longer owns it)
+        assert target.stats.model_id == "m"
+        assert target.stats.provider_name == "openai"
+
+    @pytest.mark.asyncio
+    @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
+    async def test_access_denied_raises_before_provider_resolution(self, mock_get):
+        """The resolver keeps the INVARIANT: access check before existence."""
+        svc = self._svc()
+        request = _make_identity_request({})
+
+        with pytest.raises(HTTPException) as exc_info:
+            await svc._resolve_target(
+                request, _make_auth_context(allowed_models=["other"]), "m"
+            )
+        assert exc_info.value.status_code == 403
+        mock_get.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
+    async def test_prepare_dispatch_delegates_to_the_resolver(self, mock_get):
+        """The JSON wrapper is thin: parse, delegate, apply the effort policy."""
+        mock_get.return_value = SimpleNamespace(identity=None)
+        svc = self._svc()
+        request = _make_request("req-1")
+        request.json = AsyncMock(return_value={"model": "m"})
+        request.headers = {}
+
+        with patch.object(BaseService, "_resolve_target",
+                          new_callable=AsyncMock) as mock_resolve:
+            mock_resolve.return_value = SimpleNamespace(
+                request_id="req-1", user_id="unknown", stats=RequestStats(),
+                error_ctx={}, model_config={}, provider_name="openai",
+                provider_model_name="m", provider_config={},
+                provider=mock_get.return_value, identity_headers=None,
+            )
+            prepared = await svc._prepare_dispatch(
+                request, _make_auth_context(), component="c", log_title="t"
+            )
+
+        mock_resolve.assert_awaited_once()
+        assert mock_resolve.call_args.args[2] == "m"
+        assert prepared.provider is mock_get.return_value
+        assert prepared.request_body == {"model": "m"}
+        assert prepared.requested_model == "m"
+
+    @pytest.mark.asyncio
+    @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
+    async def test_reasoning_effort_policy_stays_in_the_json_wrapper(self, mock_get):
+        """The effort policy is body-shaped, so it is applied by the JSON
+        wrapper — a multipart endpoint riding the resolver must never get it."""
+        mock_get.return_value = SimpleNamespace(identity=None)
+        models = {"m": {
+            "provider": "openai",
+            "reasoning_effort": {"allowed": ["low", "medium", "high"], "default": "high"},
+        }}
+        svc = self._svc(models=models)
+        request = _make_request("req-1")
+        request.json = AsyncMock(return_value={"model": "m"})
+        request.headers = {}
+
+        prepared = await svc._prepare_dispatch(
+            request, _make_auth_context(), component="c", log_title="t"
+        )
+
+        assert prepared.request_body["reasoning_effort"] == "high"
+
+
+# ===================================================================
 # _build_identity_headers / _extract_passthrough_headers
 # ===================================================================
 
