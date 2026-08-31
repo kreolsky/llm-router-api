@@ -790,7 +790,7 @@ def build_stats_app() -> FastAPI:
     app.add_middleware(RequestLoggerMiddleware)
     app.add_exception_handler(HTTPException, custom_http_exception_handler)
 
-    @app.get("/ok")
+    @app.get("/ok", name="ok")
     async def ok():
         return {"status": "ok"}
 
@@ -868,7 +868,9 @@ class TestMiddlewareEndToEndRows:
         rows = await fetch_rows(db)
         assert len(rows) == 1
         assert rows[0]["status_code"] == 200
-        assert rows[0]["endpoint"] == "/ok"
+        # endpoint now comes from the route's explicit name (see middleware);
+        # a resolved-but-nameless synthetic route would record the handler name
+        assert rows[0]["endpoint"] == "ok"
 
     @pytest.mark.asyncio
     async def test_skip_list_produces_no_row(self, db):

@@ -121,3 +121,78 @@ class TestRequestLoggerMiddleware:
         mock_logger.is_debug_enabled.return_value = False
         client.post("/echo", json={"key": "value"})
         mock_logger.debug_data.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Endpoint names live on the routes; the middleware reads them there
+# ---------------------------------------------------------------------------
+
+from fastapi.routing import APIRoute  # noqa: E402
+
+# The stored endpoint values (usage rows group by them — legacy strings).
+EXPECTED_ENDPOINT_NAMES = {
+    "/v1/chat/completions": "chat",
+    "/v1/embeddings": "embeddings",
+    "/v1/audio/transcriptions": "transcriptions",
+    "/v1/models": "models",
+    "/v1/models/{model_id:path}": "models",
+    "/tools/generate_key": "generate_key",
+}
+
+
+class TestNamedRoutes:
+    def test_every_recorded_route_carries_its_stored_endpoint_name(self):
+        """A route without an explicit name lands in usage rows as a raw path.
+
+        Walking app.routes (not the middleware's table copy) is what makes the
+        NEXT route fail loudly here instead of silently in the dashboard.
+        """
+        from src.api.main import app
+
+        skip = ("/health", "/stat", "/docs", "/openapi.json", "/favicon.ico")
+        checked = 0
+        for route in app.routes:
+            if not isinstance(route, APIRoute):
+                continue  # mounts (StaticFiles) and the router's own redirects
+            if route.path.startswith(skip):
+                continue
+            assert route.path in EXPECTED_ENDPOINT_NAMES, (
+                f"route {route.path!r} records usage but has no expected endpoint name — "
+                f"add name= to the decorator and to EXPECTED_ENDPOINT_NAMES"
+            )
+            assert route.name == EXPECTED_ENDPOINT_NAMES[route.path], (
+                f"route {route.path!r} must carry name={EXPECTED_ENDPOINT_NAMES[route.path]!r}"
+            )
+            checked += 1
+        assert checked >= len(EXPECTED_ENDPOINT_NAMES)
+
+
+class TestEndpointReadFromRoute:
+    """stats.endpoint comes from scope["route"].name (populated by the router
+    during the app call), falling back to the raw path when no route resolved."""
+
+    @patch("src.api.middleware.schedule_flush")
+    def test_endpoint_from_route_name(self, mock_flush):
+        app = FastAPI()
+        app.add_middleware(RequestLoggerMiddleware)
+
+        @app.get("/somewhere", name="chat")
+        async def somewhere():
+            return {"ok": True}
+
+        with TestClient(app) as client:
+            client.get("/somewhere")
+
+        stats = mock_flush.call_args.args[0]
+        assert stats.endpoint == "chat"
+
+    @patch("src.api.middleware.schedule_flush")
+    def test_unresolved_route_keeps_raw_path(self, mock_flush):
+        app = FastAPI()
+        app.add_middleware(RequestLoggerMiddleware)
+
+        with TestClient(app) as client:
+            client.get("/does/not/exist")
+
+        stats = mock_flush.call_args.args[0]
+        assert stats.endpoint == "/does/not/exist"

@@ -159,7 +159,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 async def health_check():
     return {"status": "ok"}
 
-@app.get("/v1/models")
+@app.get("/v1/models", name="models")
 async def list_models(
     auth_context: AuthContext = Depends(check_endpoint_access("/v1/models"))
 ):
@@ -169,7 +169,7 @@ async def list_models(
 # ARCH: the endpoint string "/v1/models/{model_id:path}" differs from "/v1/models" —
 # this is what allows granting access to the model list without access to a
 # specific model's detail endpoint
-@app.get("/v1/models/{model_id:path}")
+@app.get("/v1/models/{model_id:path}", name="models")
 async def retrieve_model(
     model_id: str,
     refresh: bool = False,
@@ -177,21 +177,21 @@ async def retrieve_model(
 ):
     return await app.state.model_service.retrieve_model(model_id, auth_context, refresh=refresh)
 
-@app.post("/v1/chat/completions")
+@app.post("/v1/chat/completions", name="chat")
 async def chat_completions(
     request: Request,
     auth_context: AuthContext = Depends(check_endpoint_access("/v1/chat/completions"))
 ):
     return await app.state.chat_service.chat_completions(request, auth_context)
 
-@app.post("/v1/embeddings")
+@app.post("/v1/embeddings", name="embeddings")
 async def create_embeddings(
     request: Request,
     auth_context: AuthContext = Depends(check_endpoint_access("/v1/embeddings"))
 ):
     return await app.state.embedding_service.create_embeddings(request, auth_context)
 
-@app.post("/v1/audio/transcriptions")
+@app.post("/v1/audio/transcriptions", name="transcriptions")
 async def create_transcription(
     request: Request,
     # WHY: some clients send 'audio_file', others 'file' — accept both
@@ -245,7 +245,7 @@ async def create_transcription(
         return_timestamps=return_timestamps,
     )
 
-@app.get("/tools/generate_key")
+@app.get("/tools/generate_key", name="generate_key")
 async def generate_key_endpoint(
     request: Request,
     auth_context: AuthContext = Depends(check_endpoint_access("/tools/generate_key"))
