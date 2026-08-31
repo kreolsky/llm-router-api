@@ -402,7 +402,7 @@ async def refresh_provider_capabilities(
         return
 
     try:
-        provider = await get_provider_instance(provider_name, provider_config, config_manager.settings)
+        provider = await get_provider_instance(provider_name)
         models_data = await provider.list_models(request_id="capabilities-cache")
     except Exception as e:
         logger.warning(

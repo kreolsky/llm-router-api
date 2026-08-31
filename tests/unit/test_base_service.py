@@ -250,7 +250,7 @@ class TestPrepareDispatchProviders:
         )
 
         assert prepared.provider is mock_provider
-        mock_get.assert_called_once_with("openai", svc.config_manager.get_config()["providers"]["openai"], svc.config_manager.settings)
+        mock_get.assert_called_once_with("openai")
 
     @pytest.mark.asyncio
     @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)

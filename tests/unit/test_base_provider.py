@@ -489,7 +489,7 @@ class TestListModels:
 
 
 # ===================================================================
-# Per-provider concurrency limit (_acquire_slot / semaphore)
+# Per-provider concurrency limit (acquire_slot / semaphore)
 # ===================================================================
 
 class TestConcurrencyLimit:

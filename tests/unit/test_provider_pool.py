@@ -75,7 +75,7 @@ class TestSlotAccounting:
     @pytest.mark.asyncio
     async def test_acquire_counts_inflight_and_releases(self):
         pool = _pool()
-        async with pool._acquire_slot("r1"):
+        async with pool.acquire_slot("r1"):
             assert pool._inflight == 1
             assert not pool._idle.is_set()
         assert pool._inflight == 0
@@ -85,7 +85,7 @@ class TestSlotAccounting:
     async def test_slot_released_on_exception(self):
         pool = _pool()
         with pytest.raises(RuntimeError):
-            async with pool._acquire_slot("r1"):
+            async with pool.acquire_slot("r1"):
                 raise RuntimeError("boom")
         assert pool._inflight == 0
         assert pool._idle.is_set()
@@ -96,7 +96,7 @@ class TestSlotAccounting:
         pool = _pool(max_concurrent=1)
 
         async def gen():
-            async with pool._acquire_slot("r1"):
+            async with pool.acquire_slot("r1"):
                 yield b"a"
                 await asyncio.Event().wait()
 
@@ -112,7 +112,7 @@ class TestSlotAccounting:
         entered = asyncio.Event()
 
         async def hold():
-            async with pool._acquire_slot("r"):
+            async with pool.acquire_slot("r"):
                 entered.set()
                 await asyncio.sleep(0.05)
 
@@ -128,11 +128,11 @@ class TestSlotAccounting:
         second_entered = asyncio.Event()
 
         async def first():
-            async with pool._acquire_slot("r1"):
+            async with pool.acquire_slot("r1"):
                 await release.wait()
 
         async def second():
-            async with pool._acquire_slot("r2"):
+            async with pool.acquire_slot("r2"):
                 second_entered.set()
 
         t1 = asyncio.create_task(first())
@@ -153,14 +153,14 @@ class TestSlotAccounting:
         release = asyncio.Event()
 
         async def first():
-            async with pool._acquire_slot("r1"):
+            async with pool.acquire_slot("r1"):
                 await release.wait()
 
         t1 = asyncio.create_task(first())
         await asyncio.sleep(0.02)
 
         with pytest.raises(HTTPException) as exc_info:
-            async with pool._acquire_slot("r2"):
+            async with pool.acquire_slot("r2"):
                 pass
         assert exc_info.value.status_code == 503
         assert exc_info.value.detail["error"]["metadata"]["error_code"] == "provider_concurrency_limit"
@@ -175,14 +175,14 @@ class TestSlotAccounting:
         release = asyncio.Event()
 
         async def first():
-            async with pool._acquire_slot("r1"):
+            async with pool.acquire_slot("r1"):
                 await release.wait()
 
         t1 = asyncio.create_task(first())
         await asyncio.sleep(0.02)
 
         with pytest.raises(HTTPException):
-            async with pool._acquire_slot("r2"):
+            async with pool.acquire_slot("r2"):
                 pass
         assert pool._semaphore._value == 0
 
@@ -209,7 +209,7 @@ class TestGracefulDrain:
         release = asyncio.Event()
 
         async def holder():
-            async with pool._acquire_slot("r1"):
+            async with pool.acquire_slot("r1"):
                 await release.wait()
 
         task = asyncio.create_task(holder())
@@ -232,7 +232,7 @@ class TestGracefulDrain:
         release = asyncio.Event()
 
         async def holder():
-            async with pool._acquire_slot("r1"):
+            async with pool.acquire_slot("r1"):
                 await release.wait()
 
         task = asyncio.create_task(holder())
@@ -267,7 +267,7 @@ class TestLateAcquisitionDuringDrain:
         release = asyncio.Event()
 
         async def holder():
-            async with pool._acquire_slot("r1"):
+            async with pool.acquire_slot("r1"):
                 await release.wait()
 
         task = asyncio.create_task(holder())
@@ -278,7 +278,7 @@ class TestLateAcquisitionDuringDrain:
         assert not closing.done()
 
         with pytest.raises(HTTPException) as exc_info:
-            async with pool._acquire_slot("r2"):
+            async with pool.acquire_slot("r2"):
                 pass
         assert exc_info.value.status_code == 503
         message = exc_info.value.detail["error"]["message"]
@@ -302,14 +302,14 @@ class TestLateAcquisitionDuringDrain:
         release = asyncio.Event()
 
         async def holder():
-            async with pool._acquire_slot("r1"):
+            async with pool.acquire_slot("r1"):
                 await release.wait()
 
         t1 = asyncio.create_task(holder())
         await asyncio.sleep(0.05)
 
         # r2 counts into _inflight and queues on the semaphore BEFORE aclose.
-        t2 = asyncio.create_task(pool._acquire_slot("r2").__aenter__())
+        t2 = asyncio.create_task(pool.acquire_slot("r2").__aenter__())
         await asyncio.sleep(0.05)
         assert not t2.done()
 

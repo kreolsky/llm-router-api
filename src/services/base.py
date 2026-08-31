@@ -187,9 +187,7 @@ class BaseService:
         # ARCH: the effort policy rides the one dispatch funnel (services/reasoning_effort.py).
         request_body = apply_reasoning_effort(request_body, model_config, **error_ctx)
 
-        provider_instance = await get_provider_instance(
-            provider_name, provider_config, self.config_manager.settings
-        )
+        provider_instance = await get_provider_instance(provider_name)
         identity_headers = self._build_identity_headers(provider_instance, request)
 
         return PreparedDispatch(

@@ -20,8 +20,8 @@ _provider_cache: dict[str, BaseProvider] = {}
 # means nothing is pending publication.
 _staged_cache: dict[str, BaseProvider] | None = None
 
-# ARCH: guards the read-create-store path so two concurrent lookups for an
-# uncached provider cannot both build and store (leaking one httpx pool).
+# ARCH: serializes the two reload phases so a prepare cannot stage over a
+# publish that is mid-swap. Lookups do not take it — they are a plain dict read.
 _cache_lock = asyncio.Lock()
 
 # ARCH: background drain tasks are tracked here so they are not garbage-
@@ -55,28 +55,28 @@ def _build_provider(
     )
 
 
-async def get_provider_instance(
-    provider_name: str,
-    provider_config: dict[str, Any],
-    settings: Settings,
-) -> BaseProvider:
-    """Return a cached provider instance, creating one if needed (under the lock).
+# INVARIANT: the published cache is the ONLY source of provider instances —
+# a lookup miss is an error, never a lazy build.
+# Why: callers resolve provider_config from the config and then await, so a
+# reload can publish between the two. A lazy build would take that caller's
+# stale provider_config and insert a provider the operator just deleted into
+# the freshly published cache, where it would serve traffic until the next
+# reload. prepare_provider_cache builds every configured provider up front
+# (startup and every reload), so a miss can only mean "not in the live
+# config" — which is exactly PROVIDER_NOT_FOUND.
+async def get_provider_instance(provider_name: str) -> BaseProvider:
+    """Return the published provider instance for provider_name.
 
-    Instances are cached by provider_name. Config changes to an existing
-    provider are not picked up until the cache is rebuilt on reload.
+    Instances are cached by provider_name and built only by
+    prepare_provider_cache. Config changes to an existing provider are not
+    picked up until the cache is rebuilt on reload.
     """
     cached = _provider_cache.get(provider_name)
-    if cached is not None:
-        return cached
-
-    async with _cache_lock:
-        # Re-check under the lock: another coroutine may have built it.
-        cached = _provider_cache.get(provider_name)
-        if cached is not None:
-            return cached
-        instance = _build_provider(provider_name, provider_config, settings)
-        _provider_cache[provider_name] = instance
-        return instance
+    if cached is None:
+        raise create_error(
+            ErrorType.PROVIDER_NOT_FOUND, provider_name=provider_name, model_id="unknown"
+        )
+    return cached
 
 
 async def _gather_closes(coros) -> None:
@@ -92,10 +92,13 @@ async def prepare_provider_cache(config: dict[str, Any], settings: Settings) -> 
     neither the live cache nor the staged slot is touched (the partially-built
     instances are closed so a failed prepare leaks nothing). On success the
     temp dict is staged for publish_provider_cache — the live cache still
-    serves traffic until the publish.
+    serves traffic until the publish. A stage that was never published (a
+    reload vetoed after this callback) is closed before being replaced.
     """
     global _staged_cache
     async with _cache_lock:
+        superseded = _staged_cache
+        _staged_cache = None
         temp: dict[str, BaseProvider] = {}
         errors = []
         for provider_name, provider_config in (config.get("providers") or {}).items():
@@ -104,25 +107,38 @@ async def prepare_provider_cache(config: dict[str, Any], settings: Settings) -> 
             except Exception as e:
                 errors.append(f"  - {provider_name}: {e}")
         if errors:
-            # WHY: the partially-built temp instances own open httpx pools; close
-            # them so a failed prepare (e.g. one misconfigured provider) leaks nothing.
-            await _gather_closes([inst.aclose() for inst in temp.values()])
+            # WHY: the partially-built temp instances own open httpx pools, and so
+            # does any stage this prepare superseded; close both so a failed
+            # prepare (e.g. one misconfigured provider) leaks nothing.
+            doomed = list(temp.values())
+            if superseded is not None:
+                doomed += list(superseded.values())
+            await _gather_closes([inst.aclose() for inst in doomed])
             joined = "\n".join(errors)
             raise RuntimeError(
                 f"Provider validation failed; refusing to start:\n{joined}"
             )
         _staged_cache = temp
+        if superseded is not None:
+            # WHY: a previous prepare whose reload never reached publish (a
+            # later pre-swap callback vetoed it) left open httpx pools staged;
+            # replacing the stage without closing them leaks one pool per
+            # provider per vetoed reload.
+            await _gather_closes([inst.aclose() for inst in superseded.values()])
 
 
 # INVARIANT: publish_provider_cache runs only AFTER ConfigManager has swapped
-# self.config (a post-swap callback), never as a pre-swap callback.
-# Why: a pre-swap publish rebuilds the cache while get_config() still returns
-# the OLD config — a request resolving a provider the new config REMOVED would
-# hand its stale provider_config to get_provider_instance and re-populate the
-# freshly rebuilt cache, serving a ghost provider the operator deleted.
-# Publishing after the swap closes that window: the removed provider becomes
-# unresolvable before the cache holding it is replaced, and any instance the
-# window still built into the old cache is discarded together with it.
+# self.config, and stays the FIRST post-swap callback.
+# Why: config and cache are two views of the same providers, and whichever is
+# published second defines the window. Publishing the cache first would strand
+# a provider the new config still lists but the new cache no longer holds, and
+# every request resolving it in that window would get a spurious 404 lasting
+# until the swap. Publishing after the swap inverts the window to a provider
+# the new config has just ADDED, which is not yet in the cache — reachable only
+# if a coroutine runs between the swap and this callback, and reload_config
+# leaves no suspension point there. The removal case, which used to serve a
+# deleted provider from a lazily rebuilt cache, is gone entirely: lookups no
+# longer build (see the INVARIANT on get_provider_instance).
 async def publish_provider_cache() -> None:
     """Swap the staged cache in and drain the superseded pools (phase 2 of the reload).
 

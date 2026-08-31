@@ -4,7 +4,8 @@ Entry file: `src/providers/base.py` (`SYSTEM: provider`), registry in
 `src/providers/__init__.py` (`SYSTEM: provider-registry`). Read them before changing either.
 
 * Every provider inherits from `BaseProvider` and implements the required interface.
-* Instances are cached by **provider name** (the dict key in `providers.yaml`). Never store
+* Instances are cached by **provider name** (the dict key in `providers.yaml`) and are built
+  only by the reload's prepare phase — a cache miss is a 404, not a lazy build. Never store
   request-specific state on an instance — one instance serves every concurrent request.
 * Each instance owns its own `httpx.AsyncClient` (a per-backend pool). Closing a pool
   (`aclose()`) first drains that provider's in-flight requests, so a config reload cannot

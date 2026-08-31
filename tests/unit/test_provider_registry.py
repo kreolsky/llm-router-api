@@ -54,49 +54,47 @@ class TestBuildProviderName:
 
 
 class TestGetProviderInstance:
+    """A lookup, never a build: the published cache is the only source."""
 
     @patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False)
     @pytest.mark.asyncio
-    async def test_caches_by_provider_name(self):
-        """Same provider_name returns the same cached instance."""
-        cfg = _make_config()
-        first = await get_provider_instance("alpha", cfg, Settings())
-        second = await get_provider_instance("alpha", cfg, Settings())
-        assert first is second
+    async def test_returns_the_published_instance(self):
+        """Every configured provider resolves to the instance publish put in
+        the cache, and repeated lookups return that same object."""
+        config = {"providers": {"alpha": _make_config(), "beta": _make_config()}}
+        await _seed_cache(config, Settings())
+
+        for name in config["providers"]:
+            first = await get_provider_instance(name)
+            assert first is provider_registry._provider_cache[name]
+            assert first is await get_provider_instance(name)
 
     @patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False)
     @pytest.mark.asyncio
-    async def test_different_names_different_instances(self):
-        """Different provider names get distinct instances."""
-        cfg = _make_config()
-        a = await get_provider_instance("alpha", cfg, Settings())
-        b = await get_provider_instance("beta", cfg, Settings())
-        assert a is not b
-
-    @patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False)
-    @pytest.mark.asyncio
-    async def test_unknown_type_raises(self):
-        """Unknown provider type raises via create_error."""
-        cfg = {"type": "unknown", "base_url": "https://x.example.com"}
+    async def test_miss_raises_provider_not_found_and_builds_nothing(self):
+        """The principal that must be REFUSED: a name absent from the published
+        cache. A lazy build here is what used to resurrect a provider the
+        operator had just deleted (see the INVARIANT on get_provider_instance)."""
         from fastapi import HTTPException
-        with pytest.raises(HTTPException):
-            await get_provider_instance("alpha", cfg, Settings())
+        await _seed_cache({"providers": {"alpha": _make_config()}}, Settings())
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_provider_instance("gone")
+        assert exc_info.value.status_code == 404
+        assert "gone" not in provider_registry._provider_cache
 
     @patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False)
     @pytest.mark.asyncio
-    async def test_concurrent_lookups_build_once(self):
-        """Concurrent get_provider_instance for an uncached provider returns the
-        same instance (no duplicate build / orphaned pool)."""
-        import asyncio
-        cfg = _make_config()
-        provider_registry._provider_cache.clear()
-
-        async def get():
-            return await get_provider_instance("gamma", cfg, Settings())
-
-        inst1, inst2 = await asyncio.gather(get(), get())
-        assert inst1 is inst2
-        assert "gamma" in provider_registry._provider_cache
+    async def test_unknown_type_is_refused_at_prepare(self):
+        """An unknown provider type fails the build, so it never reaches the
+        cache — the lookup is not where the type is validated."""
+        with pytest.raises(RuntimeError) as exc_info:
+            await prepare_provider_cache(
+                {"providers": {"alpha": {"type": "unknown", "base_url": "https://x.example.com"}}},
+                Settings(),
+            )
+        assert "alpha" in str(exc_info.value)
+        assert provider_registry._staged_cache is None
 
 
 class TestClearProviderCacheAsync:
@@ -105,8 +103,8 @@ class TestClearProviderCacheAsync:
     @pytest.mark.asyncio
     async def test_async_close_awaits_aclose_before_clear(self):
         """clear_provider_cache_async awaits every aclose then clears the cache."""
-        cfg = _make_config()
-        inst = await get_provider_instance("alpha", cfg, Settings())
+        await _seed_cache({"providers": {"alpha": _make_config()}}, Settings())
+        inst = provider_registry._provider_cache["alpha"]
         inst.aclose = AsyncMock()
         await clear_provider_cache_async()
         inst.aclose.assert_awaited_once()
@@ -116,9 +114,9 @@ class TestClearProviderCacheAsync:
     @pytest.mark.asyncio
     async def test_async_close_suppresses_one_failure(self):
         """A failing aclose does not block the rest from closing."""
-        cfg = _make_config()
-        bad = await get_provider_instance("bad", cfg, Settings())
-        good = await get_provider_instance("good", cfg, Settings())
+        await _seed_cache({"providers": {"bad": _make_config(), "good": _make_config()}}, Settings())
+        bad = provider_registry._provider_cache["bad"]
+        good = provider_registry._provider_cache["good"]
         bad.aclose = AsyncMock(side_effect=RuntimeError("boom"))
         good.aclose = AsyncMock()
         await clear_provider_cache_async()  # must not raise
@@ -201,24 +199,44 @@ class TestPreparePublishProviderCache:
 
     @patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False)
     @pytest.mark.asyncio
-    async def test_window_ghost_discarded_by_publish(self):
-        """The reload window bug this split fixes: between the config swap and
-        the cache publish, get_provider_instance may build an instance from a
-        stale resolution into the OLD cache. publish must discard it along
-        with the old cache — a removed provider must not survive the reload."""
+    async def test_removed_provider_cannot_be_resurrected_around_publish(self):
+        """A request that resolved its provider_config before the reload cannot
+        put the removed provider back — on either side of the publish. Before,
+        the instance it built landed in the old cache and went out with it;
+        now the lookup refuses outright."""
+        from fastapi import HTTPException
         await _seed_cache(
             {"providers": {"kept": _make_config(), "doomed": _make_config()}}, Settings())
 
         # New config drops "doomed"; prepare stages the shrunken cache.
         await prepare_provider_cache({"providers": {"kept": _make_config()}}, Settings())
 
-        # Window: a stale resolution re-populates the OLD cache mid-reload.
-        await get_provider_instance("doomed", _make_config(), Settings())
-        assert "doomed" in provider_registry._provider_cache
+        # Mid-reload, the stale resolution still finds the live (old) instance.
+        assert await get_provider_instance("doomed") is provider_registry._provider_cache["doomed"]
 
         await publish_provider_cache()
+
+        # Post-publish, the same stale resolution is refused instead of rebuilt.
+        with pytest.raises(HTTPException):
+            await get_provider_instance("doomed")
         assert "doomed" not in provider_registry._provider_cache
         assert "kept" in provider_registry._provider_cache
+
+    @patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False)
+    @pytest.mark.asyncio
+    async def test_superseded_stage_is_closed_not_leaked(self):
+        """A stage whose reload never reached publish is closed when the next
+        prepare replaces it — one httpx pool per provider would leak otherwise."""
+        await _seed_cache({"providers": {"ok": _make_config()}}, Settings())
+
+        await prepare_provider_cache({"providers": {"vetoed": _make_config()}}, Settings())
+        stranded = provider_registry._staged_cache["vetoed"]
+        stranded.aclose = AsyncMock()
+
+        await prepare_provider_cache({"providers": {"next": _make_config()}}, Settings())
+
+        stranded.aclose.assert_awaited_once()
+        assert set(provider_registry._staged_cache) == {"next"}
 
     @patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False)
     @pytest.mark.asyncio

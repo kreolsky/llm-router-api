@@ -18,7 +18,7 @@ class ProviderPool:
     """One provider's httpx.AsyncClient plus the concurrency gate and drain accounting."""
 
     def __init__(self, *, settings: Settings, provider_name: str,
-                 proxy: str | None = None, max_concurrent=None):
+                 proxy: str | None = None, max_concurrent: int | None = None):
         """Build the client and the in-flight/semaphore machinery.
 
         settings supplies the pool limits (global env applied per pool — each
@@ -44,10 +44,10 @@ class ProviderPool:
         # provider cache and closes the OLD pools, but long-lived SSE streams are
         # still reading from them — closing mid-stream aborts live generations.
         # aclose() therefore waits for _idle before closing. Counted from entry
-        # into _acquire_slot (before the semaphore wait), so a queued request can
+        # into acquire_slot (before the semaphore wait), so a queued request can
         # never slip past a drain that already observed zero. _closed flips True
-        # the moment aclose() starts; _acquire_slot refuses to count new requests
-        # after that (see the INVARIANT in _acquire_slot).
+        # the moment aclose() starts; acquire_slot refuses to count new requests
+        # after that (see the INVARIANT in acquire_slot).
         self._inflight = 0
         self._idle = asyncio.Event()
         self._idle.set()
@@ -105,7 +105,7 @@ class ProviderPool:
         Why: the drain only awaits requests counted into _inflight by then; a
         request acquiring a slot after the drain waiter woke would run on a
         pool that closes under it. Late acquirers get a 503 from
-        _acquire_slot instead.
+        acquire_slot instead.
         """
         self._closed = True
         if self.client is None or self.client.is_closed:
@@ -125,7 +125,7 @@ class ProviderPool:
         await self.client.aclose()
 
     @contextlib.asynccontextmanager
-    async def _acquire_slot(self, request_id: str = "unknown"):
+    async def acquire_slot(self, request_id: str = "unknown"):
         """Track the request as in-flight and hold a concurrency slot for its duration.
 
         In-flight accounting always runs (it is what aclose() drains on). The
@@ -174,7 +174,7 @@ class ProviderPool:
             if self._inflight == 0:
                 self._idle.set()
 
-    def _pool_closing_error(self, request_id: str):
+    def _pool_closing_error(self, request_id: str) -> Exception:
         """503 for a request arriving while the provider pool is draining.
 
         error_details is always supplied: the SERVICE_UNAVAILABLE template is

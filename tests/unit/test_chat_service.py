@@ -115,7 +115,7 @@ def _happy_request(body: dict):
 
 
 def _patch_provider(provider):
-    async def _get_instance(name, cfg, cm):
+    async def _get_instance(name):
         return provider
     return patch("src.services.base.get_provider_instance", side_effect=_get_instance)
 

@@ -234,7 +234,7 @@ class BaseProvider:
         headers (e.g. Accept) but cannot overwrite Authorization — see INVARIANT
         above the class.
         """
-        async with self.pool._acquire_slot(request_id):
+        async with self.pool.acquire_slot(request_id):
             return await self._make_request_inner(
                 method, path, request_body=request_body, extra_headers=extra_headers,
                 timeout=timeout, files=files, data=data, request_id=request_id,
@@ -366,7 +366,7 @@ class BaseProvider:
         exception, and on generator close (AClose) — so a client disconnect also
         frees the slot. extra_headers are merged exactly like in _make_request.
         """
-        async with self.pool._acquire_slot(request_id):
+        async with self.pool.acquire_slot(request_id):
             async for chunk in self._stream_request_inner(client, url_path, request_body, request_id,
                                                           extra_headers):
                 yield chunk

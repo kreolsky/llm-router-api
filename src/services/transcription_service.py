@@ -74,13 +74,11 @@ class TranscriptionService(BaseService):
         error_ctx = {"request_id": request_id, "user_id": user_id, "model_id": model_id}
 
         async with self._guard_service_errors(error_ctx):
-            model_config, provider_name, provider_model_name, provider_config = \
+            model_config, provider_name, provider_model_name, _provider_config = \
                 self._validate_and_get_config(model_id, auth_context, **error_ctx)
             stats.provider_name = provider_name
 
-            provider_instance = await get_provider_instance(
-                provider_name, provider_config, self.config_manager.settings
-            )
+            provider_instance = await get_provider_instance(provider_name)
             identity_headers = self._build_identity_headers(provider_instance, request)
 
             provider_request_body = {

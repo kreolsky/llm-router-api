@@ -175,3 +175,14 @@ container on `:8777`:
   after touch); kimi removed via providers.yaml reload → model kimi 404
   `provider_not_found`, restored → routes again. Review approved: baseline
   bump kept, flake + StreamProcessor left to the request-path epic.
+- Review round 2 DONE (post-approval): `get_provider_instance` became a pure
+  lookup — a miss is PROVIDER_NOT_FOUND, never a lazy build — which closes the
+  ghost window the step-4 INVARIANT had only narrowed (a caller resolving its
+  provider_config before the swap could still repopulate the cache after the
+  publish). Its three callers drop the now-unused config/settings arguments.
+  `ProviderPool._acquire_slot` renamed `acquire_slot` (it is the component's
+  cross-object API); a superseded-but-unpublished stage is now closed instead
+  of leaked; `stat_routes` stopped duck-typing `settings`; pool type hints
+  completed. func-length baseline growth (16→19: lifespan 54, reload_config 57,
+  ProviderPool.__init__ 51) is accepted — all three are just over the line and
+  splitting them would fragment one coherent lifecycle each.

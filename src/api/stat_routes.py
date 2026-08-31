@@ -31,8 +31,7 @@ async def verify_stat_key(
     leak into request logs. When STAT_API_KEY is unset everything stays open.
     """
     config_manager = getattr(request.app.state, "config_manager", None)
-    settings = getattr(config_manager, "settings", None) if config_manager is not None else None
-    expected = settings.stat_api_key if settings is not None else ""
+    expected = config_manager.settings.stat_api_key if config_manager is not None else ""
     if expected and not hmac.compare_digest(
             (x_stat_key or "").encode(), expected.encode()):
         raise HTTPException(
