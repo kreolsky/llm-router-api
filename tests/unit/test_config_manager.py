@@ -488,19 +488,28 @@ class TestAddPostSwapCallback:
         assert seen == {"pre": False, "post": True}
 
     @pytest.mark.asyncio
-    async def test_failure_is_logged_not_fatal(self):
-        """A failing post-swap callback cannot abort the reload: the config is
-        already published and there is nothing to roll back to — reload still
-        reports success and keeps the new config."""
+    async def test_post_swap_failure_returns_false_but_keeps_new_config(self):
+        """A failing post-swap callback cannot un-publish the swap: the config
+        is already live and there is nothing to roll back to. The reload still
+        reports False so _poll_once does not treat the on-disk state as
+        consumed — the next tick retries the reload (cheap with provider
+        instance reuse)."""
         cm = _build_config_manager()
         failing = AsyncMock(side_effect=RuntimeError("boom"))
         cm.add_post_swap_callback(failing, name="failing_post")
 
-        with patch("builtins.open", side_effect=_multi_open(ALL_YAMLS)), \
+        file_map = {
+            "providers.yaml": PROVIDERS_YAML,
+            "models.yaml": self.MODELS_V2,
+            "user_keys.yaml": USER_KEYS_YAML,
+        }
+        with patch("builtins.open", side_effect=_multi_open(file_map)), \
              patch("src.core.config_manager.logger"):
-            assert await cm.reload_config() is True
+            assert await cm.reload_config() is False
 
         failing.assert_awaited_once()
+        # The swap itself stays published.
+        assert "gpt-5" in cm.get_config().get("models", {})
 
     @pytest.mark.asyncio
     async def test_pre_swap_failure_skips_post_swap(self):
@@ -563,6 +572,25 @@ class TestReloadRetriesAfterFailure:
         cm = _build_config_manager()
         before = dict(cm.last_mtimes)
         cm.add_reload_callback(AsyncMock(side_effect=RuntimeError("boom")), name="failing")
+
+        with patch("os.path.getmtime", return_value=2000.0), \
+             patch("builtins.open", side_effect=_multi_open(ALL_YAMLS)), \
+             patch("src.core.config_manager.logger"):
+            assert await cm._poll_once() is True   # change detected, reload attempted
+            assert await cm._poll_once() is True   # still pending: retried
+
+        assert cm.last_mtimes == before
+
+    @pytest.mark.asyncio
+    async def test_post_swap_failure_leaves_mtimes_uncommitted(self):
+        """A post-swap failure is not 'applied': last_mtimes stay uncommitted
+        so the next _poll_once retries the reload. Without this, a provider
+        added by a reload whose publish callback failed would 404 until the
+        file was touched again — the config swap kept, the cache half-applied,
+        nothing retried."""
+        cm = _build_config_manager()
+        before = dict(cm.last_mtimes)
+        cm.add_post_swap_callback(AsyncMock(side_effect=RuntimeError("boom")), name="failing_post")
 
         with patch("os.path.getmtime", return_value=2000.0), \
              patch("builtins.open", side_effect=_multi_open(ALL_YAMLS)), \
