@@ -25,6 +25,9 @@ h3 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px; color
 /* Breakdown tables */
 .tables-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; }
 .table-card, .section-card { background: #161b22; border: 1px solid #30363d; border-radius: 0; padding: 12px; }
+/* WHY: breakdown tables are 8 nowrap columns wide; without a scroll box the
+   cost column renders outside the card border (only .log-scroll had one). */
+.table-card { overflow-x: auto; }
 .data-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
 .data-table th { text-align: left; color: #8b949e; font-weight: 500; padding: 4px 8px 4px 0; border-bottom: 1px solid #30363d; white-space: nowrap; }
 .data-table td { padding: 4px 8px 4px 0; border-bottom: 1px solid #21262d; white-space: nowrap; }
