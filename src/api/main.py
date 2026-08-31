@@ -27,6 +27,7 @@ from ..services.model_service import ModelService
 from ..services.transcription_service import TranscriptionService
 from ..utils.client_address import client_host
 from ..utils.generate_key import generate_key
+from ..utils.mask import mask_headers
 from .middleware import RequestLoggerMiddleware
 from .stat_page import STATIC_DIR, stat_page
 from .stat_routes import router as stat_router
@@ -210,7 +211,7 @@ async def create_transcription(
 
     logger.debug_data(
         title="Transcription Request Headers",
-        data=dict(request.headers),
+        data=mask_headers(dict(request.headers)),
         request_id=request_id,
         component="api",
         data_flow="incoming"

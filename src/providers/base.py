@@ -150,9 +150,28 @@ class BaseProvider:
                             model_config: dict[str, Any]) -> dict[str, Any]:
         """
         Set provider model name and merge model-level options into request body.
+
+        `stream` is stripped from the options before the merge — see the
+        INVARIANT below.
         """
         request_body["model"] = provider_model_name
         if options := model_config.get("options"):
+            # INVARIANT: models.yaml `options:` may not set `stream`.
+            # Why: the service picks the streaming or the JSON branch from the
+            # CLIENT's stream value and only then reaches this merge, so an
+            # options-supplied `stream: true` sent an SSE body to the
+            # non-streaming path, where .json() fails and the client gets a
+            # 502 provider_invalid_response instead of its answer. The
+            # transport is the router's, not the model config's.
+            if "stream" in options:
+                logger.warning(
+                    f"Model options for '{provider_model_name}' set 'stream'; ignoring it "
+                    f"(the client's request decides the transport)",
+                    extra={"component": "base_provider",
+                           "provider_name": self.provider_name,
+                           "provider_model_name": provider_model_name},
+                )
+                options = {k: v for k, v in options.items() if k != "stream"}
             request_body = deep_merge(request_body, options)
         return request_body
 

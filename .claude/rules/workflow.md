@@ -223,8 +223,11 @@ contradicting the user's latest stated rule (stop and ask which is wrong).
   rest live in `.env` and `config/user_keys.yaml`. Stopping the task to request one of these
   is a hard-rule violation: grep the config first. Only a secret genuinely absent from all
   of them is worth asking for — and then name where you looked.
-- **The container copies source at build time.** `docker compose up -d --build` after any
-  code change, or you are testing the old code. See `.claude/rules-scoped/testing-ops.md`.
+- **`src/` is bind-mounted into the container** (`./src:/app/src` in `docker-compose.yml`),
+  so a code change needs `docker compose restart api`, NOT a rebuild. Rebuild
+  (`up -d --build`) only when `requirements.txt` or the `Dockerfile` changed. Either way the
+  running process does not pick up an edit on its own. See
+  `.claude/rules-scoped/testing-ops.md`.
 - **Impact assessment**: ask how a change affects providers, services and the config schema
   before implementing.
 - **Debugging intake (meta-rule)** — on any bug report, in order:

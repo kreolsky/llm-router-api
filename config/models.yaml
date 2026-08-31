@@ -35,8 +35,6 @@ models:
   kimi:
     provider: kimi
     provider_model_name: kimi-k2.7-code
-    options:
-      stream: true
   embeddings/dummy:
     provider: embedding
     provider_model_name: dummy

@@ -20,8 +20,11 @@ Dev-only deps live in `requirements-dev.txt`, never in `requirements.txt`.
 
 ## Docker
 
-* **The image copies source at build time.** `docker compose up -d --build` after ANY code
-  change, or you are testing the previous build. There is no bind mount for `src/`.
+* **`src/` is bind-mounted, so restart — do not rebuild.** `docker-compose.yml` mounts
+  `./src:/app/src` over the image's copy, so `docker compose restart api` is what picks up a
+  code change; `up -d --build` only earns its minutes when `requirements.txt` or the
+  `Dockerfile` changed. The same mount is what makes the `deploy-server` skill's
+  rsync-and-restart work on the remote host, so it is load-bearing, not a leftover.
 * Ports: the container listens on `8000`; compose maps host `8777` → `8000`. Clients and the
   whole test suite talk to `8777`.
 * `docker compose logs -f nnp-ai-router` for the request bookends.

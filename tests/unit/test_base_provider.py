@@ -310,6 +310,31 @@ class TestApplyModelConfig:
         assert result["temperature"] == 0.9
         assert result["top_p"] == 0.8
 
+    def test_options_cannot_override_stream(self):
+        """`stream` in options is dropped: the service already branched on the client's value."""
+        provider = _build_provider()
+        body = {"messages": [], "stream": False}
+        model_config = {"options": {"stream": True, "temperature": 0.9}}
+        result = provider._apply_model_config(body, "gpt-4", model_config)
+        assert result["stream"] is False
+        assert result["temperature"] == 0.9
+
+    def test_options_stream_absent_from_body_stays_absent(self):
+        """Options may not INTRODUCE stream either — an absent key means non-stream."""
+        provider = _build_provider()
+        body = {"messages": []}
+        model_config = {"options": {"stream": True}}
+        result = provider._apply_model_config(body, "gpt-4", model_config)
+        assert "stream" not in result
+
+    def test_options_are_not_mutated_by_the_stream_guard(self):
+        """The guard copies: dropping stream must not edit the live config dict."""
+        provider = _build_provider()
+        options = {"stream": True, "top_p": 0.8}
+        model_config = {"options": options}
+        provider._apply_model_config({"messages": []}, "gpt-4", model_config)
+        assert options == {"stream": True, "top_p": 0.8}
+
     def test_no_options_no_merge(self):
         """No options in model_config means no merge, body unchanged except model."""
         provider = _build_provider()
