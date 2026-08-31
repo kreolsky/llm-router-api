@@ -132,3 +132,11 @@ Done — all five steps implemented, tested and driven live on branch
 `request-path-module-seams` (full suite green: 669 passed, 1 skipped;
 provider-bound payloads byte-identical pre/post across all four endpoints;
 endpoint set and error_code values unchanged).
+
+Review pass closed five findings on top: the merged envelope extractor had
+silently changed the mid-stream error semantics (restored via an explicit
+`overwrite`, with falsified tests), type hints, a stale invariant-why baseline
+key that was hiding a Why-less marker moved by the step-5 split, a dead test,
+and the re-listed PreparedDispatch fields. The two drives the plan named but
+that were never run — a mid-stream upstream failure and a client-aborted
+stream — were driven; 672 passed, 1 skipped, all gates green.

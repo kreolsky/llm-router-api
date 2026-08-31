@@ -3,11 +3,10 @@
     "src/core/auth.py": 1,
     "src/core/context.py": 1,
     "src/core/logging/config.py": 1,
-    "src/core/model_capabilities.py": 1,
     "src/providers/base.py": 1,
     "src/services/base.py": 1,
     "src/services/chat_service/stream_processor.py": 1,
     "src/services/model_service.py": 3
   },
-  "total": 10
+  "total": 9
 }

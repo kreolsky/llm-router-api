@@ -307,6 +307,48 @@ class TestEnrichStatsFromEnvelope:
         assert stats.error_message is None
         assert stats.provider_name == ""
 
+    def test_overwrite_replaces_an_error_code_enriched_earlier(self):
+        """Stream semantics: the mid-stream payload is the terminal error.
+
+        A generic failure (no metadata) must still record
+        internal_server_error even when something enriched the holder
+        earlier in the request — this is what the pre-merge
+        _apply_stream_error did unconditionally.
+        """
+        stats = RequestStats(error_code="model_not_found", error_message="stale")
+        enrich_stats_from_envelope(
+            stats, {"error": {"code": 500, "message": "connection reset"}},
+            default_error_code="internal_server_error", overwrite=True,
+        )
+        assert stats.error_code == "internal_server_error"
+        assert stats.error_message == "connection reset"
+
+    def test_overwrite_clears_a_stale_message_when_the_envelope_has_none(self):
+        stats = RequestStats(error_code="e", error_message="stale")
+        enrich_stats_from_envelope(
+            stats, {"error": {"code": 500}},
+            default_error_code="internal_server_error", overwrite=True,
+        )
+        assert stats.error_message is None
+        assert stats.error_code == "internal_server_error"
+
+    def test_without_overwrite_an_existing_error_code_survives(self):
+        """HTTP-handler semantics: best-effort enrichment never clobbers."""
+        stats = RequestStats(error_code="model_not_found", error_message="kept")
+        enrich_stats_from_envelope(
+            stats, {"error": {"code": 500}}, default_error_code="internal_server_error",
+        )
+        assert stats.error_code == "model_not_found"
+        assert stats.error_message == "kept"
+
+    def test_overwrite_still_never_clobbers_provider_name(self):
+        stats = RequestStats(provider_name="resolved")
+        enrich_stats_from_envelope(
+            stats, {"error": {"message": "x", "metadata": {"provider_name": "upstream"}}},
+            default_error_code="internal_server_error", overwrite=True,
+        )
+        assert stats.provider_name == "resolved"
+
     def test_http_exception_handler_and_stream_share_the_one_extractor(self):
         """The seam: both call sites import the same function object."""
         from src.api.main import custom_http_exception_handler

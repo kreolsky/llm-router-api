@@ -2,7 +2,7 @@
 # SYSTEM: service-layer — validate access, resolve provider, dispatch
 
 import contextlib
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Any
 
 from fastapi import HTTPException, Request
@@ -231,13 +231,11 @@ class BaseService:
         # ARCH: the effort policy rides the one dispatch funnel (services/reasoning_effort.py).
         request_body = apply_reasoning_effort(request_body, target.model_config, **target.error_ctx)
 
+        # Fields are DERIVED from ResolvedTarget, not re-listed: a field added
+        # to the resolver reaches the JSON wrapper without a second edit.
         return PreparedDispatch(
-            request_body=request_body, requested_model=requested_model, **{
-                field: getattr(target, field) for field in (
-                    "request_id", "user_id", "stats", "error_ctx", "model_config",
-                    "provider_name", "provider_model_name", "provider_config",
-                    "provider", "identity_headers",
-                )}
+            request_body=request_body, requested_model=requested_model,
+            **{f.name: getattr(target, f.name) for f in fields(ResolvedTarget)},
         )
 
     def _log_service_data(

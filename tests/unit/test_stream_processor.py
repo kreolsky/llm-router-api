@@ -42,13 +42,6 @@ class TestTransparentMode:
         assert result == chunks
 
     @pytest.mark.asyncio
-    async def test_with_config_manager(self):
-        sp = make_processor()
-        chunks = [b"chunk1", b"chunk2"]
-        result = await collect(sp.process_stream(async_gen(chunks), "m", "r", "u"))
-        assert result == chunks
-
-    @pytest.mark.asyncio
     async def test_empty_stream(self):
         sp = StreamProcessor()
         result = await collect(sp.process_stream(async_gen([]), "m", "r", "u"))

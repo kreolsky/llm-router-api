@@ -147,8 +147,11 @@ class StreamProcessor:
             # The ONE envelope extractor (core/error_handling/envelope.py),
             # shared with the HTTP exception handler: the frame the client
             # sees and the row the dashboard sees cannot drift.
+            # overwrite=True: this payload is the terminal error for the
+            # request, so it owns error_code/error_message outright.
             enrich_stats_from_envelope(
-                req_stats, error_payload, default_error_code="internal_server_error"
+                req_stats, error_payload,
+                default_error_code="internal_server_error", overwrite=True,
             )
             yield _frame_error(error_payload)
             return
