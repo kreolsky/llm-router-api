@@ -150,3 +150,11 @@ container on `:8777`:
   no retry — open_provider_stream already surfaces upstream status).
   Decorator tests ported to drive through `_make_request`. Full suite green
   (632 passed, 1 skipped), ruff clean.
+- Step 3 (extracted pool) DONE: `src/providers/pool.py` `ProviderPool`
+  (client construction, semaphore, in-flight accounting, aclose drain) —
+  the ARCH/INVARIANT blocks moved verbatim; BaseProvider composes
+  `self.pool` and delegates aclose; no `client` alias (grep-clean rename).
+  Pool-shaped tests moved to tests/unit/test_provider_pool.py driving the
+  component directly. Full suite run 3x: one flake in an unrelated
+  /v1/models caching API test on the cold first run, then 640 passed twice.
+  SYSTEMS.md regenerated (also fixed a pre-existing usage-stats line drift).

@@ -33,7 +33,7 @@ class OpenAICompatibleProvider(BaseProvider):
                                 extra_headers: dict[str, str] = None) -> AsyncGenerator[bytes, None]:
         """Forward a streaming chat completion to an OpenAI-compatible API."""
         request_body = self._apply_model_config(request_body, provider_model_name, model_config)
-        return self._stream_request(self.client, "/chat/completions", request_body,
+        return self._stream_request(self.pool.client, "/chat/completions", request_body,
                                     request_id=request_id, extra_headers=extra_headers)
 
     async def transcriptions(self, request_body: dict[str, Any], provider_model_name: str,

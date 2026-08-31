@@ -107,11 +107,11 @@ class TestRetryLoop:
     async def test_successful_first_try_no_retries(self):
         """Successful call on first try — no sleeps, one HTTP call."""
         provider = self._provider()
-        provider.client.post = AsyncMock(return_value=_mock_response())
+        provider.pool.client.post = AsyncMock(return_value=_mock_response())
         with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             result = await provider._make_request("POST", "/x", request_id="r1")
         assert result == {"ok": True}
-        provider.client.post.assert_awaited_once()
+        provider.pool.client.post.assert_awaited_once()
         mock_sleep.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -126,7 +126,7 @@ class TestRetryLoop:
             calls.append(1)
             raise HTTPException(status_code=429, detail="rate limited")
 
-        provider.client.post = post
+        provider.pool.client.post = post
         with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock):
             with pytest.raises(HTTPException) as exc_info:
                 await provider._make_request("POST", "/x", request_id="r1")
@@ -144,7 +144,7 @@ class TestRetryLoop:
             calls.append(1)
             raise HTTPException(status_code=500, detail="server error")
 
-        provider.client.post = post
+        provider.pool.client.post = post
         with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             with pytest.raises(HTTPException) as exc_info:
                 await provider._make_request("POST", "/x", request_id="r1")
@@ -162,7 +162,7 @@ class TestRetryLoop:
         async def mock_sleep(delay):
             recorded_delays.append(delay)
 
-        provider.client.post = self._rate_limited_post()
+        provider.pool.client.post = self._rate_limited_post()
         with patch("src.providers.base.asyncio.sleep", side_effect=mock_sleep), \
              pytest.raises(HTTPException):
             await provider._make_request("POST", "/x", request_id="r1")
@@ -182,7 +182,7 @@ class TestRetryLoop:
             calls.append(1)
             raise HTTPException(status_code=429, detail="rate limited")
 
-        provider.client.post = post
+        provider.pool.client.post = post
         with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock):
             with pytest.raises(HTTPException):
                 await provider._make_request("POST", "/x", request_id="r1")
@@ -198,7 +198,7 @@ class TestRetryLoop:
             calls.append(1)
             raise HTTPException(status_code=429, detail="rate limited")
 
-        provider.client.post = post
+        provider.pool.client.post = post
         with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock):
             with pytest.raises(HTTPException):
                 await provider._make_request("POST", "/x", request_id="r1")
@@ -274,9 +274,9 @@ class TestTypedSettingsArgument:
                             httpx_connect_timeout=12.0, httpx_read_timeout=33.0,
                             httpx_pool_timeout=4.0)
         provider = _build_provider(settings=settings)
-        assert provider.client.timeout.connect == 12.0
-        assert provider.client.timeout.read == 33.0
-        assert provider.client.timeout.pool == 4.0
+        assert provider.pool.client.timeout.connect == 12.0
+        assert provider.pool.client.timeout.read == 33.0
+        assert provider.pool.client.timeout.pool == 4.0
 
     def test_no_config_manager_attribute(self):
         """The duck-typed config_manager attribute is gone."""
@@ -408,50 +408,12 @@ class TestCreateTimeout:
     def test_inherits_connect_pool_from_client(self):
         """Inherits connect/pool from the owned client when not specified."""
         provider = _build_provider()
-        client_timeout = provider.client.timeout
+        client_timeout = provider.pool.client.timeout
         timeout = provider._create_timeout(read=99.0)
         assert timeout.connect == client_timeout.connect
         assert timeout.pool == client_timeout.pool
         assert timeout.read == 99.0
         assert timeout.write is None   # default when not specified
-
-
-# ===================================================================
-# Client ownership & aclose
-# ===================================================================
-
-class TestClientOwnership:
-
-    def test_provider_owns_real_client(self):
-        """Provider constructs its own httpx.AsyncClient on init."""
-        provider = _build_provider()
-        assert isinstance(provider.client, httpx.AsyncClient)
-        assert not provider.client.is_closed
-
-    def test_client_limits_from_settings(self):
-        """Client timeout config is derived from the Settings snapshot."""
-        settings = Settings(httpx_max_connections=42, httpx_max_keepalive_connections=7,
-                            httpx_connect_timeout=12.0, httpx_read_timeout=33.0,
-                            httpx_pool_timeout=4.0)
-        provider = _build_provider(settings=settings)
-        assert provider.client.timeout.connect == 12.0
-        assert provider.client.timeout.read == 33.0
-        assert provider.client.timeout.pool == 4.0
-
-    @pytest.mark.asyncio
-    async def test_aclose_closes_client(self):
-        """aclose() closes the owned client."""
-        provider = _build_provider()
-        await provider.aclose()
-        assert provider.client.is_closed
-
-    @pytest.mark.asyncio
-    async def test_aclose_idempotent(self):
-        """aclose() is safe to call multiple times."""
-        provider = _build_provider()
-        await provider.aclose()
-        await provider.aclose()  # no error
-        assert provider.client.is_closed
 
 
 # ===================================================================
@@ -465,22 +427,22 @@ class TestProxySupport:
         """A provider without the `proxy` key has self.proxy is None."""
         provider = _build_provider()
         assert provider.proxy is None
-        assert isinstance(provider.client, httpx.AsyncClient)
-        assert not provider.client.is_closed
+        assert isinstance(provider.pool.client, httpx.AsyncClient)
+        assert not provider.pool.client.is_closed
 
     def test_provider_with_proxy_builds_client(self):
         """Provider with a socks5 proxy URL builds a client without error."""
         provider = _build_provider(proxy="socks5://proxy.red:1331")
         assert provider.proxy == "socks5://proxy.red:1331"
-        assert isinstance(provider.client, httpx.AsyncClient)
-        assert not provider.client.is_closed
+        assert isinstance(provider.pool.client, httpx.AsyncClient)
+        assert not provider.pool.client.is_closed
 
     @pytest.mark.asyncio
     async def test_proxy_client_closes_cleanly(self):
         """A proxy-backed client can be closed via aclose()."""
         provider = _build_provider(proxy="socks5://proxy.red:1331")
         await provider.aclose()
-        assert provider.client.is_closed
+        assert provider.pool.client.is_closed
 
     def test_proxy_with_settings(self):
         """Proxy and Settings limits coexist on the same client."""
@@ -489,8 +451,8 @@ class TestProxySupport:
                             httpx_pool_timeout=4.0)
         provider = _build_provider(proxy="socks5://proxy.red:1331", settings=settings)
         assert provider.proxy == "socks5://proxy.red:1331"
-        assert provider.client.timeout.connect == 12.0
-        assert provider.client.timeout.read == 33.0
+        assert provider.pool.client.timeout.connect == 12.0
+        assert provider.pool.client.timeout.read == 33.0
 
 
 # ===================================================================
@@ -536,20 +498,20 @@ class TestConcurrencyLimit:
     def test_no_semaphore_when_max_concurrent_unset(self):
         """Provider without max_concurrent has _semaphore is None."""
         provider = _build_provider()
-        assert provider._semaphore is None
-        assert provider._max_concurrent is None
+        assert provider.pool._semaphore is None
+        assert provider.pool._max_concurrent is None
 
     def test_semaphore_created_when_max_concurrent_set(self):
         """Provider with max_concurrent creates an asyncio.Semaphore."""
         provider = _build_limited_provider(2)
-        assert provider._max_concurrent == 2
-        assert provider._semaphore is not None
+        assert provider.pool._max_concurrent == 2
+        assert provider.pool._semaphore is not None
 
     def test_max_concurrent_non_positive_disables_limit(self):
         """Non-positive / non-int max_concurrent disables the limit."""
         provider = _build_limited_provider(0)
-        assert provider._semaphore is None
-        assert provider._max_concurrent is None
+        assert provider.pool._semaphore is None
+        assert provider.pool._max_concurrent is None
 
     @pytest.mark.asyncio
     async def test_no_limit_requests_run_concurrently(self):
@@ -566,7 +528,7 @@ class TestConcurrencyLimit:
             await release.wait()
             return _mock_response()
 
-        provider.client.post = post
+        provider.pool.client.post = post
         t1 = asyncio.create_task(provider._make_request("POST", "/x", request_id="r1"))
         t2 = asyncio.create_task(provider._make_request("POST", "/x", request_id="r2"))
         await asyncio.wait_for(asyncio.gather(started[0].wait(), started[1].wait()), timeout=2)
@@ -590,7 +552,7 @@ class TestConcurrencyLimit:
             await release[i].wait()
             return _mock_response()
 
-        provider.client.post = post
+        provider.pool.client.post = post
         t1 = asyncio.create_task(provider._make_request("POST", "/x", request_id="r1"))
         await asyncio.wait_for(started[0].wait(), timeout=2)
 
@@ -619,7 +581,7 @@ class TestConcurrencyLimit:
                 await first_release.wait()
             return _mock_response()
 
-        provider.client.post = post
+        provider.pool.client.post = post
         t1 = asyncio.create_task(provider._make_request("POST", "/x", request_id="r1"))
         await asyncio.wait_for(started[0].wait(), timeout=2)
 
@@ -643,7 +605,7 @@ class TestConcurrencyLimit:
             await blocker.wait()
             return _mock_response()
 
-        provider.client.post = post
+        provider.pool.client.post = post
         t1 = asyncio.create_task(provider._make_request("POST", "/x", request_id="r1"))
         await asyncio.wait_for(running.wait(), timeout=2)
 
@@ -651,10 +613,10 @@ class TestConcurrencyLimit:
             await provider._make_request("POST", "/x", request_id="r2")
 
         # Semaphore value must still be 0 (first call holds it; the timed-out one never acquired).
-        assert provider._semaphore._value == 0
+        assert provider.pool._semaphore._value == 0
         blocker.set()
         await t1
-        assert provider._semaphore._value == 1
+        assert provider.pool._semaphore._value == 1
 
     @pytest.mark.asyncio
     async def test_stream_slot_released_on_completion(self):
@@ -667,10 +629,10 @@ class TestConcurrencyLimit:
 
         provider._stream_request_inner = inner
         chunks = []
-        async for c in provider._stream_request(provider.client, "/x", {}, "r1"):
+        async for c in provider._stream_request(provider.pool.client, "/x", {}, "r1"):
             chunks.append(c)
         assert chunks == [b"a", b"b"]
-        assert provider._semaphore._value == 1
+        assert provider.pool._semaphore._value == 1
 
         # second stream must start immediately (slot was released)
         second_started = asyncio.Event()
@@ -681,7 +643,7 @@ class TestConcurrencyLimit:
 
         provider._stream_request_inner = inner2
         out = []
-        async for c in provider._stream_request(provider.client, "/x", {}, "r2"):
+        async for c in provider._stream_request(provider.pool.client, "/x", {}, "r2"):
             out.append(c)
         assert second_started.is_set()
         assert out == [b"c"]
@@ -698,11 +660,11 @@ class TestConcurrencyLimit:
             yield b"b"
 
         provider._stream_request_inner = inner
-        gen = provider._stream_request(provider.client, "/x", {}, "r1")
+        gen = provider._stream_request(provider.pool.client, "/x", {}, "r1")
         first = await gen.__anext__()
         assert first == b"a"
         await gen.aclose()
-        assert provider._semaphore._value == 1  # released on close
+        assert provider.pool._semaphore._value == 1  # released on close
 
     @pytest.mark.asyncio
     async def test_stream_slot_released_on_exception(self):
@@ -714,12 +676,12 @@ class TestConcurrencyLimit:
             raise RuntimeError("boom")
 
         provider._stream_request_inner = inner
-        gen = provider._stream_request(provider.client, "/x", {}, "r1")
+        gen = provider._stream_request(provider.pool.client, "/x", {}, "r1")
         first = await gen.__anext__()
         assert first == b"a"
         with pytest.raises(RuntimeError):
             await gen.__anext__()
-        assert provider._semaphore._value == 1
+        assert provider.pool._semaphore._value == 1
 
     @pytest.mark.asyncio
     async def test_retry_holds_slot_across_attempts(self):
@@ -730,7 +692,7 @@ class TestConcurrencyLimit:
 
         async def post(*a, **k):
             calls[0] += 1
-            seen_values.append(provider._semaphore._value)
+            seen_values.append(provider.pool._semaphore._value)
             if calls[0] == 1:
                 resp = MagicMock()
                 resp.status_code = 429
@@ -739,7 +701,7 @@ class TestConcurrencyLimit:
                 raise httpx.HTTPStatusError("429", request=MagicMock(spec=httpx.Request), response=resp)
             return _mock_response()
 
-        provider.client.post = post
+        provider.pool.client.post = post
         with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock):
             result = await provider._make_request("POST", "/x", request_id="r1")
 
@@ -748,7 +710,7 @@ class TestConcurrencyLimit:
         # Slot value was 0 during BOTH attempts (held across retry).
         assert seen_values == [0, 0]
         # Released exactly once after success.
-        assert provider._semaphore._value == 1
+        assert provider.pool._semaphore._value == 1
 
 
 # ===================================================================
@@ -791,30 +753,30 @@ class TestHeaderMergeParity:
     async def test_stream_and_non_stream_send_identical_headers(self):
         """Same extra_headers → byte-identical header dicts on both paths."""
         provider = _build_provider()
-        provider.client.post = AsyncMock(return_value=_mock_response())
+        provider.pool.client.post = AsyncMock(return_value=_mock_response())
         stream_response = _FakeStreamResponse()
-        provider.client.stream = MagicMock(return_value=_FakeStreamCtx(stream_response))
+        provider.pool.client.stream = MagicMock(return_value=_FakeStreamCtx(stream_response))
 
         await provider._make_request("POST", "/chat", request_body={}, request_id="r1",
                                      extra_headers=self.EXTRA)
-        chunks = [c async for c in provider._stream_request(provider.client, "/chat", {},
+        chunks = [c async for c in provider._stream_request(provider.pool.client, "/chat", {},
                                                             "r2", extra_headers=self.EXTRA)]
         assert chunks == [b"data: chunk\n\n"]
 
-        post_headers = provider.client.post.call_args.kwargs["headers"]
-        stream_headers = provider.client.stream.call_args.kwargs["headers"]
+        post_headers = provider.pool.client.post.call_args.kwargs["headers"]
+        stream_headers = provider.pool.client.stream.call_args.kwargs["headers"]
         assert post_headers == stream_headers
 
     @pytest.mark.asyncio
     async def test_stream_without_extra_headers_sends_static_headers(self):
         """Stream path with no extra_headers sends exactly self.headers."""
         provider = _build_provider()
-        provider.client.stream = MagicMock(return_value=_FakeStreamCtx(_FakeStreamResponse()))
+        provider.pool.client.stream = MagicMock(return_value=_FakeStreamCtx(_FakeStreamResponse()))
 
-        async for _ in provider._stream_request(provider.client, "/chat", {}, "r1"):
+        async for _ in provider._stream_request(provider.pool.client, "/chat", {}, "r1"):
             pass
 
-        assert provider.client.stream.call_args.kwargs["headers"] == provider.headers
+        assert provider.pool.client.stream.call_args.kwargs["headers"] == provider.headers
 
     def test_merge_replaces_case_insensitive_duplicates(self):
         """An extra header replaces its case-insensitive base twin, not duplicates it."""
@@ -958,228 +920,6 @@ class TestChatExtraHeadersForwarding:
 
 
 # ===================================================================
-# Graceful drain on aclose (config reload must not kill live streams)
-# ===================================================================
-
-class TestGracefulDrain:
-    """aclose() waits for in-flight requests before closing the pool.
-
-    A config reload rebuilds the provider cache and closes the OLD pools while
-    long-lived SSE streams may still be reading from them.
-    """
-
-    @pytest.mark.asyncio
-    async def test_idle_provider_closes_immediately(self):
-        """With nothing in flight, aclose() closes without waiting."""
-        provider = _build_provider()
-        await asyncio.wait_for(provider.aclose(), timeout=1.0)
-        assert provider.client.is_closed
-
-    @pytest.mark.asyncio
-    async def test_aclose_waits_for_inflight_request(self):
-        """A request in flight keeps the pool open until it finishes."""
-        provider = _build_provider()
-        release = asyncio.Event()
-        entered = asyncio.Event()
-
-        async def slow_post(*a, **k):
-            entered.set()
-            await release.wait()
-            return _mock_response()
-
-        provider.client.post = slow_post
-
-        request = asyncio.create_task(
-            provider._make_request("POST", "/x", request_body={}, request_id="r1")
-        )
-        await asyncio.wait_for(entered.wait(), timeout=1.0)
-
-        closing = asyncio.create_task(provider.aclose())
-        await asyncio.sleep(0.05)
-        assert not closing.done(), "aclose() closed the pool with a request in flight"
-        assert not provider.client.is_closed
-
-        release.set()
-        await asyncio.wait_for(request, timeout=1.0)
-        await asyncio.wait_for(closing, timeout=1.0)
-        assert provider.client.is_closed
-
-    @pytest.mark.asyncio
-    async def test_aclose_waits_for_inflight_stream(self):
-        """A stream being consumed keeps the pool open until the consumer stops."""
-        provider = _build_provider()
-        entered = asyncio.Event()
-        release = asyncio.Event()
-
-        async def fake_inner(*a, **k):
-            entered.set()
-            yield b"chunk-1"
-            await release.wait()
-            yield b"chunk-2"
-
-        provider._stream_request_inner = fake_inner
-
-        chunks = []
-
-        async def consume():
-            async for chunk in provider._stream_request(provider.client, "/x", {}, "r1"):
-                chunks.append(chunk)
-
-        consumer = asyncio.create_task(consume())
-        await asyncio.wait_for(entered.wait(), timeout=1.0)
-
-        closing = asyncio.create_task(provider.aclose())
-        await asyncio.sleep(0.05)
-        assert not closing.done(), "aclose() closed the pool mid-stream"
-        assert not provider.client.is_closed
-
-        release.set()
-        await asyncio.wait_for(consumer, timeout=1.0)
-        await asyncio.wait_for(closing, timeout=1.0)
-        assert provider.client.is_closed
-        assert chunks == [b"chunk-1", b"chunk-2"]
-
-    @pytest.mark.asyncio
-    async def test_drain_timeout_forces_close(self):
-        """A request that never finishes cannot block shutdown forever."""
-        provider = _build_provider()
-        entered = asyncio.Event()
-
-        async def never_finishes(*a, **k):
-            entered.set()
-            await asyncio.Event().wait()
-
-        provider.client.post = never_finishes
-        request = asyncio.create_task(
-            provider._make_request("POST", "/x", request_body={}, request_id="r1")
-        )
-        await asyncio.wait_for(entered.wait(), timeout=1.0)
-
-        await asyncio.wait_for(provider.aclose(drain_timeout=0.05), timeout=1.0)
-        assert provider.client.is_closed
-
-        request.cancel()
-
-    @pytest.mark.asyncio
-    async def test_inflight_released_on_stream_abandon(self):
-        """A consumer that abandons the stream still releases the in-flight slot."""
-        provider = _build_provider()
-        entered = asyncio.Event()
-
-        async def fake_inner(*a, **k):
-            entered.set()
-            yield b"chunk-1"
-            await asyncio.Event().wait()
-
-        provider._stream_request_inner = fake_inner
-
-        stream = provider._stream_request(provider.client, "/x", {}, "r1")
-        assert await stream.__anext__() == b"chunk-1"
-        await asyncio.wait_for(entered.wait(), timeout=1.0)
-        await stream.aclose()
-
-        await asyncio.wait_for(provider.aclose(), timeout=1.0)
-        assert provider.client.is_closed
-
-
-# ===================================================================
-# Late slot acquisitions fail fast once a pool starts closing
-# ===================================================================
-
-class TestLateAcquisitionDuringDrain:
-    """Once aclose() begins, a late _acquire_slot must 503, not enter a closing pool.
-
-    A config reload swaps the provider cache, but a coroutine holding a
-    pre-swap instance can call into it after aclose()'s drain waiter woke —
-    without the gate it would run on a pool that closes under it.
-    """
-
-    def _slow_post(self, entered, release):
-        async def post(*a, **k):
-            entered.set()
-            await release.wait()
-            return _mock_response()
-        return post
-
-    @pytest.mark.asyncio
-    async def test_late_acquirer_gets_503_no_placeholder(self):
-        """Holder keeps _idle clear, aclose() is waiting: a NEW acquisition
-        raises 503 whose message carries no `{` token and whose error_code is
-        service_unavailable (not provider_concurrency_limit)."""
-        provider = _build_provider()
-        entered = asyncio.Event()
-        release = asyncio.Event()
-        provider.client.post = self._slow_post(entered, release)
-
-        holder = asyncio.create_task(
-            provider._make_request("POST", "/x", request_body={}, request_id="r1"))
-        await asyncio.wait_for(entered.wait(), timeout=1.0)
-
-        closing = asyncio.create_task(provider.aclose())
-        await asyncio.sleep(0.05)
-        assert not closing.done()
-
-        with pytest.raises(HTTPException) as exc_info:
-            async with provider._acquire_slot("r2"):
-                pass
-        assert exc_info.value.status_code == 503
-        message = exc_info.value.detail["error"]["message"]
-        # The SERVICE_UNAVAILABLE template is keyed on {error_details}; a raw
-        # brace means the kwarg was not supplied.
-        assert "{" not in message
-        assert "closing" in message
-        assert exc_info.value.detail["error"]["metadata"]["error_code"] == "service_unavailable"
-
-        release.set()
-        await asyncio.wait_for(holder, timeout=1.0)
-        await asyncio.wait_for(closing, timeout=1.0)
-        assert provider.client.is_closed
-
-    @pytest.mark.asyncio
-    async def test_queued_acquirer_rechecks_after_semaphore_wait(self):
-        """A request counted BEFORE the close (so the drain waits for it) but
-        still queued on the semaphore re-checks _closed after the wait and
-        fails with 503 instead of proceeding on the drained pool."""
-        provider = _build_limited_provider(1, settings=_make_settings(queue_wait_timeout=5.0))
-        entered = asyncio.Event()
-        release = asyncio.Event()
-        provider.client.post = self._slow_post(entered, release)
-
-        holder = asyncio.create_task(
-            provider._make_request("POST", "/x", request_id="r1"))
-        await asyncio.wait_for(entered.wait(), timeout=1.0)
-
-        # r2 counts into _inflight and queues on the semaphore BEFORE aclose.
-        queued = asyncio.create_task(
-            provider._make_request("POST", "/x", request_id="r2"))
-        await asyncio.sleep(0.05)
-        assert not queued.done()
-
-        closing = asyncio.create_task(provider.aclose())
-        await asyncio.sleep(0.05)
-
-        release.set()  # holder finishes → r2's semaphore wait completes → re-check
-        with pytest.raises(HTTPException) as exc_info:
-            await asyncio.wait_for(queued, timeout=1.0)
-        assert exc_info.value.status_code == 503
-        assert exc_info.value.detail["error"]["metadata"]["error_code"] == "service_unavailable"
-
-        await asyncio.wait_for(holder, timeout=1.0)
-        await asyncio.wait_for(closing, timeout=1.0)
-        assert provider.client.is_closed
-
-    @pytest.mark.asyncio
-    async def test_acquisition_before_close_proceeds_untouched(self):
-        """The gate only bites once aclose() started: a normal acquisition on
-        an open provider is unaffected."""
-        provider = _build_provider()
-        async with provider._acquire_slot("r1"):
-            assert provider._inflight == 1
-        assert provider._inflight == 0
-        await provider.aclose()
-
-
-# ===================================================================
 # _create_timeout fallback semantics and call-site timeouts
 # ===================================================================
 
@@ -1194,7 +934,7 @@ class TestCreateTimeoutFallback:
 
         assert t.connect == 11.0
         assert t.read == 77.0
-        assert t.write == provider.client.timeout.write
+        assert t.write == provider.pool.client.timeout.write
         assert t.pool == 4.0
 
     def test_explicit_values_win_over_client(self):
@@ -1235,7 +975,7 @@ class TestCallSiteTimeouts:
         assert t.read == 300.0
         assert t.connect == 60.0
         assert t.pool == 5.0
-        assert t.write == provider.client.timeout.write
+        assert t.write == provider.pool.client.timeout.write
 
     @pytest.mark.asyncio
     async def test_transcription_read_is_transcription_timeout(self):
@@ -1266,7 +1006,7 @@ class TestCallSiteTimeouts:
         assert t.read == 30.0
         assert t.connect == 60.0
         assert t.pool == 5.0
-        assert t.write == provider.client.timeout.write
+        assert t.write == provider.pool.client.timeout.write
 
     @pytest.mark.asyncio
     async def test_stream_read_is_stream_read_timeout(self):
@@ -1305,7 +1045,7 @@ class TestCallSiteTimeouts:
             return _FakeStreamCM(_FakeStreamResponse())
 
         fake_client.stream = stream
-        provider.client = fake_client
+        provider.pool.client = fake_client
 
         chunks = [c async for c in provider._stream_request(fake_client, "/chat/completions", {})]
         assert chunks == []
@@ -1331,7 +1071,7 @@ class TestRetryUploadSafety:
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
             provider = OpenAICompatibleProvider(config, settings=cm or _make_settings(
                 provider_retry_base_delay=0.001, provider_retry_max_delay=0.01))
-        provider.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        provider.pool.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         return provider
 
     @pytest.mark.asyncio
@@ -1398,7 +1138,7 @@ class TestRetryRateLimitDetection:
             calls.append(1)
             raise wrapped
 
-        provider.client.post = post
+        provider.pool.client.post = post
         with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             with pytest.raises(HTTPException):
                 await provider._make_request("POST", "/x", request_id="r1")
@@ -1419,7 +1159,7 @@ class TestRetryRateLimitDetection:
                 raise wrapped
             return _mock_response()
 
-        provider.client.post = post
+        provider.pool.client.post = post
         with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock):
             result = await provider._make_request("POST", "/x", request_id="r1")
         assert result == {"ok": True}
