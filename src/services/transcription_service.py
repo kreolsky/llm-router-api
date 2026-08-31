@@ -5,8 +5,6 @@ from fastapi import Request, UploadFile
 
 from ..core.context import AuthContext
 from ..core.logging import logger
-from ..core.usage_db import request_stats
-from ..providers import get_provider_instance
 from ..services.model_service import ModelService
 from .base import BaseService
 
@@ -68,18 +66,13 @@ class TranscriptionService(BaseService):
 
         # Transcriptions carry no usage block: tokens stay 0 and has_usage
         # stays False — the row still makes transcriptions visible in stats.
-        stats = request_stats(request)
-        stats.model_id = model_id
-
-        error_ctx = {"request_id": request_id, "user_id": user_id, "model_id": model_id}
-
-        async with self._guard_service_errors(error_ctx):
-            model_config, provider_name, provider_model_name, _provider_config = \
-                self._validate_and_get_config(model_id, auth_context, **error_ctx)
-            stats.provider_name = provider_name
-
-            provider_instance = await get_provider_instance(provider_name)
-            identity_headers = self._build_identity_headers(provider_instance, request)
+        async with self._guard_service_errors(
+            {"request_id": request_id, "user_id": user_id, "model_id": model_id}
+        ):
+            # ARCH: multipart cannot enter the JSON wrapper, so transcription
+            # rides the body-agnostic resolver — the same funnel
+            # _prepare_dispatch delegates to after parsing its JSON body.
+            target = await self._resolve_target(request, auth_context, model_id)
 
             provider_request_body = {
                 "audio": {
@@ -95,12 +88,12 @@ class TranscriptionService(BaseService):
                 },
             }
 
-            response = await provider_instance.transcriptions(
+            response = await target.provider.transcriptions(
                 provider_request_body,
-                provider_model_name,
-                model_config,
+                target.provider_model_name,
+                target.model_config,
                 request_id=request_id,
-                extra_headers=identity_headers,
+                extra_headers=target.identity_headers,
             )
 
             self._log_service_data(

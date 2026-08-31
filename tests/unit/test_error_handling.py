@@ -5,6 +5,7 @@ from unittest.mock import patch
 import pytest
 from fastapi import HTTPException
 
+from src.core.error_handling.envelope import enrich_stats_from_envelope
 from src.core.error_handling.error_handler import create_error
 from src.core.error_handling.error_types import ErrorType
 
@@ -232,3 +233,126 @@ class TestCreateErrorAllTypes:
         exc = create_error(ErrorType.INTERNAL_SERVER_ERROR, error_details="oops")
         assert exc.status_code == 500
         assert "oops" in exc.detail["error"]["message"]
+
+
+# ---------------------------------------------------------------------------
+# enrich_stats_from_envelope — the single error-envelope -> stats walk
+# ---------------------------------------------------------------------------
+
+from src.core.usage_db import RequestStats  # noqa: E402
+
+
+class TestEnrichStatsFromEnvelope:
+    """One extractor owns the {"error": {message, metadata}} walk so the HTTP
+    handler and the stream processor cannot drift apart when the envelope
+    gains a field."""
+
+    def test_full_envelope_writes_all_three_fields(self):
+        stats = RequestStats()
+        enrich_stats_from_envelope(stats, {"error": {
+            "message": "rate limited",
+            "metadata": {"error_code": "provider_http_error", "provider_name": "kimi"},
+        }})
+        assert stats.error_code == "provider_http_error"
+        assert stats.error_message == "rate limited"
+        assert stats.provider_name == "kimi"
+
+    def test_provider_name_never_overwrites_an_existing_value(self):
+        stats = RequestStats(provider_name="already-set")
+        enrich_stats_from_envelope(stats, {"error": {
+            "message": "x",
+            "metadata": {"error_code": "e", "provider_name": "upstream"},
+        }})
+        assert stats.provider_name == "already-set"
+
+    def test_default_error_code_applies_when_metadata_missing(self):
+        """Stream semantics: no metadata => coarse internal_server_error."""
+        stats = RequestStats()
+        enrich_stats_from_envelope(
+            stats, {"error": {"code": 500, "message": "kaboom"}},
+            default_error_code="internal_server_error",
+        )
+        assert stats.error_code == "internal_server_error"
+        assert stats.error_message == "kaboom"
+
+    def test_no_default_leaves_error_code_null(self):
+        """HTTP-handler semantics: a plain detail keeps error_code NULL."""
+        stats = RequestStats()
+        enrich_stats_from_envelope(stats, {"error": {"code": 404, "message": "Not Found"}})
+        assert stats.error_code is None
+        assert stats.error_message == "Not Found"
+
+    def test_metadata_error_code_wins_over_the_default(self):
+        stats = RequestStats()
+        enrich_stats_from_envelope(
+            stats, {"error": {"message": "x", "metadata": {"error_code": "model_not_found"}}},
+            default_error_code="internal_server_error",
+        )
+        assert stats.error_code == "model_not_found"
+
+    def test_non_dict_metadata_is_ignored(self):
+        stats = RequestStats()
+        enrich_stats_from_envelope(
+            stats, {"error": {"message": "x", "metadata": "garbage"}},
+            default_error_code="internal_server_error",
+        )
+        assert stats.error_code == "internal_server_error"
+        assert stats.error_message == "x"
+        assert stats.provider_name == ""
+
+    def test_empty_envelope_is_tolerated(self):
+        stats = RequestStats()
+        enrich_stats_from_envelope(stats, {})
+        assert stats.error_code is None
+        assert stats.error_message is None
+        assert stats.provider_name == ""
+
+    def test_overwrite_replaces_an_error_code_enriched_earlier(self):
+        """Stream semantics: the mid-stream payload is the terminal error.
+
+        A generic failure (no metadata) must still record
+        internal_server_error even when something enriched the holder
+        earlier in the request — this is what the pre-merge
+        _apply_stream_error did unconditionally.
+        """
+        stats = RequestStats(error_code="model_not_found", error_message="stale")
+        enrich_stats_from_envelope(
+            stats, {"error": {"code": 500, "message": "connection reset"}},
+            default_error_code="internal_server_error", overwrite=True,
+        )
+        assert stats.error_code == "internal_server_error"
+        assert stats.error_message == "connection reset"
+
+    def test_overwrite_clears_a_stale_message_when_the_envelope_has_none(self):
+        stats = RequestStats(error_code="e", error_message="stale")
+        enrich_stats_from_envelope(
+            stats, {"error": {"code": 500}},
+            default_error_code="internal_server_error", overwrite=True,
+        )
+        assert stats.error_message is None
+        assert stats.error_code == "internal_server_error"
+
+    def test_without_overwrite_an_existing_error_code_survives(self):
+        """HTTP-handler semantics: best-effort enrichment never clobbers."""
+        stats = RequestStats(error_code="model_not_found", error_message="kept")
+        enrich_stats_from_envelope(
+            stats, {"error": {"code": 500}}, default_error_code="internal_server_error",
+        )
+        assert stats.error_code == "model_not_found"
+        assert stats.error_message == "kept"
+
+    def test_overwrite_still_never_clobbers_provider_name(self):
+        stats = RequestStats(provider_name="resolved")
+        enrich_stats_from_envelope(
+            stats, {"error": {"message": "x", "metadata": {"provider_name": "upstream"}}},
+            default_error_code="internal_server_error", overwrite=True,
+        )
+        assert stats.provider_name == "resolved"
+
+    def test_http_exception_handler_and_stream_share_the_one_extractor(self):
+        """The seam: both call sites import the same function object."""
+        from src.api.main import custom_http_exception_handler
+        from src.services.chat_service import stream_processor as sp
+
+        assert "enrich_stats_from_envelope" in custom_http_exception_handler.__globals__
+        assert sp.enrich_stats_from_envelope is enrich_stats_from_envelope

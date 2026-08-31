@@ -14,7 +14,7 @@ and read the entry file(s). Aliases are hand-maintained in
 | error-format | OpenRouter-compatible error envelope | `src/core/error_handling/error_handler.py:2` | ошибки, error |
 | header-policy | denylist for client headers forwarded upstream | `src/core/header_policy.py:10` |  |
 | logging | the kwargs-style Logger used everywhere | `src/core/logging/logger.py:7` | логи, логирование |
-| model-capabilities | manual layer + auto-cache + render | `src/core/model_capabilities.py:18` | модели, capabilities, /v1/models, кэш моделей |
+| model-capabilities | manual layer + auto-cache + render | `src/core/model_capabilities/__init__.py:22` | модели, capabilities, /v1/models, кэш моделей |
 | provider | base HTTP, retry, streaming and header merging | `src/providers/base.py:2` | провайдер, upstream, бэкенд |
 | provider-registry | provider instances cached by name, drained on reload | `src/providers/__init__.py:2` | кэш провайдеров, реестр |
 | request-context | the typed RequestContext carried per request | `src/core/context.py:7` | контекст запроса, request_id |

@@ -9,6 +9,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from ...core.error_handling import enrich_stats_from_envelope
 from ...core.logging import logger
 from ...core.usage_db import RequestStats
 
@@ -90,10 +91,9 @@ class StreamProcessor:
     captured-usage holder so concurrent streams never overwrite each other.
     """
 
-    def __init__(self, config_manager=None):
-        self.config_manager = config_manager
+    def __init__(self):
         logger.info("StreamProcessor initialized", extra={
-            "stream_processor": {"config_manager": config_manager is not None}
+            "stream_processor": {}
         })
 
     async def process_stream(self,
@@ -144,7 +144,15 @@ class StreamProcessor:
                 }
             }, exc_info=True)
             error_payload = _error_payload(e)
-            _apply_stream_error(req_stats, error_payload)
+            # The ONE envelope extractor (core/error_handling/envelope.py),
+            # shared with the HTTP exception handler: the frame the client
+            # sees and the row the dashboard sees cannot drift.
+            # overwrite=True: this payload is the terminal error for the
+            # request, so it owns error_code/error_message outright.
+            enrich_stats_from_envelope(
+                req_stats, error_payload,
+                default_error_code="internal_server_error", overwrite=True,
+            )
             yield _frame_error(error_payload)
             return
         finally:
@@ -268,18 +276,3 @@ def _frame_error(error_payload: dict[str, Any]) -> bytes:
     error frame alone leaves them waiting until the read timeout fires.
     """
     return f"data: {json.dumps(error_payload)}\n\ndata: [DONE]\n\n".encode()
-
-
-def _apply_stream_error(stats: RequestStats, error_payload: dict[str, Any]) -> None:
-    """Write error_code / error_message into the stats holder.
-
-    HTTPException → its metadata.error_code (always present for errors raised
-    via create_error / create_provider_http_error). Any other exception →
-    internal_server_error, coarse by design: error_message carries the detail.
-    """
-    error = error_payload.get("error") or {}
-    metadata = error.get("metadata") or {}
-    error_code = metadata.get("error_code") if isinstance(metadata, dict) else None
-    stats.error_code = error_code or "internal_server_error"
-    message = error.get("message")
-    stats.error_message = str(message) if message is not None else None

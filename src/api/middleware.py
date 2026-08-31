@@ -29,23 +29,11 @@ from ..utils.client_address import client_host
 # itself (page, JSON API and the static mount), docs and browser noise.
 _SKIP_PATH_PREFIXES = ("/health", "/stat", "/docs", "/openapi.json", "/favicon.ico")
 
-# Stable endpoint names for the usage rows (legacy values kept so old and new
-# rows group together).
-_ENDPOINT_NAMES = {
-    "/v1/chat/completions": "chat",
-    "/v1/embeddings": "embeddings",
-    "/v1/audio/transcriptions": "transcriptions",
-    "/v1/models": "models",
-    "/tools/generate_key": "generate_key",
-}
-
-
-def _endpoint_name(path: str) -> str:
-    if path in _ENDPOINT_NAMES:
-        return _ENDPOINT_NAMES[path]
-    if path.startswith("/v1/models/"):
-        return "models"
-    return path
+# ARCH: the endpoint name for the usage row lives ON the route decorator
+# (name="chat" etc. in src/api/main.py) — the one place a new route cannot
+# forget. This middleware reads scope["route"].name after the app call; the
+# names are NOT derivable from handler function names because stored rows use
+# legacy values (chat/embeddings/models) that historical rows group by.
 
 
 class RequestLoggerMiddleware:
@@ -77,11 +65,13 @@ class RequestLoggerMiddleware:
 
         # ARCH: per-request stats holder; enriched by services/auth, flushed
         # once below. Skipped paths (health, stats, docs) never record.
+        # endpoint starts as the raw path — the route's name (set by the
+        # router during the app call below) replaces it in the finally.
         should_record = not path.startswith(_SKIP_PATH_PREFIXES)
         stats: RequestStats | None = None
         if should_record:
             stats = RequestStats(
-                endpoint=_endpoint_name(path),
+                endpoint=path,
                 client_ip=client_host(Request(scope)),
             )
             state["request_stats"] = stats
@@ -148,6 +138,13 @@ class RequestLoggerMiddleware:
             # disconnects (CancelledError), not just clean returns. With no
             # http.response.start ever sent, the row records status 500.
             if should_record and stats is not None:
+                # The route is only populated on scope AFTER the app call —
+                # including its except branches and a client disconnect
+                # mid-stream. A request that never resolved (404) keeps the
+                # raw path it started with.
+                route = scope.get("route")
+                if route is not None and getattr(route, "name", None):
+                    stats.endpoint = route.name
                 ctx: RequestContext | None = scope.get("state", {}).get("request_context")
                 project_name = ctx.user_id if ctx else "unknown"
                 schedule_flush(
