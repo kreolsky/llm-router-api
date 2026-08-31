@@ -512,6 +512,50 @@ class TestAddPostSwapCallback:
         assert "gpt-5" in cm.get_config().get("models", {})
 
     @pytest.mark.asyncio
+    async def test_post_swap_failure_never_logs_the_plain_success_line(self):
+        """The reload_complete line is a WARNING carrying post_swap_failed=True
+        when a post-swap callback raised. The retry loop reprints this line
+        every poll interval, so an INFO 'Configuration reloaded' would read as
+        'all good' forever while the router serves a half-applied state."""
+        cm = _build_config_manager()
+        cm.add_post_swap_callback(AsyncMock(side_effect=RuntimeError("boom")), name="failing_post")
+
+        with patch("builtins.open", side_effect=_multi_open(ALL_YAMLS)), \
+             patch("src.core.config_manager.logger") as mock_logger:
+            assert await cm.reload_config() is False
+
+        completions = [
+            call for call in mock_logger.warning.call_args_list
+            if call.kwargs.get("extra", {}).get("config", {}).get("operation") == "reload_complete"
+        ]
+        assert len(completions) == 1, "the completion line must be logged once, at warning"
+        assert completions[0].kwargs["extra"]["config"]["post_swap_failed"] is True
+        # And never as the plain success line.
+        assert not [
+            call for call in mock_logger.info.call_args_list
+            if call.kwargs.get("extra", {}).get("config", {}).get("operation") == "reload_complete"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_clean_reload_logs_the_success_line_at_info(self):
+        """The failing branch above is only meaningful if the clean path still
+        logs reload_complete at INFO with the flag false."""
+        cm = _build_config_manager()
+        cm.add_post_swap_callback(AsyncMock(), name="fine_post")
+
+        with patch("builtins.open", side_effect=_multi_open(ALL_YAMLS)), \
+             patch("src.core.config_manager.logger") as mock_logger:
+            assert await cm.reload_config() is True
+
+        completions = [
+            call for call in mock_logger.info.call_args_list
+            if call.kwargs.get("extra", {}).get("config", {}).get("operation") == "reload_complete"
+        ]
+        assert len(completions) == 1
+        assert completions[0].kwargs["extra"]["config"]["post_swap_failed"] is False
+        assert not mock_logger.warning.call_args_list
+
+    @pytest.mark.asyncio
     async def test_pre_swap_failure_skips_post_swap(self):
         """A pre-swap (aborting) callback failure prevents the swap AND the
         post-swap callbacks from running at all."""

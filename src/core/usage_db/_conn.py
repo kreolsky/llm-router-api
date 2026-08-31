@@ -5,6 +5,8 @@ INSERT path, queries.py owns the dashboard reads, and both resolve the
 connection from here — never from each other.
 """
 
+import contextlib
+
 import aiosqlite
 
 _connection: aiosqlite.Connection | None = None
@@ -23,5 +25,10 @@ async def set_connection(conn: aiosqlite.Connection | None) -> None:
     """
     global _connection
     if _connection is not None:
-        await _connection.close()
+        # WHY: a close that raises must not abort the swap — bailing here
+        # would leave the dead handle installed AND orphan the fresh one
+        # the caller already opened, which is the exact leak this function
+        # exists to prevent. The failed close is the lesser loss.
+        with contextlib.suppress(Exception):
+            await _connection.close()
     _connection = conn

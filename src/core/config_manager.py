@@ -334,21 +334,36 @@ class ConfigManager:
                         exc_info=True,
                     )
                     post_swap_failed = True
-            logger.info("Configuration reloaded", extra={
-                "config": {
-                    "operation": "reload_complete",
-                    "providers_count": len(self.config.get('providers', {})),
-                    "models_count": len(self.config.get('models', {})),
-                    "user_keys_count": len(self.config.get('user_keys', {}))
-                }
-            })
+            # INVARIANT: a reload whose post-swap callback failed never logs
+            # the plain success line.
+            # Why: the swap IS published but a derived cache (the provider
+            # registry) is not, and the retry below reprints this line every
+            # poll interval — an INFO "Configuration reloaded" repeating
+            # forever is what an operator reads as "all good" while the
+            # router serves a half-applied state.
+            log = logger.warning if post_swap_failed else logger.info
+            log(
+                "Configuration reloaded, but a post-swap callback failed - retrying"
+                if post_swap_failed else "Configuration reloaded",
+                extra={
+                    "config": {
+                        "operation": "reload_complete",
+                        "post_swap_failed": post_swap_failed,
+                        "providers_count": len(self.config.get('providers', {})),
+                        "models_count": len(self.config.get('models', {})),
+                        "user_keys_count": len(self.config.get('user_keys', {}))
+                    }
+                })
             # WHY: True here would let _poll_once commit last_mtimes, and a
             # half-applied reload (the config swapped, a derived cache like
             # the provider registry not) would never be retried until the
             # file changed again — e.g. a provider added by this reload
             # would 404 in silence. False keeps the on-disk state
             # unconsumed so the next tick retries; with provider instance
-            # reuse the retry re-stages cheaply.
+            # reuse the retry re-stages cheaply. The retry repeats every
+            # config_reload_interval until the callback succeeds or the
+            # files change again — deliberate: a half-applied reload must
+            # not go quiet, and the reuse path keeps each attempt cheap.
             return not post_swap_failed
 
         logger.warning("Partial config reload rejected, keeping previous config")

@@ -117,3 +117,11 @@ Live drive against `:8777` across a real hot reload:
 - [x] Phase 5 — committed on `config-reload-pool-churn` in 3 commits:
       provider instance reuse; post-swap-failure retry; boundary nits
       (this commit). Plan complete.
+- [x] Phase 4 follow-up — the three review findings fixed: the reload_complete
+      line is a WARNING carrying `post_swap_failed` when a post-swap callback
+      raised (never the plain success line, which the retry loop would reprint
+      every interval); the retry cadence is named in the WHY; `set_connection`
+      suppresses a raising close so the swap still installs the fresh handle.
+      Both new tests proven red first. 555 unit tests green, all six gates
+      green, live drive on :8777 across three reloads with zero pool rebuilds
+      and a stream surviving a mid-stream reload to `[DONE]`.
