@@ -269,3 +269,152 @@ class TestPreparePublishProviderCache:
         await asyncio.wait_for(tracked, timeout=2)
         await asyncio.sleep(0)
         assert not provider_registry._drain_tasks, "done drain task must discard itself"
+
+
+class TestInstanceReuse:
+    """An unchanged provider entry carries the LIVE instance into the staged
+    cache instead of building a new one (see the INVARIANT in
+    prepare_provider_cache)."""
+
+    @patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False)
+    @pytest.mark.asyncio
+    async def test_unchanged_config_reuses_instance_and_pool(self):
+        """A reload whose providers.yaml entries are equal (fresh dicts, same
+        values — e.g. triggered by a models.yaml edit) keeps the SAME
+        instances, and the reused pools are NOT closed after publish."""
+        import asyncio
+        settings = Settings()
+        await _seed_cache(
+            {"providers": {"alpha": _make_config(), "beta": _make_config()}}, settings)
+        old_alpha = provider_registry._provider_cache["alpha"]
+        old_beta = provider_registry._provider_cache["beta"]
+
+        await _seed_cache(
+            {"providers": {"alpha": _make_config(), "beta": _make_config()}}, settings)
+
+        assert provider_registry._provider_cache["alpha"] is old_alpha
+        assert provider_registry._provider_cache["beta"] is old_beta
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert old_alpha.pool._closed is False
+        assert old_beta.pool._closed is False
+        assert not old_alpha.pool.client.is_closed
+
+    @patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False)
+    @pytest.mark.asyncio
+    async def test_changed_entry_rebuilds_only_that_provider(self):
+        """A changed entry gets a fresh instance (old one drained); the
+        untouched sibling is carried over as the same object."""
+        import asyncio
+        settings = Settings()
+        await _seed_cache(
+            {"providers": {"alpha": _make_config(), "beta": _make_config()}}, settings)
+        old_alpha = provider_registry._provider_cache["alpha"]
+        old_beta = provider_registry._provider_cache["beta"]
+        old_alpha.aclose = AsyncMock()
+
+        changed = {"type": "openai", "base_url": "https://changed.example.com",
+                   "api_key_env": "TEST_API_KEY"}
+        await _seed_cache(
+            {"providers": {"alpha": changed, "beta": _make_config()}}, settings)
+
+        assert provider_registry._provider_cache["alpha"] is not old_alpha
+        assert provider_registry._provider_cache["beta"] is old_beta
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        old_alpha.aclose.assert_awaited_once()
+
+    @patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False)
+    @pytest.mark.asyncio
+    async def test_removed_provider_is_drained_and_404s(self):
+        """A name dropped from the new config is closed and its lookup 404s —
+        reuse is keyed on the name being present in the NEW config, so it can
+        never resurrect a deleted provider."""
+        import asyncio
+
+        from fastapi import HTTPException
+        await _seed_cache(
+            {"providers": {"kept": _make_config(), "doomed": _make_config()}}, Settings())
+        doomed = provider_registry._provider_cache["doomed"]
+        doomed.aclose = AsyncMock()
+
+        await _seed_cache({"providers": {"kept": _make_config()}}, Settings())
+
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        doomed.aclose.assert_awaited_once()
+        with pytest.raises(HTTPException) as exc_info:
+            await get_provider_instance("doomed")
+        assert exc_info.value.status_code == 404
+
+    @patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False)
+    @pytest.mark.asyncio
+    async def test_added_provider_is_built_and_served(self):
+        """A name present only in the new config is built and immediately
+        resolvable after publish."""
+        await _seed_cache({"providers": {"alpha": _make_config()}}, Settings())
+
+        await _seed_cache(
+            {"providers": {"alpha": _make_config(), "beta": _make_config()}}, Settings())
+
+        assert await get_provider_instance("beta") is provider_registry._provider_cache["beta"]
+
+    @patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False)
+    @pytest.mark.asyncio
+    async def test_different_settings_object_forces_rebuild(self):
+        """Sameness requires the SAME Settings object, not an equal one:
+        settings are frozen per process, so a different object means a new
+        process configuration and every provider must be rebuilt."""
+        settings = Settings()
+        await _seed_cache({"providers": {"alpha": _make_config()}}, settings)
+        old_alpha = provider_registry._provider_cache["alpha"]
+
+        await _seed_cache({"providers": {"alpha": _make_config()}}, Settings())
+
+        assert provider_registry._provider_cache["alpha"] is not old_alpha
+
+    @patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False)
+    @pytest.mark.asyncio
+    async def test_failed_prepare_keeps_reused_live_instance_open(self):
+        """A vetoed reload must not close the live instances it reused into
+        the failed temp cache — they are still serving traffic from the
+        published cache. Also proves reuse ran: 'good' survives with the env
+        var stripped, because it was never rebuilt."""
+        settings = Settings()
+        await _seed_cache(
+            {"providers": {"good": _make_config(), "ok": _make_config()}}, settings)
+        good = provider_registry._provider_cache["good"]
+
+        broken = {"type": "openai", "base_url": "https://broken.example.com",
+                  "api_key_env": "MISSING_KEY"}
+        with patch.dict("os.environ", {}, clear=True), pytest.raises(RuntimeError) as exc_info:
+            await prepare_provider_cache(
+                {"providers": {"good": _make_config(), "broken": broken}}, settings)
+
+        assert "broken" in str(exc_info.value)
+        assert "good" not in str(exc_info.value)
+        assert good.pool._closed is False
+        assert provider_registry._provider_cache["good"] is good
+        assert provider_registry._staged_cache is None
+
+    @patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False)
+    @pytest.mark.asyncio
+    async def test_superseded_stage_does_not_close_reused_live_instance(self):
+        """A stage holding REUSED instances (a reload that never reached
+        publish) is closed on supersede minus those instances — the live
+        cache still owns them."""
+        settings = Settings()
+        await _seed_cache({"providers": {"alpha": _make_config()}}, settings)
+        live_alpha = provider_registry._provider_cache["alpha"]
+
+        # Stage 1 reuses the live alpha; the reload is vetoed before publish.
+        await prepare_provider_cache({"providers": {"alpha": _make_config()}}, settings)
+        assert provider_registry._staged_cache["alpha"] is live_alpha
+
+        # Stage 2 supersedes stage 1 with a changed entry.
+        changed = {"type": "openai", "base_url": "https://changed.example.com",
+                   "api_key_env": "TEST_API_KEY"}
+        await prepare_provider_cache({"providers": {"alpha": changed}}, settings)
+
+        assert live_alpha.pool._closed is False
+        assert provider_registry._staged_cache["alpha"] is not live_alpha
