@@ -70,6 +70,27 @@ def pricing_state(pricing):
 
 
 # ---------------------------------------------------------------------------
+# Connection setter (_conn is the seam between writer and queries)
+# ---------------------------------------------------------------------------
+
+class TestConnectionSetter:
+    """set_connection is the single write point for the shared connection and
+    closes any prior one, so a re-init can never orphan an open handle."""
+
+    @pytest.mark.asyncio
+    async def test_reinit_closes_prior_connection(self, db_path):
+        await usage_db.init_db(db_path)
+        first = usage_db.get_connection()
+        with patch.object(first, "close", wraps=first.close) as close_spy:
+            await usage_db.init_db(db_path)
+            close_spy.assert_called_once()
+        second = usage_db.get_connection()
+        assert second is not first
+        await usage_db.close_db()
+        assert usage_db.get_connection() is None
+
+
+# ---------------------------------------------------------------------------
 # Migration
 # ---------------------------------------------------------------------------
 

@@ -114,8 +114,12 @@ async def init_db(db_path: str) -> None:
     db_dir = os.path.dirname(db_path)
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
-    _conn._connection = await aiosqlite.connect(db_path)
-    await _conn._connection.execute("PRAGMA journal_mode=WAL")
+    # WHY: installed through set_connection, never assigned directly — a
+    # prior connection (a re-init, a leaked handle) is closed instead of
+    # orphaned.
+    conn = await aiosqlite.connect(db_path)
+    await _conn.set_connection(conn)
+    await conn.execute("PRAGMA journal_mode=WAL")
     # WHY: WAL allows one writer at a time; busy_timeout makes a concurrent
     # writer wait instead of failing instantly with "database is locked" — and
     # the failure is swallowed by _flush_row, so usage events would vanish in
@@ -123,8 +127,8 @@ async def init_db(db_path: str) -> None:
     # inspection connection; a host-side sqlite3 open of the file is not
     # survivable at all (it resets the WAL over VirtioFS) — preventing that is
     # the INVARIANT(data-loss) on the usage_data volume in docker-compose.yml.
-    await _conn._connection.execute("PRAGMA busy_timeout=5000")
-    await _conn._connection.execute("""
+    await conn.execute("PRAGMA busy_timeout=5000")
+    await conn.execute("""
         CREATE TABLE IF NOT EXISTS usage_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             request_id TEXT NOT NULL,
@@ -151,23 +155,21 @@ async def init_db(db_path: str) -> None:
     """)
     # Additive migration over an existing DB: existing rows are kept and read
     # with NULL/default values in the new columns.
-    cursor = await _conn._connection.execute("PRAGMA table_info(usage_events)")
+    cursor = await conn.execute("PRAGMA table_info(usage_events)")
     existing = {row[1] for row in await cursor.fetchall()}
     for column, decl in _MIGRATIONS.items():
         if column not in existing:
-            await _conn._connection.execute(
+            await conn.execute(
                 f"ALTER TABLE usage_events ADD COLUMN {column} {decl}")
     # The request log is ORDER BY timestamp DESC; the existing composite index
     # starts with project_name, so it cannot serve that scan.
-    await _conn._connection.execute(
+    await conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_events(timestamp)")
-    await _conn._connection.commit()
+    await conn.commit()
 
 
 async def close_db() -> None:
-    if _conn._connection:
-        await _conn._connection.close()
-    _conn._connection = None
+    await _conn.set_connection(None)
 
 
 # ---------------------------------------------------------------------------
