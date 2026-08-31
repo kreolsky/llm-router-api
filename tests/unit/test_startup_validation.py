@@ -16,14 +16,11 @@ def reset_provider_cache():
 
 
 def _cm_with_providers(providers):
+    from src.core.config_manager import Settings
     cm = MagicMock()
     cm.get_config.return_value = {"providers": providers}
-    # Real values so httpx client construction works
-    cm.httpx_max_connections = 100
-    cm.httpx_max_keepalive_connections = 20
-    cm.httpx_connect_timeout = 60.0
-    cm.httpx_read_timeout = 60.0
-    cm.httpx_pool_timeout = 5.0
+    # Real Settings so httpx client construction works
+    cm.settings = Settings()
     return cm
 
 

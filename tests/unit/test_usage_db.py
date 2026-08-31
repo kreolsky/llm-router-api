@@ -1010,9 +1010,10 @@ class TestStatApiKeyGuard:
 
     def _app(self, stat_api_key: str) -> FastAPI:
         from src.api.main import custom_http_exception_handler
+        from src.core.config_manager import Settings
 
         app = FastAPI()
-        app.state.config_manager = SimpleNamespace(stat_api_key=stat_api_key)
+        app.state.config_manager = SimpleNamespace(settings=Settings(stat_api_key=stat_api_key))
         app.add_exception_handler(HTTPException, custom_http_exception_handler)
 
         @app.get("/stat/api/thing")

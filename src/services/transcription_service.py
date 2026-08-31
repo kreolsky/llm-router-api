@@ -60,7 +60,7 @@ class TranscriptionService(BaseService):
 
         # Use default model if not specified
         if not model_id:
-            model_id = self.config_manager.default_stt_model
+            model_id = self.config_manager.settings.default_stt_model
             logger.info(f"Using default transcription model: {model_id}",
                 user_id=user_id,
                 default_model=model_id
@@ -79,7 +79,7 @@ class TranscriptionService(BaseService):
             stats.provider_name = provider_name
 
             provider_instance = await get_provider_instance(
-                provider_name, provider_config, self.config_manager
+                provider_name, provider_config, self.config_manager.settings
             )
             identity_headers = self._build_identity_headers(provider_instance, request)
 

@@ -15,12 +15,13 @@ def _make_auth_context():
 
 
 def _make_config_manager(models=None, providers=None, default_stt_model="stt/dummy"):
+    from src.core.config_manager import Settings
     cm = MagicMock()
     cm.get_config.return_value = {
         "models": models or {},
         "providers": providers or {},
     }
-    cm.default_stt_model = default_stt_model
+    cm.settings = Settings(default_stt_model=default_stt_model)
     return cm
 
 

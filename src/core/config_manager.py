@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import os
+from dataclasses import dataclass, fields
 from typing import Any
 
 import yaml
@@ -12,12 +13,61 @@ from .logging import logger
 # ---------------------------------------------------------------------------
 # Env-backed settings
 #
-# ARCH: every env-backed setting is read ONCE, at construction. Environment
-# variables cannot change without restarting the process, so re-reading them per
-# access bought nothing and cost the hot path a parse on every stream. Reading
-# once also means a malformed value is caught at startup (fail fast, like the
-# rest of the config) instead of raising inside a request.
+# ARCH: every env-backed setting is read ONCE, at construction, into a frozen
+# Settings snapshot. Environment variables cannot change without restarting
+# the process, so re-reading them per access bought nothing and cost the hot
+# path a parse on every stream. Reading once also means a malformed value is
+# caught at startup (fail fast, like the rest of the config) instead of
+# raising inside a request.
+#
+# ARCH: the Settings field defaults are the SINGLE copy of the no-config
+# fallbacks. Each field's env var is its upper-cased name (verified for every
+# legacy var when the tuple form was collapsed) — adding a knob is adding a
+# field, and there is no second map a drift test would have to pin.
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Settings:
+    """Typed snapshot of every env-backed knob, resolved once at construction.
+
+    Passed down the provider chain as a required argument; consumers never
+    re-read the environment and never see a partially-applied knob.
+    """
+
+    # --- HTTPX pools (applied per provider pool; each provider owns its own) ---
+    httpx_max_connections: int = 100
+    httpx_max_keepalive_connections: int = 20
+    httpx_connect_timeout: float = 60.0
+    httpx_pool_timeout: float = 5.0
+    # WHY: HTTPX_READ_TIMEOUT is only the client-default READ fallback —
+    # every field _create_timeout leaves unspecified lands here; stream and
+    # non-stream chat override it per call site with stream_read_timeout.
+    httpx_read_timeout: float = 60.0
+    # WHY: streaming can be long-lived; a separate read timeout keeps
+    # non-stream requests snappy.
+    stream_read_timeout: float = 300.0
+    queue_wait_timeout: float = 30.0
+    config_reload_interval: int = 5
+    # --- provider retry (429 backoff) ---
+    provider_max_retries: int = 3
+    provider_retry_base_delay: float = 1.0
+    provider_retry_max_delay: float = 30.0
+    # --- per-call-site timeouts ---
+    openai_connect_timeout: float = 60.0
+    openai_transcription_timeout: float = 3600.0
+    openai_embeddings_read_timeout: float = 30.0
+    # --- model capabilities auto-cache (see src/core/model_capabilities.py) ---
+    model_cache_refresh_interval: int = 3600
+    model_cache_enabled: bool = True
+    model_cache_path: str = "data/model_cache.json"
+    # --- misc ---
+    default_stt_model: str = "stt/dummy"
+    usage_db_path: str = "data/usage.db"
+    # Optional key protecting the /stat/api/* JSON endpoints (X-Stat-Key
+    # header). Empty (unset) keeps the stats API open as before.
+    stat_api_key: str = ""
+
 
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
@@ -54,7 +104,7 @@ class ConfigManager:
         
         self.debug = _env_bool("DEBUG", False)
         self.log_level = os.getenv("LOG_LEVEL", "INFO")
-        self._settings = self._read_env_settings()
+        self.settings = self._read_env_settings()
 
         # Log configuration initialization
         logger.info("Configuration manager initialized", extra={
@@ -198,58 +248,18 @@ class ConfigManager:
                     f"Refusing to start."
                 )
     
-    _ENV_SETTINGS = (
-        # (attribute, env var, default, cast)
-        ("httpx_max_connections", "HTTPX_MAX_CONNECTIONS", 100, int),
-        ("httpx_max_keepalive_connections", "HTTPX_MAX_KEEPALIVE_CONNECTIONS", 20, int),
-        ("httpx_connect_timeout", "HTTPX_CONNECT_TIMEOUT", 60.0, float),
-        ("httpx_pool_timeout", "HTTPX_POOL_TIMEOUT", 5.0, float),
-        # WHY: HTTPX_READ_TIMEOUT is only the client-default READ fallback —
-        # every field _create_timeout leaves unspecified lands here; stream and
-        # non-stream chat override it per call site with stream_read_timeout.
-        ("httpx_read_timeout", "HTTPX_READ_TIMEOUT", 60.0, float),
-        # WHY: streaming can be long-lived; a separate read timeout keeps non-stream requests snappy
-        ("stream_read_timeout", "STREAM_READ_TIMEOUT", 300.0, float),
-        ("queue_wait_timeout", "QUEUE_WAIT_TIMEOUT", 30.0, float),
-        ("config_reload_interval", "CONFIG_RELOAD_INTERVAL", 5, int),
-        ("provider_max_retries", "PROVIDER_MAX_RETRIES", 3, int),
-        ("provider_retry_base_delay", "PROVIDER_RETRY_BASE_DELAY", 1.0, float),
-        ("provider_retry_max_delay", "PROVIDER_RETRY_MAX_DELAY", 30.0, float),
-        ("openai_connect_timeout", "OPENAI_CONNECT_TIMEOUT", 60.0, float),
-        ("openai_transcription_timeout", "OPENAI_TRANSCRIPTION_TIMEOUT", 3600.0, float),
-        ("openai_embeddings_read_timeout", "OPENAI_EMBEDDINGS_READ_TIMEOUT", 30.0, float),
-        # Model capabilities auto-cache (see src/core/model_capabilities.py)
-        ("model_cache_refresh_interval", "MODEL_CACHE_REFRESH_INTERVAL", 3600, int),
-    )
-
-    def _read_env_settings(self) -> dict[str, Any]:
-        """Resolve every env-backed setting once (see the module header)."""
-        settings: dict[str, Any] = {
-            name: _env_number(env_var, default, cast)
-            for name, env_var, default, cast in self._ENV_SETTINGS
-        }
-        settings["default_stt_model"] = os.getenv("DEFAULT_STT_MODEL", "stt/dummy")
-        settings["model_cache_enabled"] = _env_bool("MODEL_CACHE_ENABLED", True)
-        settings["model_cache_path"] = os.getenv("MODEL_CACHE_PATH", "data/model_cache.json")
-        settings["usage_db_path"] = os.getenv("USAGE_DB_PATH", "data/usage.db")
-        # Optional key protecting the /stat/api/* JSON endpoints (X-Stat-Key
-        # header). Empty (unset) keeps the stats API open as before.
-        settings["stat_api_key"] = os.getenv("STAT_API_KEY", "")
-        return settings
-
-    def __getattr__(self, name: str) -> Any:
-        """Expose env-backed settings as read-only attributes.
-
-        Only reached for attributes not found normally, so it never shadows real
-        state. Keeps every call site (config_manager.stream_read_timeout, ...)
-        unchanged while the values themselves are resolved once at construction.
-        """
-        try:
-            return self.__dict__["_settings"][name]
-        except KeyError:
-            raise AttributeError(
-                f"{type(self).__name__!r} object has no attribute {name!r}"
-            ) from None
+    def _read_env_settings(self) -> Settings:
+        """Resolve every Settings field from its upper-cased env var (see module header)."""
+        values: dict[str, Any] = {}
+        for f in fields(Settings):
+            env_var = f.name.upper()
+            if isinstance(f.default, bool):
+                values[f.name] = _env_bool(env_var, f.default)
+            elif isinstance(f.default, str):
+                values[f.name] = os.getenv(env_var, f.default)
+            else:
+                values[f.name] = _env_number(env_var, f.default, type(f.default))
+        return Settings(**values)
 
     def add_reload_callback(self, callback, name: str = ""):
         """Register an async callback invoked after a successful config load.
@@ -364,7 +374,7 @@ class ConfigManager:
             except Exception as e:
                 logger.error(f"Config reload task error: {e}", exc_info=True)
 
-            await asyncio.sleep(self.config_reload_interval)
+            await asyncio.sleep(self.settings.config_reload_interval)
 
     def start_reloader_task(self) -> asyncio.Task:
         return asyncio.create_task(self._reload_config_task())

@@ -393,7 +393,7 @@ class TestRetrieveModel:
         """refresh=True triggers a best-effort refresh of the provider (non-blocking)."""
         svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS,
                              cache=_make_cache({"model-a": {"context_length": 1}}))
-        svc.config_manager.model_cache_enabled = True
+        svc.config_manager.settings.model_cache_enabled = True
         auth_ctx = _make_auth_context(allowed_models=[])
 
         with patch("src.services.model_service.refresh_provider_capabilities", new_callable=AsyncMock) as mock_refresh:

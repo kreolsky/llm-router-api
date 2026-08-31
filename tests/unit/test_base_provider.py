@@ -9,12 +9,8 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
-from src.providers.base import (
-    _RETRY_DEFAULTS,
-    _TIMEOUT_DEFAULTS,
-    BaseProvider,
-    retry_on_rate_limit,
-)
+from src.core.config_manager import Settings
+from src.providers.base import BaseProvider, retry_on_rate_limit
 from src.providers.openai import OpenAICompatibleProvider
 
 # ---------------------------------------------------------------------------
@@ -44,10 +40,11 @@ def _make_config(base_url="https://api.example.com", api_key_env="TEST_API_KEY",
 
 
 def _build_provider(base_url="https://api.example.com", api_key_env="TEST_API_KEY",
-                     env_vars=None, config_manager=None, headers=None, proxy=None):
+                     env_vars=None, settings=None, headers=None, proxy=None):
     """Build a ProviderStub with mocked env.
 
-    The provider owns its own httpx.AsyncClient (built in __init__).
+    The provider owns its own httpx.AsyncClient (built in __init__). Settings
+    default to a bare Settings() — the single source of no-config defaults.
     """
     config = {"base_url": base_url}
     if api_key_env is not None:
@@ -62,35 +59,21 @@ def _build_provider(base_url="https://api.example.com", api_key_env="TEST_API_KE
         env.update(env_vars)
 
     with patch.dict("os.environ", env, clear=False):
-        provider = ProviderStub(config, config_manager=config_manager)
+        provider = ProviderStub(config, settings=settings or Settings())
     return provider
 
 
-def _make_cm(**overrides):
-    """Build a SimpleNamespace config_manager with real values (no MagicMock magic)."""
-    cm = SimpleNamespace()
-    cm.queue_wait_timeout = overrides.get("queue_wait_timeout", 30.0)
-    cm.provider_max_retries = overrides.get("provider_max_retries", 3)
-    cm.provider_retry_base_delay = overrides.get("provider_retry_base_delay", 1.0)
-    cm.provider_retry_max_delay = overrides.get("provider_retry_max_delay", 30.0)
-    cm.httpx_max_connections = overrides.get("httpx_max_connections", 100)
-    cm.httpx_max_keepalive_connections = overrides.get("httpx_max_keepalive_connections", 20)
-    cm.httpx_connect_timeout = overrides.get("httpx_connect_timeout", 60.0)
-    cm.httpx_read_timeout = overrides.get("httpx_read_timeout", 60.0)
-    cm.httpx_pool_timeout = overrides.get("httpx_pool_timeout", 5.0)
-    cm.stream_read_timeout = overrides.get("stream_read_timeout", 300.0)
-    cm.openai_connect_timeout = overrides.get("openai_connect_timeout", 60.0)
-    cm.openai_transcription_timeout = overrides.get("openai_transcription_timeout", 3600.0)
-    cm.openai_embeddings_read_timeout = overrides.get("openai_embeddings_read_timeout", 30.0)
-    return cm
+def _make_settings(**overrides) -> Settings:
+    """Build a Settings with overrides applied over the single defaults source."""
+    return Settings(**overrides)
 
 
-def _build_limited_provider(max_concurrent, config_manager=None):
+def _build_limited_provider(max_concurrent, settings=None):
     """Build a ProviderStub with max_concurrent set."""
     config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
               "max_concurrent": max_concurrent}
     with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-        return ProviderStub(config, config_manager=config_manager)
+        return ProviderStub(config, settings=settings or Settings())
 
 
 def _mock_response(json_body=None):
@@ -182,33 +165,31 @@ class TestRetryOnRateLimit:
         assert recorded_delays == [1.0, 2.0, 4.0, 8.0]
 
     @pytest.mark.asyncio
-    async def test_config_resolution_cm_used_when_closure_arg_is_none(self):
-        """Config from self.config_manager is used when decorator args are None."""
-        cm = MagicMock()
-        cm.provider_max_retries = 1
-        cm.provider_retry_base_delay = 0.001
-        cm.provider_retry_max_delay = 0.01
+    async def test_config_resolution_settings_used_when_closure_arg_is_none(self):
+        """Bounds from self.settings are used when decorator args are None."""
+        settings = Settings(provider_max_retries=1, provider_retry_base_delay=0.001,
+                            provider_retry_max_delay=0.01)
 
         call_count = 0
 
-        # Decorator args are None → config_manager values used
+        # Decorator args are None → settings values used
         @retry_on_rate_limit()
         async def fn(self_obj):
             nonlocal call_count
             call_count += 1
             raise HTTPException(status_code=429, detail="rate limited")
 
-        obj = SimpleNamespace(config_manager=cm)
+        obj = SimpleNamespace(settings=settings)
 
         with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock), pytest.raises(HTTPException):
             await fn(obj)
 
-        # cm.provider_max_retries=1 → 1 initial + 1 retry = 2
+        # provider_max_retries=1 → 1 initial + 1 retry = 2
         assert call_count == 2
 
     @pytest.mark.asyncio
-    async def test_config_resolution_defaults_when_no_cm(self):
-        """Without config_manager and without closure args, use hardcoded defaults (3 retries)."""
+    async def test_config_resolution_defaults_when_no_settings(self):
+        """Without settings and without closure args, a bare Settings() supplies the defaults (3 retries)."""
         call_count = 0
 
         @retry_on_rate_limit()
@@ -235,20 +216,20 @@ class TestBaseProviderInit:
         config = {"api_key_env": "TEST_API_KEY"}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False):
             with pytest.raises(HTTPException) as exc_info:
-                ProviderStub(config)
+                ProviderStub(config, Settings())
         assert exc_info.value.status_code == 500
 
     def test_missing_api_key_env_var_raises(self):
         """Missing API key env var raises HTTPException."""
         config = {"base_url": "https://api.example.com", "api_key_env": "MISSING_KEY"}
         with patch.dict("os.environ", {}, clear=True), pytest.raises(HTTPException) as exc_info:
-            ProviderStub(config)
+            ProviderStub(config, Settings())
         assert exc_info.value.status_code == 500
 
     def test_no_api_key_env_no_error(self):
         """No api_key_env in config means no Authorization header, no error."""
         config = {"base_url": "https://api.example.com"}
-        provider = ProviderStub(config)
+        provider = ProviderStub(config, Settings())
         assert "Authorization" not in provider.headers
         assert provider.api_key is None
 
@@ -259,6 +240,43 @@ class TestBaseProviderInit:
         assert provider.headers["Authorization"] == "Bearer sk-test-123"
         assert provider.headers["Content-Type"] == "application/json"
         assert provider.provider_name == "stub"
+
+
+# ===================================================================
+# Typed settings argument
+# ===================================================================
+
+class TestTypedSettingsArgument:
+    """The provider takes a required, typed Settings — not a duck-typed manager."""
+
+    def test_settings_is_required(self):
+        """Constructing without settings is a TypeError, not a silent fallback."""
+        config = _make_config()
+        with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
+            with pytest.raises(TypeError):
+                ProviderStub(config)
+
+    def test_settings_stored_verbatim(self):
+        """The exact Settings object passed in is what the provider reads."""
+        settings = Settings(stream_read_timeout=123.0)
+        provider = _build_provider(settings=settings)
+        assert provider.settings is settings
+
+    def test_client_limits_come_from_settings(self):
+        """_build_client reads pool limits/timeouts off Settings."""
+        settings = Settings(httpx_max_connections=42, httpx_max_keepalive_connections=7,
+                            httpx_connect_timeout=12.0, httpx_read_timeout=33.0,
+                            httpx_pool_timeout=4.0)
+        provider = _build_provider(settings=settings)
+        assert provider.client.timeout.connect == 12.0
+        assert provider.client.timeout.read == 33.0
+        assert provider.client.timeout.pool == 4.0
+
+    def test_no_config_manager_attribute(self):
+        """The duck-typed config_manager attribute is gone."""
+        provider = _build_provider()
+        assert not hasattr(provider, "config_manager")
+        assert hasattr(provider, "settings")
 
 
 # ===================================================================
@@ -293,69 +311,6 @@ class TestApplyModelConfig:
         model_config = {}
         result = provider._apply_model_config(body, "gpt-4", model_config)
         assert result == {"messages": [], "temperature": 0.5, "model": "gpt-4"}
-
-
-# ===================================================================
-# _get_timeout
-# ===================================================================
-
-class TestGetTimeout:
-
-    def test_with_config_manager(self):
-        """With config_manager having the attr, returns config value."""
-        cm = MagicMock()
-        cm.openai_connect_timeout = 42.0
-        provider = _build_provider(config_manager=None)
-        provider.config_manager = cm
-        assert provider._get_timeout("openai_connect_timeout") == 42.0
-
-    def test_without_config_manager_returns_map_default(self):
-        """Without config_manager, the _TIMEOUT_DEFAULTS value is used."""
-        provider = _build_provider(config_manager=None)
-        assert provider._get_timeout("openai_connect_timeout") == 60.0
-
-    def test_config_manager_missing_attr_falls_back_to_map(self):
-        """config_manager exists but lacks the attribute: map default."""
-        cm = MagicMock(spec=[])  # empty spec, no attributes
-        provider = _build_provider(config_manager=None)
-        provider.config_manager = cm
-        assert provider._get_timeout("stream_read_timeout") == 300.0
-
-    def test_unknown_timeout_name_raises(self):
-        """The map is keyed by ConfigManager attribute names — a typo fails loud."""
-        provider = _build_provider(config_manager=None)
-        with pytest.raises(KeyError):
-            provider._get_timeout("nonexistent_timeout")
-
-
-class TestEnvDefaultsDrift:
-    """_TIMEOUT_DEFAULTS / _RETRY_DEFAULTS must match ConfigManager._ENV_SETTINGS.
-
-    The fallback literals used to be duplicated between the provider call
-    sites and _ENV_SETTINGS; the maps are the single fallback source now, and
-    this test trips any drift in either direction. Scope: _get_timeout keys
-    and retry keys only — the _build_client no-config literals (connect/read
-    60.0, pool 5.0) are client-construction defaults, not _get_timeout reads,
-    and stay out of the map.
-    """
-
-    def _env_defaults(self) -> dict:
-        from src.core.config_manager import ConfigManager
-        return {name: default for name, _env, default, _cast in ConfigManager._ENV_SETTINGS}
-
-    def test_timeout_defaults_match_env_settings(self):
-        env = self._env_defaults()
-        for key, default in _TIMEOUT_DEFAULTS.items():
-            assert key in env, f"{key!r} is not a ConfigManager env setting"
-            assert env[key] == default, (
-                f"{key}: provider fallback {default} != _ENV_SETTINGS default {env[key]}")
-
-    def test_retry_defaults_match_env_settings(self):
-        env = self._env_defaults()
-        for key, default in _RETRY_DEFAULTS.items():
-            assert key in env, f"{key!r} is not a ConfigManager env setting"
-            assert env[key] == default, (
-                f"{key}: provider fallback {default} != _ENV_SETTINGS default {env[key]}")
 
 
 # ===================================================================
@@ -467,15 +422,12 @@ class TestClientOwnership:
         assert isinstance(provider.client, httpx.AsyncClient)
         assert not provider.client.is_closed
 
-    def test_client_limits_from_config_manager(self):
-        """Client timeout config is derived from config_manager env-backed properties."""
-        cm = MagicMock()
-        cm.httpx_max_connections = 42
-        cm.httpx_max_keepalive_connections = 7
-        cm.httpx_connect_timeout = 12.0
-        cm.httpx_read_timeout = 33.0
-        cm.httpx_pool_timeout = 4.0
-        provider = _build_provider(config_manager=cm)
+    def test_client_limits_from_settings(self):
+        """Client timeout config is derived from the Settings snapshot."""
+        settings = Settings(httpx_max_connections=42, httpx_max_keepalive_connections=7,
+                            httpx_connect_timeout=12.0, httpx_read_timeout=33.0,
+                            httpx_pool_timeout=4.0)
+        provider = _build_provider(settings=settings)
         assert provider.client.timeout.connect == 12.0
         assert provider.client.timeout.read == 33.0
         assert provider.client.timeout.pool == 4.0
@@ -524,15 +476,12 @@ class TestProxySupport:
         await provider.aclose()
         assert provider.client.is_closed
 
-    def test_proxy_with_config_manager(self):
-        """Proxy and config_manager limits coexist on the same client."""
-        cm = MagicMock()
-        cm.httpx_max_connections = 10
-        cm.httpx_max_keepalive_connections = 2
-        cm.httpx_connect_timeout = 12.0
-        cm.httpx_read_timeout = 33.0
-        cm.httpx_pool_timeout = 4.0
-        provider = _build_provider(proxy="socks5://proxy.red:1331", config_manager=cm)
+    def test_proxy_with_settings(self):
+        """Proxy and Settings limits coexist on the same client."""
+        settings = Settings(httpx_max_connections=10, httpx_max_keepalive_connections=2,
+                            httpx_connect_timeout=12.0, httpx_read_timeout=33.0,
+                            httpx_pool_timeout=4.0)
+        provider = _build_provider(proxy="socks5://proxy.red:1331", settings=settings)
         assert provider.proxy == "socks5://proxy.red:1331"
         assert provider.client.timeout.connect == 12.0
         assert provider.client.timeout.read == 33.0
@@ -542,10 +491,10 @@ class TestProxySupport:
 # list_models
 # ===================================================================
 
-def _build_openai_provider(config_manager=None):
+def _build_openai_provider(settings=None):
     config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY"}
     with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-        return OpenAICompatibleProvider(config, config_manager=config_manager)
+        return OpenAICompatibleProvider(config, settings=settings or Settings())
 
 
 class TestListModels:
@@ -623,7 +572,7 @@ class TestConcurrencyLimit:
     @pytest.mark.asyncio
     async def test_limit_queues_second_request(self):
         """max_concurrent=1: second request waits until the first releases its slot."""
-        provider = _build_limited_provider(1, config_manager=_make_cm())
+        provider = _build_limited_provider(1, settings=_make_settings())
         started = [asyncio.Event(), asyncio.Event()]
         release = [asyncio.Event(), asyncio.Event()]
         idx = [0]
@@ -651,7 +600,7 @@ class TestConcurrencyLimit:
     @pytest.mark.asyncio
     async def test_queue_timeout_returns_503(self):
         """Queued request exceeding queue_wait_timeout fails fast with 503."""
-        provider = _build_limited_provider(1, config_manager=_make_cm(queue_wait_timeout=0.05))
+        provider = _build_limited_provider(1, settings=_make_settings(queue_wait_timeout=0.05))
         first_release = asyncio.Event()
         started = [asyncio.Event(), asyncio.Event()]
         idx = [0]
@@ -679,7 +628,7 @@ class TestConcurrencyLimit:
     @pytest.mark.asyncio
     async def test_queue_timeout_does_not_leak_slot(self):
         """A 503 from queue timeout must not acquire/release a slot (no double-release)."""
-        provider = _build_limited_provider(1, config_manager=_make_cm(queue_wait_timeout=0.02))
+        provider = _build_limited_provider(1, settings=_make_settings(queue_wait_timeout=0.02))
         blocker = asyncio.Event()
         running = asyncio.Event()
 
@@ -704,7 +653,7 @@ class TestConcurrencyLimit:
     @pytest.mark.asyncio
     async def test_stream_slot_released_on_completion(self):
         """After a stream finishes, the slot is released; a second stream starts at once."""
-        provider = _build_limited_provider(1, config_manager=_make_cm())
+        provider = _build_limited_provider(1, settings=_make_settings())
 
         async def inner(client, url, body, rid, extra_headers=None):
             yield b"a"
@@ -734,7 +683,7 @@ class TestConcurrencyLimit:
     @pytest.mark.asyncio
     async def test_stream_slot_released_on_early_close(self):
         """aclose() mid-stream releases the slot."""
-        provider = _build_limited_provider(1, config_manager=_make_cm())
+        provider = _build_limited_provider(1, settings=_make_settings())
         gate = asyncio.Event()
 
         async def inner(client, url, body, rid, extra_headers=None):
@@ -752,7 +701,7 @@ class TestConcurrencyLimit:
     @pytest.mark.asyncio
     async def test_stream_slot_released_on_exception(self):
         """An exception inside the stream releases the slot."""
-        provider = _build_limited_provider(1, config_manager=_make_cm())
+        provider = _build_limited_provider(1, settings=_make_settings())
 
         async def inner(client, url, body, rid, extra_headers=None):
             yield b"a"
@@ -769,7 +718,7 @@ class TestConcurrencyLimit:
     @pytest.mark.asyncio
     async def test_retry_holds_slot_across_attempts(self):
         """The slot is held across a 429 retry; released once after success."""
-        provider = _build_limited_provider(1, config_manager=None)  # None → hardcoded retry defaults
+        provider = _build_limited_provider(1)  # bare Settings() retry defaults
         seen_values = []
         calls = [0]
 
@@ -891,7 +840,7 @@ class TestIdentityProfileInit:
         config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
                   "identity": "passthrough"}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            provider = ProviderStub(config)
+            provider = ProviderStub(config, Settings())
         assert provider.identity == "passthrough"
         assert "User-Agent" not in provider.headers
 
@@ -900,7 +849,7 @@ class TestIdentityProfileInit:
                   "identity": "opencode"}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
             with pytest.raises(HTTPException) as exc_info:
-                ProviderStub(config)
+                ProviderStub(config, Settings())
         assert exc_info.value.status_code == 500
         assert "expected 'passthrough'" in str(exc_info.value.detail)
 
@@ -919,7 +868,7 @@ class TestStaticHeadersValidation:
                   "headers": {"X-Title": 12345}}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
             with pytest.raises(HTTPException) as exc_info:
-                ProviderStub(config)
+                ProviderStub(config, Settings())
         assert exc_info.value.status_code == 500
 
     def test_non_string_key_fails_fast(self):
@@ -927,7 +876,7 @@ class TestStaticHeadersValidation:
                   "headers": {123: "value"}}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
             with pytest.raises(HTTPException) as exc_info:
-                ProviderStub(config)
+                ProviderStub(config, Settings())
         assert exc_info.value.status_code == 500
 
     def test_authorization_in_headers_fails_fast(self):
@@ -935,7 +884,7 @@ class TestStaticHeadersValidation:
                   "headers": {"Authorization": "Bearer literal-key"}}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
             with pytest.raises(HTTPException) as exc_info:
-                ProviderStub(config)
+                ProviderStub(config, Settings())
         assert exc_info.value.status_code == 500
 
     @pytest.mark.parametrize("name", ["Content-Length", "host", "Transfer-Encoding",
@@ -945,7 +894,7 @@ class TestStaticHeadersValidation:
                   "headers": {name: "x"}}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
             with pytest.raises(HTTPException) as exc_info:
-                ProviderStub(config)
+                ProviderStub(config, Settings())
         assert exc_info.value.status_code == 500
 
     def test_valid_static_headers_accepted(self):
@@ -1185,7 +1134,7 @@ class TestLateAcquisitionDuringDrain:
         """A request counted BEFORE the close (so the drain waits for it) but
         still queued on the semaphore re-checks _closed after the wait and
         fails with 503 instead of proceeding on the drained pool."""
-        provider = _build_limited_provider(1, config_manager=_make_cm(queue_wait_timeout=5.0))
+        provider = _build_limited_provider(1, settings=_make_settings(queue_wait_timeout=5.0))
         entered = asyncio.Event()
         release = asyncio.Event()
         provider.client.post = self._slow_post(entered, release)
@@ -1232,8 +1181,8 @@ class TestCreateTimeoutFallback:
     """Unspecified values inherit from the client's timeout — read and write included."""
 
     def test_unspecified_read_write_inherit_from_client(self):
-        cm = _make_cm(httpx_connect_timeout=11.0, httpx_read_timeout=77.0, httpx_pool_timeout=4.0)
-        provider = _build_provider(config_manager=cm)
+        settings = _make_settings(httpx_connect_timeout=11.0, httpx_read_timeout=77.0, httpx_pool_timeout=4.0)
+        provider = _build_provider(settings=settings)
 
         t = provider._create_timeout()
 
@@ -1243,7 +1192,7 @@ class TestCreateTimeoutFallback:
         assert t.pool == 4.0
 
     def test_explicit_values_win_over_client(self):
-        provider = _build_provider(config_manager=_make_cm())
+        provider = _build_provider(settings=_make_settings())
 
         t = provider._create_timeout(connect=1.0, read=2.0, write=3.0, pool=4.0)
 
@@ -1253,10 +1202,10 @@ class TestCreateTimeoutFallback:
 class TestCallSiteTimeouts:
     """Every provider call site must produce a Timeout with a real read cap."""
 
-    def _openai_provider(self, cm):
+    def _openai_provider(self, settings):
         config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY"}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            provider = OpenAICompatibleProvider(config, config_manager=cm)
+            provider = OpenAICompatibleProvider(config, settings=settings)
         captured = {}
 
         async def fake_make_request(**kwargs):
@@ -1270,9 +1219,9 @@ class TestCallSiteTimeouts:
     async def test_chat_non_stream_read_is_stream_read_timeout(self):
         """Non-stream chat is capped by stream_read_timeout — a silent upstream must
         not hold its concurrency slot and in-flight count forever."""
-        cm = _make_cm(httpx_connect_timeout=60.0, httpx_read_timeout=60.0,
+        settings = _make_settings(httpx_connect_timeout=60.0, httpx_read_timeout=60.0,
                       httpx_pool_timeout=5.0, stream_read_timeout=300.0)
-        provider, captured = self._openai_provider(cm)
+        provider, captured = self._openai_provider(settings)
 
         await provider.chat_completions({"messages": []}, "m", {})
 
@@ -1284,9 +1233,9 @@ class TestCallSiteTimeouts:
 
     @pytest.mark.asyncio
     async def test_transcription_read_is_transcription_timeout(self):
-        cm = _make_cm(httpx_connect_timeout=60.0, httpx_pool_timeout=5.0,
+        settings = _make_settings(httpx_connect_timeout=60.0, httpx_pool_timeout=5.0,
                       openai_transcription_timeout=3600.0)
-        provider, captured = self._openai_provider(cm)
+        provider, captured = self._openai_provider(settings)
 
         await provider.transcriptions(
             {"audio": {"filename": "a.ogg", "content_type": "audio/ogg", "data": b"x"},
@@ -1301,9 +1250,9 @@ class TestCallSiteTimeouts:
     @pytest.mark.asyncio
     async def test_embeddings_hardcoded_timeouts_dropped(self):
         """The old hardcoded connect=10/write=10/pool=10 are gone; client defaults cover them."""
-        cm = _make_cm(httpx_connect_timeout=60.0, httpx_read_timeout=60.0,
+        settings = _make_settings(httpx_connect_timeout=60.0, httpx_read_timeout=60.0,
                       httpx_pool_timeout=5.0, openai_embeddings_read_timeout=30.0)
-        provider, captured = self._openai_provider(cm)
+        provider, captured = self._openai_provider(settings)
 
         await provider.embeddings({"input": "hi"}, "m", {})
 
@@ -1315,9 +1264,9 @@ class TestCallSiteTimeouts:
 
     @pytest.mark.asyncio
     async def test_stream_read_is_stream_read_timeout(self):
-        cm = _make_cm(httpx_connect_timeout=60.0, httpx_read_timeout=60.0,
+        settings = _make_settings(httpx_connect_timeout=60.0, httpx_read_timeout=60.0,
                       httpx_pool_timeout=5.0, stream_read_timeout=321.0)
-        provider = self._openai_provider(cm)[0]
+        provider = self._openai_provider(settings)[0]
 
         captured = {}
 
@@ -1374,7 +1323,7 @@ class TestRetryUploadSafety:
     def _provider_with_mock_transport(self, handler, cm=None):
         config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY"}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            provider = OpenAICompatibleProvider(config, config_manager=cm or _make_cm(
+            provider = OpenAICompatibleProvider(config, settings=cm or _make_settings(
                 provider_retry_base_delay=0.001, provider_retry_max_delay=0.01))
         provider.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         return provider

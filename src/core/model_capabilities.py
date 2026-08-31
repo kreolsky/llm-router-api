@@ -402,7 +402,7 @@ async def refresh_provider_capabilities(
         return
 
     try:
-        provider = await get_provider_instance(provider_name, provider_config, config_manager)
+        provider = await get_provider_instance(provider_name, provider_config, config_manager.settings)
         models_data = await provider.list_models(request_id="capabilities-cache")
     except Exception as e:
         logger.warning(
@@ -485,12 +485,12 @@ async def capabilities_refresh_loop(config_manager, cache: CapabilitiesCache) ->
     """
     try:
         while True:
-            if config_manager.model_cache_enabled:
+            if config_manager.settings.model_cache_enabled:
                 try:
                     await refresh_all_capabilities(config_manager, cache)
                 except Exception as e:
                     logger.error(f"Capabilities refresh error: {e}", exc_info=True)
-            await asyncio.sleep(config_manager.model_cache_refresh_interval)
+            await asyncio.sleep(config_manager.settings.model_cache_refresh_interval)
     except asyncio.CancelledError:
         logger.info("Capabilities refresh task cancelled")
         return

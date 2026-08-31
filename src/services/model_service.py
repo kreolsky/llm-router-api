@@ -171,7 +171,7 @@ class ModelService(BaseService):
         if (
             refresh
             and self.capabilities_cache is not None
-            and self.config_manager.model_cache_enabled
+            and self.config_manager.settings.model_cache_enabled
         ):
             try:
                 await refresh_provider_capabilities(self.config_manager, self.capabilities_cache, provider_name)

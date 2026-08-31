@@ -340,11 +340,13 @@ class _FakeProvider:
 
 class _FakeCM:
     def __init__(self, models):
+        from src.core.config_manager import Settings
         provider_names = {m.get("provider") for m in models.values() if m.get("provider")}
         self._cfg = {
             "models": models,
             "providers": {p: {"type": "openai"} for p in provider_names},
         }
+        self.settings = Settings()
 
     def get_config(self):
         return self._cfg

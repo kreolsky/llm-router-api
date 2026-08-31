@@ -231,8 +231,68 @@ class TestReloadConfig:
 
 
 # ===================================================================
-# Property getters (env-var backed)
+# Typed Settings snapshot
 # ===================================================================
+
+class TestSettings:
+    """ConfigManager exposes a frozen, typed Settings built once at construction."""
+
+    def _cm_with_env(self, env):
+        with patch.dict("os.environ", env, clear=True):
+            return _build_config_manager()
+
+    def test_settings_object_exposed(self):
+        """cm.settings is a Settings carrying the resolved env values."""
+        from src.core.config_manager import Settings
+        cm = self._cm_with_env({"QUEUE_WAIT_TIMEOUT": "7.5"})
+        assert isinstance(cm.settings, Settings)
+        assert cm.settings.queue_wait_timeout == 7.5
+
+    def test_settings_defaults(self):
+        """A bare Settings() carries the documented no-config defaults."""
+        from src.core.config_manager import Settings
+        s = Settings()
+        assert s.queue_wait_timeout == 30.0
+        assert s.stream_read_timeout == 300.0
+        assert s.provider_max_retries == 3
+        assert s.provider_retry_base_delay == 1.0
+        assert s.provider_retry_max_delay == 30.0
+        assert s.openai_connect_timeout == 60.0
+        assert s.openai_transcription_timeout == 3600.0
+        assert s.openai_embeddings_read_timeout == 30.0
+        assert s.httpx_max_connections == 100
+        assert s.default_stt_model == "stt/dummy"
+
+    def test_settings_is_frozen(self):
+        """Settings is frozen — a running process cannot mutate its knobs."""
+        from dataclasses import FrozenInstanceError
+
+        from src.core.config_manager import Settings
+        s = Settings()
+        with pytest.raises(FrozenInstanceError):
+            s.queue_wait_timeout = 1.0
+
+    def test_no_duck_typed_attribute_access(self):
+        """Env-backed knobs are NOT attributes of ConfigManager anymore —
+        only cm.settings.<name> resolves; the bare name is an AttributeError."""
+        cm = _build_config_manager()
+        assert cm.settings.stream_read_timeout == 300.0
+        with pytest.raises(AttributeError):
+            cm.stream_read_timeout
+
+    def test_env_resolved_once_into_settings(self):
+        """Settings is resolved at construction; a later env change is ignored."""
+        with patch.dict("os.environ", {"STREAM_READ_TIMEOUT": "111"}, clear=True):
+            cm = _build_config_manager()
+        with patch.dict("os.environ", {"STREAM_READ_TIMEOUT": "999"}, clear=True):
+            assert cm.settings.stream_read_timeout == 111.0
+
+    def test_malformed_env_falls_back_to_default(self):
+        """An unparsable numeric env var degrades to the Settings default."""
+        with patch.dict("os.environ", {"QUEUE_WAIT_TIMEOUT": "not-a-number"}, clear=True):
+            cm = _build_config_manager()
+        assert cm.settings.queue_wait_timeout == 30.0
+
 
 class TestPropertyGetters:
     """Env-backed settings are resolved once, when the ConfigManager is built."""
@@ -243,67 +303,67 @@ class TestPropertyGetters:
 
     def test_httpx_max_connections_default(self):
         """httpx_max_connections returns default 100."""
-        assert self._cm_with_env({}).httpx_max_connections == 100
+        assert self._cm_with_env({}).settings.httpx_max_connections == 100
 
     def test_httpx_max_connections_from_env(self):
         """httpx_max_connections reads from env var."""
-        assert self._cm_with_env({"HTTPX_MAX_CONNECTIONS": "200"}).httpx_max_connections == 200
+        assert self._cm_with_env({"HTTPX_MAX_CONNECTIONS": "200"}).settings.httpx_max_connections == 200
 
     def test_provider_max_retries_default(self):
         """provider_max_retries defaults to 3."""
-        assert self._cm_with_env({}).provider_max_retries == 3
+        assert self._cm_with_env({}).settings.provider_max_retries == 3
 
     def test_provider_retry_base_delay_from_env(self):
         """provider_retry_base_delay reads env var as float."""
-        assert self._cm_with_env({"PROVIDER_RETRY_BASE_DELAY": "2.5"}).provider_retry_base_delay == 2.5
+        assert self._cm_with_env({"PROVIDER_RETRY_BASE_DELAY": "2.5"}).settings.provider_retry_base_delay == 2.5
 
     def test_httpx_pool_timeout_default(self):
         """httpx_pool_timeout defaults to 5.0."""
-        assert self._cm_with_env({}).httpx_pool_timeout == 5.0
+        assert self._cm_with_env({}).settings.httpx_pool_timeout == 5.0
 
     def test_config_reload_interval_from_env(self):
         """config_reload_interval reads from env."""
-        assert self._cm_with_env({"CONFIG_RELOAD_INTERVAL": "10"}).config_reload_interval == 10
+        assert self._cm_with_env({"CONFIG_RELOAD_INTERVAL": "10"}).settings.config_reload_interval == 10
 
     def test_stream_read_timeout_default(self):
         """stream_read_timeout defaults to 300.0."""
-        assert self._cm_with_env({}).stream_read_timeout == 300.0
+        assert self._cm_with_env({}).settings.stream_read_timeout == 300.0
 
     def test_stream_read_timeout_from_env(self):
         """stream_read_timeout reads from env as float."""
-        assert self._cm_with_env({"STREAM_READ_TIMEOUT": "600"}).stream_read_timeout == 600.0
+        assert self._cm_with_env({"STREAM_READ_TIMEOUT": "600"}).settings.stream_read_timeout == 600.0
 
     def test_default_stt_model_default(self):
         """default_stt_model defaults to stt/dummy."""
-        assert self._cm_with_env({}).default_stt_model == "stt/dummy"
+        assert self._cm_with_env({}).settings.default_stt_model == "stt/dummy"
 
     def test_default_stt_model_from_env(self):
         """default_stt_model reads from env."""
-        assert self._cm_with_env({"DEFAULT_STT_MODEL": "stt/custom"}).default_stt_model == "stt/custom"
+        assert self._cm_with_env({"DEFAULT_STT_MODEL": "stt/custom"}).settings.default_stt_model == "stt/custom"
 
     def test_model_cache_settings(self):
         """Model-cache settings resolve from env with the documented defaults."""
         cm = self._cm_with_env({})
-        assert cm.model_cache_enabled is True
-        assert cm.model_cache_refresh_interval == 3600
-        assert cm.model_cache_path == "data/model_cache.json"
+        assert cm.settings.model_cache_enabled is True
+        assert cm.settings.model_cache_refresh_interval == 3600
+        assert cm.settings.model_cache_path == "data/model_cache.json"
 
         cm = self._cm_with_env({"MODEL_CACHE_ENABLED": "false", "MODEL_CACHE_PATH": "/tmp/c.json"})
-        assert cm.model_cache_enabled is False
-        assert cm.model_cache_path == "/tmp/c.json"
+        assert cm.settings.model_cache_enabled is False
+        assert cm.settings.model_cache_path == "/tmp/c.json"
 
     def test_model_cache_ttl_is_gone(self):
         """MODEL_CACHE_TTL was a dead knob (stale-if-error contradicts a TTL) — removed."""
         with pytest.raises(AttributeError):
-            self._cm_with_env({"MODEL_CACHE_TTL": "1"}).model_cache_ttl
+            self._cm_with_env({"MODEL_CACHE_TTL": "1"}).settings.model_cache_ttl
 
     def test_usage_db_path_settings(self):
         """usage_db_path resolves from env with the documented default."""
         cm = self._cm_with_env({})
-        assert cm.usage_db_path == "data/usage.db"
+        assert cm.settings.usage_db_path == "data/usage.db"
 
         cm = self._cm_with_env({"USAGE_DB_PATH": "/tmp/usage.db"})
-        assert cm.usage_db_path == "/tmp/usage.db"
+        assert cm.settings.usage_db_path == "/tmp/usage.db"
 
 
 class TestEnvSettingsResolvedOnce:
@@ -314,16 +374,16 @@ class TestEnvSettingsResolvedOnce:
         with patch.dict("os.environ", {"STREAM_READ_TIMEOUT": "111"}, clear=True):
             cm = _build_config_manager()
         with patch.dict("os.environ", {"STREAM_READ_TIMEOUT": "999"}, clear=True):
-            assert cm.stream_read_timeout == 111.0
+            assert cm.settings.stream_read_timeout == 111.0
 
     def test_malformed_number_falls_back_to_default(self):
         """An unparsable numeric env var falls back rather than crashing a request."""
         with patch.dict("os.environ", {"QUEUE_WAIT_TIMEOUT": "not-a-number"}, clear=True):
             cm = _build_config_manager()
-        assert cm.queue_wait_timeout == 30.0
+        assert cm.settings.queue_wait_timeout == 30.0
 
     def test_unknown_attribute_still_raises(self):
-        """__getattr__ exposes settings only; anything else is a normal AttributeError."""
+        """Only cm.settings exists; anything else is a normal AttributeError."""
         cm = _build_config_manager()
         with pytest.raises(AttributeError):
             cm.definitely_not_a_setting

@@ -3,6 +3,7 @@
 import asyncio
 from typing import Any
 
+from ..core.config_manager import Settings
 from ..core.error_handling import ErrorType, create_error
 from .base import BaseProvider
 from .openai import OpenAICompatibleProvider
@@ -34,7 +35,7 @@ def _on_drain_done(task: asyncio.Task) -> None:
 def _build_provider(
     provider_name: str,
     provider_config: dict[str, Any],
-    config_manager: Any | None = None,
+    settings: Settings,
 ) -> BaseProvider:
     """Pure factory: dispatch on provider type and return a new instance.
 
@@ -42,7 +43,7 @@ def _build_provider(
     """
     provider_type = provider_config.get("type")
     if provider_type == "openai":
-        return OpenAICompatibleProvider(provider_config, config_manager,
+        return OpenAICompatibleProvider(provider_config, settings,
                                         provider_name=provider_name)
     raise create_error(
         ErrorType.PROVIDER_NOT_FOUND, provider_name=provider_type, model_id="unknown"
@@ -52,12 +53,12 @@ def _build_provider(
 async def get_provider_instance(
     provider_name: str,
     provider_config: dict[str, Any],
-    config_manager: Any | None = None,
+    settings: Settings,
 ) -> BaseProvider:
     """Return a cached provider instance, creating one if needed (under the lock).
 
     Instances are cached by provider_name. Config changes to an existing
-    provider are not picked up until rebuild_provider_cache() runs.
+    provider are not picked up until the cache is rebuilt on reload.
     """
     cached = _provider_cache.get(provider_name)
     if cached is not None:
@@ -68,7 +69,7 @@ async def get_provider_instance(
         cached = _provider_cache.get(provider_name)
         if cached is not None:
             return cached
-        instance = _build_provider(provider_name, provider_config, config_manager)
+        instance = _build_provider(provider_name, provider_config, settings)
         _provider_cache[provider_name] = instance
         return instance
 
@@ -78,7 +79,7 @@ async def _gather_closes(coros) -> None:
     await asyncio.gather(*coros, return_exceptions=True)
 
 
-async def rebuild_provider_cache(config: dict[str, Any], config_manager: Any | None) -> None:
+async def rebuild_provider_cache(config: dict[str, Any], settings: Settings) -> None:
     """Atomically rebuild the cache from config.
 
     Builds a temp dict for every configured provider under _cache_lock. If any
@@ -91,7 +92,7 @@ async def rebuild_provider_cache(config: dict[str, Any], config_manager: Any | N
         errors = []
         for provider_name, provider_config in (config.get("providers") or {}).items():
             try:
-                temp[provider_name] = _build_provider(provider_name, provider_config, config_manager)
+                temp[provider_name] = _build_provider(provider_name, provider_config, settings)
             except Exception as e:
                 errors.append(f"  - {provider_name}: {e}")
         if errors:

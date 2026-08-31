@@ -34,7 +34,7 @@ async def _validate_providers(config_manager: ConfigManager) -> None:
     All failures are collected by rebuild_provider_cache into one RuntimeError so
     operators can fix multiple issues at once.
     """
-    await rebuild_provider_cache(config_manager.get_config(), config_manager)
+    await rebuild_provider_cache(config_manager.get_config(), config_manager.settings)
 
 
 @asynccontextmanager
@@ -48,7 +48,7 @@ async def lifespan(app: FastAPI):
 
     async def _rebuild_on_reload(new_config: dict) -> None:
         """Reload callback: rebuild the provider cache for the freshly loaded config."""
-        await rebuild_provider_cache(new_config, config_manager)
+        await rebuild_provider_cache(new_config, config_manager.settings)
 
     config_manager.add_reload_callback(_rebuild_on_reload, name="rebuild_provider_cache")
     reload_task = config_manager.start_reloader_task()
@@ -56,7 +56,7 @@ async def lifespan(app: FastAPI):
     # ARCH: capabilities auto-cache. Loaded from disk so data is available even
     # when upstreams are down; refreshed in the background (never blocks startup,
     # never touches the network on the hot path).
-    capabilities_cache = CapabilitiesCache(config_manager.model_cache_path)
+    capabilities_cache = CapabilitiesCache(config_manager.settings.model_cache_path)
     capabilities_cache.load()
 
     app.state.model_service = ModelService(config_manager, capabilities_cache)
@@ -64,7 +64,7 @@ async def lifespan(app: FastAPI):
     app.state.embedding_service = EmbeddingService(config_manager)
     app.state.transcription_service = TranscriptionService(config_manager, app.state.model_service)
 
-    await init_db(config_manager.usage_db_path)
+    await init_db(config_manager.settings.usage_db_path)
 
     capabilities_task = asyncio.create_task(capabilities_refresh_loop(config_manager, capabilities_cache))
 

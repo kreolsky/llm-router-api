@@ -12,11 +12,11 @@ class OpenAICompatibleProvider(BaseProvider):
         """Forward a non-streaming chat completion to an OpenAI-compatible API."""
         request_body = self._apply_model_config(request_body, provider_model_name, model_config)
 
-        connect_timeout = self._get_timeout("openai_connect_timeout")
+        connect_timeout = self.settings.openai_connect_timeout
         # WHY: read is capped by stream_read_timeout — the same env knob aclose()
         # drains on as "the longest a legitimate request may run" — so a silent
         # upstream cannot hold the concurrency slot and _inflight forever.
-        read_timeout = self._get_timeout("stream_read_timeout")
+        read_timeout = self.settings.stream_read_timeout
         non_stream_timeout = self._create_timeout(connect=connect_timeout, read=read_timeout)
 
         return await self._make_request(
@@ -67,7 +67,7 @@ class OpenAICompatibleProvider(BaseProvider):
         # the provider layer must not depend on upload rewinding.
         files = {"file": (audio["filename"], audio["data"], audio["content_type"])}
 
-        transcription_read_timeout = self._get_timeout("openai_transcription_timeout")
+        transcription_read_timeout = self.settings.openai_transcription_timeout
         transcription_timeout = self._create_timeout(read=transcription_read_timeout)
 
         return await self._make_request(
@@ -86,7 +86,7 @@ class OpenAICompatibleProvider(BaseProvider):
         """Forward embedding request to an OpenAI-compatible API."""
         request_body = self._apply_model_config(request_body, provider_model_name, model_config)
 
-        read_timeout = self._get_timeout("openai_embeddings_read_timeout")
+        read_timeout = self.settings.openai_embeddings_read_timeout
         # WHY: no hardcoded connect/write/pool — the client's own defaults
         # (HTTPX_CONNECT_TIMEOUT etc.) cover them via _create_timeout fallback.
         embeddings_timeout = self._create_timeout(read=read_timeout)

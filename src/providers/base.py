@@ -5,40 +5,22 @@ import contextlib
 import json
 import os
 import time
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator
 from functools import wraps
 from typing import Any
 
 import httpx
 
+from ..core.config_manager import Settings
 from ..core.error_handling import ErrorType, create_error, create_provider_http_error
 from ..core.header_policy import FORBIDDEN_STATIC_HEADERS
 from ..core.logging import logger
 from ..utils.deep_merge import deep_merge
 from ..utils.mask import mask_headers
 
-# ARCH: single source of the no-config fallbacks for every env-backed knob the
-# provider layer reads. Keyed by the ConfigManager attribute name, so a drift
-# test can pin them to ConfigManager._ENV_SETTINGS (tests/unit/
-# test_base_provider.py). Covers _get_timeout reads and the retry-decorator /
-# queue-wait fallbacks only — the _build_client no-config literals are
-# client-construction defaults, not knob reads.
-_TIMEOUT_DEFAULTS: dict[str, float] = {
-    "openai_connect_timeout": 60.0,
-    "stream_read_timeout": 300.0,
-    "openai_transcription_timeout": 3600.0,
-    "openai_embeddings_read_timeout": 30.0,
-    "queue_wait_timeout": 30.0,
-}
-_RETRY_DEFAULTS: dict[str, float] = {
-    "provider_max_retries": 3,
-    "provider_retry_base_delay": 1.0,
-    "provider_retry_max_delay": 30.0,
-}
-
 
 def _is_rate_limit_error(e: BaseException) -> bool:
-    """429 detection for retry_on_rate_limit.
+    """429 detection for the retry loop in _make_request_inner.
 
     Either the exception itself carries status 429, or it wraps one
     (original_exception.response.status_code == 429, wrapped httpx errors) —
@@ -57,23 +39,18 @@ def retry_on_rate_limit(max_retries: int | None = None, base_delay: float | None
 
     Backoff formula: min(base_delay * 2^attempt, max_delay).
     Rate-limit detection lives in _is_rate_limit_error.
-    Config is read from self.config_manager (first arg); otherwise the decorator
-    args / hardcoded defaults are used.
+    Bounds come from self.settings (first arg); otherwise the decorator
+    args / a bare Settings() are used.
     """
-    def decorator(func: Callable):
+    def decorator(func):
         @wraps(func)
         async def wrapper(*args, **kwargs):
-            # Try to get config_manager from the first argument (self)
-            cm = args[0].config_manager if args and hasattr(args[0], 'config_manager') else None
+            # Try to get settings from the first argument (self)
+            settings = args[0].settings if args and hasattr(args[0], 'settings') else Settings()
 
-            if cm:
-                actual_max_retries = cm.provider_max_retries if max_retries is None else max_retries
-                actual_base_delay = cm.provider_retry_base_delay if base_delay is None else base_delay
-                actual_max_delay = cm.provider_retry_max_delay if max_delay is None else max_delay
-            else:
-                actual_max_retries = max_retries if max_retries is not None else _RETRY_DEFAULTS["provider_max_retries"]
-                actual_base_delay = base_delay if base_delay is not None else _RETRY_DEFAULTS["provider_retry_base_delay"]
-                actual_max_delay = max_delay if max_delay is not None else _RETRY_DEFAULTS["provider_retry_max_delay"]
+            actual_max_retries = settings.provider_max_retries if max_retries is None else max_retries
+            actual_base_delay = settings.provider_retry_base_delay if base_delay is None else base_delay
+            actual_max_delay = settings.provider_retry_max_delay if max_delay is None else max_delay
 
             last_exception = None
             for attempt in range(actual_max_retries + 1):
@@ -104,12 +81,12 @@ def retry_on_rate_limit(max_retries: int | None = None, base_delay: float | None
 # os.environ[api_key_env]. It is never replaced per-request. Client API keys
 # stay in auth.py and are not propagated to providers.
 class BaseProvider:
-    def __init__(self, config: dict[str, Any], config_manager=None, provider_name: str | None = None):
+    def __init__(self, config: dict[str, Any], settings: Settings, provider_name: str | None = None):
         """Initialize provider from config dict.
 
         Reads API key from the env var named by config['api_key_env'].
         Owns its own httpx.AsyncClient (per-provider connection pool). Limits
-        come from config_manager (global env applied per pool).
+        come from settings (global env applied per pool).
         Reads an optional `proxy` URL (e.g. socks5://host:port) from config;
         when set, all of the provider's traffic is routed through that proxy.
         provider_name is the providers.yaml dict key (used in logs and
@@ -125,7 +102,7 @@ class BaseProvider:
         self.api_key_env = config.get("api_key_env")
         self.headers = dict(config.get("headers") or {})
         self.api_key = os.environ.get(self.api_key_env) if self.api_key_env else None
-        self.config_manager = config_manager
+        self.settings = settings
         self.proxy = config.get("proxy")
         self.provider_name = provider_name or self.__class__.__name__.replace("Provider", "").lower()
 
@@ -206,7 +183,7 @@ class BaseProvider:
             )
 
     def _build_client(self) -> httpx.AsyncClient:
-        """Construct an httpx.AsyncClient using limits from config_manager.
+        """Construct an httpx.AsyncClient using limits from settings.
 
         ARCH: per-provider proxy support. The optional `proxy` config key
         (a full URL with scheme, e.g. socks5://proxy.red:1331) is passed to
@@ -216,20 +193,16 @@ class BaseProvider:
         proxy URL surfaces as an error when the client is first used (or on the
         fail-fast startup instantiation).
         """
-        if self.config_manager is not None:
-            limits = httpx.Limits(
-                max_connections=self.config_manager.httpx_max_connections,
-                max_keepalive_connections=self.config_manager.httpx_max_keepalive_connections
-            )
-            timeout = httpx.Timeout(
-                connect=self.config_manager.httpx_connect_timeout,
-                read=self.config_manager.httpx_read_timeout,
-                write=None,
-                pool=self.config_manager.httpx_pool_timeout
-            )
-        else:
-            limits = httpx.Limits()
-            timeout = httpx.Timeout(connect=60.0, read=60.0, write=None, pool=5.0)
+        limits = httpx.Limits(
+            max_connections=self.settings.httpx_max_connections,
+            max_keepalive_connections=self.settings.httpx_max_keepalive_connections
+        )
+        timeout = httpx.Timeout(
+            connect=self.settings.httpx_connect_timeout,
+            read=self.settings.httpx_read_timeout,
+            write=None,
+            pool=self.settings.httpx_pool_timeout
+        )
         return httpx.AsyncClient(limits=limits, timeout=timeout, proxy=self.proxy)
 
     async def aclose(self, drain_timeout: float | None = None) -> None:
@@ -252,7 +225,7 @@ class BaseProvider:
             return
         if self._inflight > 0:
             if drain_timeout is None:
-                drain_timeout = self._get_timeout("stream_read_timeout")
+                drain_timeout = self.settings.stream_read_timeout
             try:
                 await asyncio.wait_for(self._idle.wait(), timeout=drain_timeout)
             except TimeoutError:
@@ -270,7 +243,7 @@ class BaseProvider:
 
         In-flight accounting always runs (it is what aclose() drains on). The
         semaphore gate only applies when max_concurrent is configured: it waits
-        up to config_manager.queue_wait_timeout for a free slot and raises 503
+        up to settings.queue_wait_timeout for a free slot and raises 503
         SERVICE_UNAVAILABLE on timeout. Both the slot and the in-flight count are
         released in the finally block (exception-safe, and reached on generator
         close, so a client disconnect frees them too).
@@ -291,9 +264,7 @@ class BaseProvider:
         acquired = False
         try:
             if self._semaphore is not None:
-                wait = (self.config_manager.queue_wait_timeout
-                        if self.config_manager is not None
-                        else _TIMEOUT_DEFAULTS["queue_wait_timeout"])
+                wait = self.settings.queue_wait_timeout
                 try:
                     await asyncio.wait_for(self._semaphore.acquire(), timeout=wait)
                     acquired = True
@@ -401,17 +372,6 @@ class BaseProvider:
             request_id=request_id,
             original_exception=e,
         ) from e
-
-    def _get_timeout(self, timeout_type: str) -> float:
-        """Read a named timeout from config_manager, falling back to _TIMEOUT_DEFAULTS.
-
-        Unknown names raise KeyError: the map is keyed by ConfigManager
-        attribute names and pinned to _ENV_SETTINGS by a drift test, so an
-        unknown key is a typo, not a tunable.
-        """
-        if self.config_manager and hasattr(self.config_manager, timeout_type):
-            return getattr(self.config_manager, timeout_type)
-        return _TIMEOUT_DEFAULTS[timeout_type]
 
     def _merge_request_headers(self, extra_headers: dict[str, str] | None) -> dict[str, str]:
         """Merge per-request extra_headers over self.headers.
@@ -582,7 +542,7 @@ class BaseProvider:
             data_flow="to_provider"
         )
 
-        stream_read_timeout = self._get_timeout("stream_read_timeout")
+        stream_read_timeout = self.settings.stream_read_timeout
         stream_timeout = self._create_timeout(read=stream_read_timeout)
 
         logger.debug(f"Starting stream request to {url_path}", extra={
