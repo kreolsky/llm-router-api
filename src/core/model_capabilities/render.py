@@ -8,7 +8,9 @@ precedence INVARIANT lives on the package docstring).
 from decimal import Decimal, InvalidOperation
 
 # Full set of OpenRouter pricing keys emitted in responses; missing -> "0".
-_PRICING_KEYS = (
+# Public: normalizers.py reads it across the module boundary to decide which
+# pricing keys a normalized upstream entry carries.
+PRICING_KEYS = (
     "prompt",
     "completion",
     "request",
@@ -39,7 +41,7 @@ def _format_price(value) -> str:
 def _render_pricing(pricing: dict) -> dict[str, str]:
     """Render a stored pricing dict (numbers) into the full OpenRouter key set (strings)."""
     result: dict[str, str] = {}
-    for key in _PRICING_KEYS:
+    for key in PRICING_KEYS:
         result[key] = _format_price(pricing.get(key, 0))
     return result
 

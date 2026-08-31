@@ -12,7 +12,7 @@ knowledge, not scheduler knowledge.
 """
 from typing import Any
 
-from .render import _PRICING_KEYS
+from .render import PRICING_KEYS
 
 
 def _parse_price(value: Any) -> float:
@@ -88,7 +88,7 @@ def _normalize_openrouter(raw: dict[str, Any]) -> dict[str, Any]:
     pricing = raw.get("pricing")
     if isinstance(pricing, dict):
         new_pricing: dict[str, float] = {}
-        for key in _PRICING_KEYS:
+        for key in PRICING_KEYS:
             if pricing.get(key) is not None:
                 new_pricing[key] = _parse_price(pricing[key])
         if new_pricing:

@@ -10,10 +10,11 @@ from .openai import OpenAICompatibleProvider
 
 # ARCH: cache key is the provider name (the dict key in providers.yaml).
 # Each cached instance owns its own httpx pool. The cache is rebuilt in TWO
-# phases on startup and config reload: prepare_provider_cache builds and
-# stages the new instances (pre-swap, fail-fast), publish_provider_cache
-# swaps them in and drains the superseded pools (post-swap). On prepare
-# failure the old cache is retained.
+# phases on startup and config reload: prepare_provider_cache stages the
+# next cache — REUSING every live instance whose providers.yaml entry is
+# unchanged and building the rest (pre-swap, fail-fast) — and
+# publish_provider_cache swaps it in and drains the superseded pools
+# (post-swap). On prepare failure the old cache is retained.
 _provider_cache: dict[str, BaseProvider] = {}
 
 # Staged by prepare_provider_cache, consumed by publish_provider_cache. None
@@ -68,8 +69,9 @@ async def get_provider_instance(provider_name: str) -> BaseProvider:
     """Return the published provider instance for provider_name.
 
     Instances are cached by provider_name and built only by
-    prepare_provider_cache. Config changes to an existing provider are not
-    picked up until the cache is rebuilt on reload.
+    prepare_provider_cache. An entry left unchanged by a reload keeps its
+    live instance (see the INVARIANT on _live_instance_if_unchanged);
+    changed entries are picked up on the next rebuild.
     """
     cached = _provider_cache.get(provider_name)
     if cached is None:
@@ -84,35 +86,105 @@ async def _gather_closes(coros) -> None:
     await asyncio.gather(*coros, return_exceptions=True)
 
 
+def _live_instance_if_unchanged(
+    provider_name: str,
+    provider_config: dict[str, Any],
+    settings: Settings,
+) -> BaseProvider | None:
+    """Return the published instance when it can be carried into the staged
+    cache as-is, else None.
+
+    # INVARIANT: an unchanged provider entry is carried into the staged cache
+    # as the SAME instance, never rebuilt.
+    # Why: the instance owns its ProviderPool, and the pool owns the
+    # semaphore. Rebuilding on an unrelated reload (all four watched files
+    # trigger this callback, so a models.yaml edit qualifies) resets the
+    # semaphore, letting the old pool's in-flight requests plus the new
+    # pool's fresh slots exceed max_concurrent together for the drain window
+    # (up to stream_read_timeout). Sameness is plain dict equality on the
+    # YAML-loaded entry AND the same Settings object (frozen at construction,
+    # never swapped without a restart — identity is enough). The name is
+    # looked up in the NEW config's iteration, so a provider the operator
+    # deleted is never carried over.
+    """
+    live = _provider_cache.get(provider_name)
+    if live is None:
+        return None
+    if live.settings is not settings or live.provider_config != provider_config:
+        return None
+    return live
+
+
+def _stale_stage_values(superseded: dict[str, BaseProvider]) -> list[BaseProvider]:
+    """Values of a superseded stage that are NOT (by identity) in the
+    published cache — the ones a failed/superseded prepare must close.
+
+    # INVARIANT: a superseded stage is closed MINUS its reused instances.
+    # Why: with instance reuse a staged cache can hold the very objects the
+    # published cache holds; closing them on supersede would flip their
+    # pool's _closed flag and permanently 503 a live provider (see
+    # acquire_slot in pool.py).
+    """
+    live_ids = {id(inst) for inst in _provider_cache.values()}
+    return [inst for inst in superseded.values() if id(inst) not in live_ids]
+
+
+def _build_stage(
+    config: dict[str, Any], settings: Settings
+) -> tuple[dict[str, BaseProvider], list[BaseProvider], list[str]]:
+    """Stage one entry per configured provider: the live instance when the
+    entry is unchanged (see _live_instance_if_unchanged), a fresh build
+    otherwise. Returns (temp, fresh, errors); fresh lists only the instances
+    THIS stage built — the ones a failed prepare must close.
+    """
+    temp: dict[str, BaseProvider] = {}
+    fresh: list[BaseProvider] = []
+    errors: list[str] = []
+    for provider_name, provider_config in (config.get("providers") or {}).items():
+        reused = _live_instance_if_unchanged(provider_name, provider_config, settings)
+        if reused is not None:
+            temp[provider_name] = reused
+            continue
+        try:
+            built = _build_provider(provider_name, provider_config, settings)
+        except Exception as e:
+            errors.append(f"  - {provider_name}: {e}")
+            continue
+        temp[provider_name] = built
+        fresh.append(built)
+    return temp, fresh, errors
+
+
 async def prepare_provider_cache(config: dict[str, Any], settings: Settings) -> None:
     """Build and stage the next provider cache (phase 1 of the reload).
 
-    Builds a temp dict for every configured provider under _cache_lock. If any
-    provider fails to build, a RuntimeError listing all failures is raised and
-    neither the live cache nor the staged slot is touched (the partially-built
-    instances are closed so a failed prepare leaks nothing). On success the
-    temp dict is staged for publish_provider_cache — the live cache still
-    serves traffic until the publish. A stage that was never published (a
-    reload vetoed after this callback) is closed before being replaced.
+    Stages a temp dict for every configured provider under _cache_lock:
+    unchanged entries carry their live instance, new and changed entries are
+    built. If any provider fails to build, a RuntimeError listing all
+    failures is raised and neither the live cache nor the staged slot is
+    touched (the partially-built instances are closed so a failed prepare
+    leaks nothing; reused live instances are NOT closed — they still serve
+    traffic from the published cache). On success the temp dict is staged
+    for publish_provider_cache — the live cache still serves traffic until
+    the publish. A stage that was never published (a reload vetoed after
+    this callback) is closed before being replaced, minus any instance the
+    published cache still holds.
     """
     global _staged_cache
     async with _cache_lock:
         superseded = _staged_cache
         _staged_cache = None
-        temp: dict[str, BaseProvider] = {}
-        errors = []
-        for provider_name, provider_config in (config.get("providers") or {}).items():
-            try:
-                temp[provider_name] = _build_provider(provider_name, provider_config, settings)
-            except Exception as e:
-                errors.append(f"  - {provider_name}: {e}")
+        temp, fresh, errors = _build_stage(config, settings)
         if errors:
-            # WHY: the partially-built temp instances own open httpx pools, and so
-            # does any stage this prepare superseded; close both so a failed
-            # prepare (e.g. one misconfigured provider) leaks nothing.
-            doomed = list(temp.values())
+            # WHY: doomed holds only instances THIS prepare built, plus the
+            # non-reused values of the superseded stage — a reused live
+            # instance sitting in temp must survive the veto; it is still
+            # serving traffic from the published cache. Both own open httpx
+            # pools, so a failed prepare (e.g. one misconfigured provider)
+            # leaks nothing.
+            doomed = list(fresh)
             if superseded is not None:
-                doomed += list(superseded.values())
+                doomed += _stale_stage_values(superseded)
             await _gather_closes([inst.aclose() for inst in doomed])
             joined = "\n".join(errors)
             raise RuntimeError(
@@ -123,8 +195,11 @@ async def prepare_provider_cache(config: dict[str, Any], settings: Settings) -> 
             # WHY: a previous prepare whose reload never reached publish (a
             # later pre-swap callback vetoed it) left open httpx pools staged;
             # replacing the stage without closing them leaks one pool per
-            # provider per vetoed reload.
-            await _gather_closes([inst.aclose() for inst in superseded.values()])
+            # provider per vetoed reload. Reused instances are excluded — the
+            # published cache still owns them.
+            await _gather_closes(
+                [inst.aclose() for inst in _stale_stage_values(superseded)]
+            )
 
 
 # INVARIANT: publish_provider_cache runs only AFTER ConfigManager has swapped
@@ -143,8 +218,9 @@ async def publish_provider_cache() -> None:
     """Swap the staged cache in and drain the superseded pools (phase 2 of the reload).
 
     No-op when nothing is staged (e.g. a publish without a successful
-    prepare). The previous instances' pools are closed in the background,
-    bounded by their drain timeout, so live SSE streams finish intact.
+    prepare). Instances the new cache REPLACED or dropped are closed in the
+    background, bounded by their drain timeout, so live SSE streams finish
+    intact.
     """
     global _provider_cache, _staged_cache
     async with _cache_lock:
@@ -155,7 +231,18 @@ async def publish_provider_cache() -> None:
         old_cache = _provider_cache
         _provider_cache = staged
 
-    coros = [inst.aclose() for inst in old_cache.values()]
+    # INVARIANT: publish drains old-minus-published BY IDENTITY, never the
+    # whole old cache.
+    # Why: a reused instance is a value in BOTH dicts; closing it here would
+    # set its pool's _closed flag under itself and every later request would
+    # get a permanent 503 from acquire_slot (see pool.py) — the reuse in
+    # prepare would have resurrected a dead pool. Only instances absent from
+    # the published cache are superseded.
+    published_ids = {id(inst) for inst in staged.values()}
+    coros = [
+        inst.aclose() for inst in old_cache.values()
+        if id(inst) not in published_ids
+    ]
     if coros:
         # publish_provider_cache is async, so a loop is always running here and
         # get_running_loop() cannot raise — the old no-loop fallback was dead
@@ -166,18 +253,22 @@ async def publish_provider_cache() -> None:
 
 
 async def clear_provider_cache_async() -> None:
-    """Await every provider's pool close (staged included), then clear the cache.
+    """Await every provider's pool close (staged included, deduped by
+    identity), then clear the cache.
 
     Used on shutdown so pools are drained gracefully before the loop stops.
     Close exceptions are suppressed via return_exceptions so one failing close
     never blocks the rest.
     """
     global _provider_cache, _staged_cache
-    coros = [inst.aclose() for inst in _provider_cache.values()]
-    if _staged_cache is not None:
-        # A prepared-but-unpublished stage owns open pools too; close them or
-        # they outlive the shutdown drain.
-        coros.extend(inst.aclose() for inst in _staged_cache.values())
-        _staged_cache = None
+    staged, _staged_cache = _staged_cache, None
+    # WHY: dedupe by identity — with instance reuse the staged cache can hold
+    # the very instances the published cache holds; each pool is closed once.
+    seen: set[int] = set()
+    coros = []
+    for inst in (*_provider_cache.values(), *(staged.values() if staged else ())):
+        if id(inst) not in seen:
+            seen.add(id(inst))
+            coros.append(inst.aclose())
     _provider_cache = {}
     await _gather_closes(coros)

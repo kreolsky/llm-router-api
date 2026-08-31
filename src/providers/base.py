@@ -62,6 +62,13 @@ class BaseProvider:
         self.settings = settings
         self.proxy = config.get("proxy")
         self.provider_name = provider_name or self.__class__.__name__.replace("Provider", "").lower()
+        # WHY: the providers.yaml entry this instance was built from (shallow
+        # copy — the loader's dict is dropped after the reload). The registry's
+        # reuse check compares it by plain dict equality with the freshly
+        # loaded entry; providers entries are never mutated between load and
+        # compare (_validate_models touches models only), so equality means
+        # "the operator did not touch this backend".
+        self.provider_config = dict(config)
 
         # ARCH: single identity mode. `passthrough` forwards every client
         # header upstream verbatim minus the denylist

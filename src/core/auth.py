@@ -65,7 +65,7 @@ async def get_api_key(
         # WHY: compared as UTF-8 bytes — hmac.compare_digest rejects non-ASCII
         # str, so a non-ASCII bearer (raw bytes on the wire, latin-1-decoded by
         # Starlette) would raise TypeError ⇒ 500 instead of 401. Mirrors the
-        # stat-key check in api/main.py verify_stat_key.
+        # stat-key check in api/stat_routes.py verify_stat_key.
         if stored_key and hmac.compare_digest(stored_key.encode(), api_key.encode()):
             found_project = project_name
             break

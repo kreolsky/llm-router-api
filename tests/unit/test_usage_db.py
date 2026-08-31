@@ -70,6 +70,43 @@ def pricing_state(pricing):
 
 
 # ---------------------------------------------------------------------------
+# Connection setter (_conn is the seam between writer and queries)
+# ---------------------------------------------------------------------------
+
+class TestConnectionSetter:
+    """set_connection is the single write point for the shared connection and
+    closes any prior one, so a re-init can never orphan an open handle."""
+
+    @pytest.mark.asyncio
+    async def test_reinit_closes_prior_connection(self, db_path):
+        await usage_db.init_db(db_path)
+        first = usage_db.get_connection()
+        with patch.object(first, "close", wraps=first.close) as close_spy:
+            await usage_db.init_db(db_path)
+            close_spy.assert_called_once()
+        second = usage_db.get_connection()
+        assert second is not first
+        await usage_db.close_db()
+        assert usage_db.get_connection() is None
+
+    @pytest.mark.asyncio
+    async def test_failing_close_still_installs_the_new_connection(self, db_path):
+        """A prior close that raises must not abort the swap: bailing would
+        leave the dead handle installed AND orphan the fresh one the caller
+        already opened — the exact leak set_connection exists to prevent."""
+        await usage_db.init_db(db_path)
+        first = usage_db.get_connection()
+        with patch.object(first, "close", side_effect=RuntimeError("close failed")):
+            await usage_db.init_db(db_path)
+        second = usage_db.get_connection()
+        assert second is not first
+        # The fresh handle is live, not a corpse left behind by the failed close.
+        cursor = await second.execute("SELECT 1")
+        assert await cursor.fetchone() == (1,)
+        await usage_db.close_db()
+
+
+# ---------------------------------------------------------------------------
 # Migration
 # ---------------------------------------------------------------------------
 

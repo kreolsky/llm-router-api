@@ -293,13 +293,16 @@ class ConfigManager:
         False is returned — the previous config stays in place.
 
         Phase 2 (post-swap): self.config = new_config, then every
-        add_post_swap_callback runs. Failures there are logged only — the
-        config is already published and there is nothing to roll back to.
+        add_post_swap_callback runs. A raising callback is logged and the
+        swap STAYS published (there is nothing to roll back to), but the
+        reload reports False — see Returns.
 
-        Returns True when the new config was applied (post-swap callback
-        failures included), False when it was rejected (incomplete on disk,
-        or refused by a pre-swap callback). The caller uses this to decide
-        whether the on-disk state has been consumed — see _poll_once.
+        Returns True only when the new config was applied AND every post-swap
+        callback ran cleanly. False when it was rejected (incomplete on disk,
+        or refused by a pre-swap callback) or a post-swap callback failed:
+        the config stays published either way, but the on-disk state must not
+        be treated as consumed — the caller leaves last_mtimes uncommitted so
+        the next poll retries (see _poll_once).
         """
         logger.info("Reloading configuration", extra={
             "config": {
@@ -320,6 +323,7 @@ class ConfigManager:
                     )
                     return False
             self.config = new_config
+            post_swap_failed = False
             for name, cb in self._post_swap_callbacks:
                 try:
                     await cb(new_config)
@@ -329,15 +333,38 @@ class ConfigManager:
                         extra={"config": {"operation": "reload_post_swap_error", "callback_name": name}},
                         exc_info=True,
                     )
-            logger.info("Configuration reloaded", extra={
-                "config": {
-                    "operation": "reload_complete",
-                    "providers_count": len(self.config.get('providers', {})),
-                    "models_count": len(self.config.get('models', {})),
-                    "user_keys_count": len(self.config.get('user_keys', {}))
-                }
-            })
-            return True
+                    post_swap_failed = True
+            # INVARIANT: a reload whose post-swap callback failed never logs
+            # the plain success line.
+            # Why: the swap IS published but a derived cache (the provider
+            # registry) is not, and the retry below reprints this line every
+            # poll interval — an INFO "Configuration reloaded" repeating
+            # forever is what an operator reads as "all good" while the
+            # router serves a half-applied state.
+            log = logger.warning if post_swap_failed else logger.info
+            log(
+                "Configuration reloaded, but a post-swap callback failed - retrying"
+                if post_swap_failed else "Configuration reloaded",
+                extra={
+                    "config": {
+                        "operation": "reload_complete",
+                        "post_swap_failed": post_swap_failed,
+                        "providers_count": len(self.config.get('providers', {})),
+                        "models_count": len(self.config.get('models', {})),
+                        "user_keys_count": len(self.config.get('user_keys', {}))
+                    }
+                })
+            # WHY: True here would let _poll_once commit last_mtimes, and a
+            # half-applied reload (the config swapped, a derived cache like
+            # the provider registry not) would never be retried until the
+            # file changed again — e.g. a provider added by this reload
+            # would 404 in silence. False keeps the on-disk state
+            # unconsumed so the next tick retries; with provider instance
+            # reuse the retry re-stages cheaply. The retry repeats every
+            # config_reload_interval until the callback succeeds or the
+            # files change again — deliberate: a half-applied reload must
+            # not go quiet, and the reuse path keeps each attempt cheap.
+            return not post_swap_failed
 
         logger.warning("Partial config reload rejected, keeping previous config")
         return False
@@ -370,9 +397,11 @@ class ConfigManager:
         attempted".
 
         # WHY: last_mtimes is committed only after reload_config() reports
-        # success. Recording it up front means a config rejected by a callback
-        # (a typo in providers.yaml) is never retried until the file changes
-        # again, and the router keeps serving the stale config in silence.
+        # success — and success means APPLIED CLEANLY, post-swap callbacks
+        # included. Recording it up front means a config rejected by a
+        # callback (a typo in providers.yaml) or half-applied by a failed
+        # post-swap step is never retried until the file changes again, and
+        # the router keeps serving the stale or half-new state in silence.
         """
         mtimes = self._current_mtimes()
         changed_files = [
