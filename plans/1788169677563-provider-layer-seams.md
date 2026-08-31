@@ -158,3 +158,20 @@ container on `:8777`:
   component directly. Full suite run 3x: one flake in an unrelated
   /v1/models caching API test on the cold first run, then 640 passed twice.
   SYSTEMS.md regenerated (also fixed a pre-existing usage-stats line drift).
+- Step 4 (two-phase reload) DONE: `ConfigManager.add_post_swap_callback`;
+  `reload_config` rewritten around the two named phases (pre-swap veto,
+  post-swap log-only); `rebuild_provider_cache` split into
+  `prepare_provider_cache` / `publish_provider_cache` with the ordering
+  INVARIANT + Why on publish; main.py registers prepare pre-swap and
+  publish post-swap, `_validate_providers` calls both back to back;
+  `clear_provider_cache_async` also drains a staged-but-unpublished cache.
+  Window regression pinned (ghost provider discarded by publish). CLAUDE.md
+  + config.md doc drift on `__getattr__`/`_ENV_SETTINGS` corrected. Full
+  suite 645 passed twice.
+- Validation (live, :8777) DONE: non-stream + stream frames verbatim
+  (`data: [DONE]`); orange max_concurrent=3 driven with 4 streams — 3 served,
+  4th 503 `provider_concurrency_limit`, stats row distinguishable; stream
+  finished intact across a real models.yaml hot reload (reload logged 2s
+  after touch); kimi removed via providers.yaml reload → model kimi 404
+  `provider_not_found`, restored → routes again. Review approved: baseline
+  bump kept, flake + StreamProcessor left to the request-path epic.

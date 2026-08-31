@@ -258,12 +258,6 @@ class TestGracefulDrain:
 
 class TestLateAcquisitionDuringDrain:
 
-    @pytest.fixture
-    def busy_pool(self):
-        pool = _pool()
-        pool._held_release = asyncio.Event()
-        return pool
-
     @pytest.mark.asyncio
     async def test_late_acquirer_gets_503_no_placeholder(self):
         """A NEW acquisition after aclose() started raises 503 whose message

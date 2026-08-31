@@ -16,7 +16,11 @@ from ..core.error_handling import ErrorType, create_error
 from ..core.logging import logger
 from ..core.model_capabilities import CapabilitiesCache, capabilities_refresh_loop
 from ..core.usage_db import close_db, drain_pending_flushes, init_db, request_stats
-from ..providers import clear_provider_cache_async, rebuild_provider_cache
+from ..providers import (
+    clear_provider_cache_async,
+    prepare_provider_cache,
+    publish_provider_cache,
+)
 from ..services.chat_service.chat_service import ChatService
 from ..services.embedding_service import EmbeddingService
 from ..services.model_service import ModelService
@@ -31,10 +35,12 @@ from .stat_routes import router as stat_router
 async def _validate_providers(config_manager: ConfigManager) -> None:
     """Eager validation: build & cache every configured provider (fail-fast).
 
-    All failures are collected by rebuild_provider_cache into one RuntimeError so
-    operators can fix multiple issues at once.
+    prepare + publish back to back — the same pair a config reload drives in
+    its two phases. All failures are collected by prepare_provider_cache into
+    one RuntimeError so operators can fix multiple issues at once.
     """
-    await rebuild_provider_cache(config_manager.get_config(), config_manager.settings)
+    await prepare_provider_cache(config_manager.get_config(), config_manager.settings)
+    await publish_provider_cache()
 
 
 @asynccontextmanager
@@ -46,11 +52,21 @@ async def lifespan(app: FastAPI):
     # ARCH: eager validation — fail fast on bad provider config / missing env keys.
     await _validate_providers(config_manager)
 
-    async def _rebuild_on_reload(new_config: dict) -> None:
-        """Reload callback: rebuild the provider cache for the freshly loaded config."""
-        await rebuild_provider_cache(new_config, config_manager.settings)
+    # ARCH: two-phase provider-cache reload. prepare runs pre-swap (it can
+    # veto a broken providers.yaml by raising); publish runs post-swap, after
+    # self.config is already the new one, so a provider removed by the reload
+    # cannot be re-populated from the stale config (see the INVARIANT on
+    # publish_provider_cache).
+    async def _prepare_on_reload(new_config: dict) -> None:
+        """Pre-swap callback: stage the provider cache for the freshly loaded config."""
+        await prepare_provider_cache(new_config, config_manager.settings)
 
-    config_manager.add_reload_callback(_rebuild_on_reload, name="rebuild_provider_cache")
+    async def _publish_on_reload(new_config: dict) -> None:
+        """Post-swap callback: publish the staged cache, drain superseded pools."""
+        await publish_provider_cache()
+
+    config_manager.add_reload_callback(_prepare_on_reload, name="prepare_provider_cache")
+    config_manager.add_post_swap_callback(_publish_on_reload, name="publish_provider_cache")
     reload_task = config_manager.start_reloader_task()
 
     # ARCH: capabilities auto-cache. Loaded from disk so data is available even

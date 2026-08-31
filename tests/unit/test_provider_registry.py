@@ -10,16 +10,19 @@ from src.providers import (
     _build_provider,
     clear_provider_cache_async,
     get_provider_instance,
-    rebuild_provider_cache,
+    prepare_provider_cache,
+    publish_provider_cache,
 )
 
 
 @pytest.fixture(autouse=True)
 def reset_cache():
-    """Ensure a clean cache (and a fresh lock state) between tests."""
+    """Ensure a clean cache, no staged remnant and a fresh lock state between tests."""
     provider_registry._provider_cache.clear()
+    provider_registry._staged_cache = None
     yield
     provider_registry._provider_cache.clear()
+    provider_registry._staged_cache = None
 
 
 def _make_config():
@@ -124,22 +127,55 @@ class TestClearProviderCacheAsync:
         assert provider_registry._provider_cache == {}
 
 
-class TestRebuildProviderCache:
+async def _seed_cache(config, settings):
+    """prepare + publish back to back — what startup and a full reload do."""
+    await prepare_provider_cache(config, settings)
+    await publish_provider_cache()
+
+
+class TestPreparePublishProviderCache:
+    """Two-phase cache rebuild: prepare stages pre-swap, publish swaps post-swap."""
 
     @patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False)
     @pytest.mark.asyncio
-    async def test_rebuild_populates_cache(self):
-        """A successful rebuild caches every configured provider."""
+    async def test_prepare_stages_without_swapping(self):
+        """prepare builds and stages the new instances; the live cache is
+        untouched until publish runs."""
         config = {"providers": {"ok": _make_config()}}
-        await rebuild_provider_cache(config, Settings())
-        assert "ok" in provider_registry._provider_cache
+        await _seed_cache(config, Settings())
+        old_instance = provider_registry._provider_cache["ok"]
+
+        await prepare_provider_cache({"providers": {"renamed": _make_config()}}, Settings())
+
+        assert "renamed" in provider_registry._staged_cache
+        assert "renamed" not in provider_registry._provider_cache
+        assert provider_registry._provider_cache["ok"] is old_instance
 
     @patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False)
     @pytest.mark.asyncio
-    async def test_rebuild_failure_leaves_old_cache_and_lists_all(self):
-        """On failure, the old cache is retained and all failures are reported."""
-        # Seed the cache with a good provider
-        await rebuild_provider_cache({"providers": {"ok": _make_config()}}, Settings())
+    async def test_publish_swaps_staged_and_drains_old(self):
+        """publish swaps the staged cache in and closes the previous pools in
+        the background (drain task tracked until done)."""
+        import asyncio
+        await _seed_cache({"providers": {"ok": _make_config()}}, Settings())
+        old_instance = provider_registry._provider_cache["ok"]
+        old_instance.aclose = AsyncMock()
+
+        await prepare_provider_cache({"providers": {"ok": _make_config()}}, Settings())
+        await publish_provider_cache()
+
+        assert provider_registry._provider_cache["ok"] is not old_instance
+        assert provider_registry._staged_cache is None
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        old_instance.aclose.assert_awaited_once()
+
+    @patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False)
+    @pytest.mark.asyncio
+    async def test_prepare_failure_retains_cache_and_lists_all(self):
+        """On failure the live cache is retained, nothing stays staged, and all
+        failures are reported (collect-all fail-fast)."""
+        await _seed_cache({"providers": {"ok": _make_config()}}, Settings())
         old_instance = provider_registry._provider_cache["ok"]
 
         bad = {
@@ -147,33 +183,46 @@ class TestRebuildProviderCache:
             "broken-b": {"type": "openai", "base_url": "https://b.example.com", "api_key_env": "MISSING_B"},
         }
         with patch.dict("os.environ", {}, clear=True), pytest.raises(RuntimeError) as exc_info:
-            await rebuild_provider_cache({"providers": bad}, Settings())
+            await prepare_provider_cache({"providers": bad}, Settings())
         msg = str(exc_info.value)
         assert "broken-a" in msg
         assert "broken-b" in msg
-        # Old cache retained
-        assert "ok" in provider_registry._provider_cache
         assert provider_registry._provider_cache["ok"] is old_instance
+        assert provider_registry._staged_cache is None
 
     @patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False)
     @pytest.mark.asyncio
-    async def test_rebuild_closes_old_pools_in_background(self):
-        """A successful rebuild schedules aclose on previously cached instances."""
-        await rebuild_provider_cache({"providers": {"ok": _make_config()}}, Settings())
-        old_instance = provider_registry._provider_cache["ok"]
-        old_instance.aclose = AsyncMock()
-
-        # Rebuild with the same config → old instance should be closed
-        await rebuild_provider_cache({"providers": {"ok": _make_config()}}, Settings())
-        # Background close is scheduled via ensure_future; let it run
-        import asyncio
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
-        old_instance.aclose.assert_awaited_once()
+    async def test_publish_without_prepare_is_noop(self):
+        """publish with nothing staged leaves the live cache alone."""
+        await _seed_cache({"providers": {"ok": _make_config()}}, Settings())
+        instance = provider_registry._provider_cache["ok"]
+        await publish_provider_cache()
+        assert provider_registry._provider_cache["ok"] is instance
 
     @patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False)
     @pytest.mark.asyncio
-    async def test_rebuild_drain_task_tracked_until_done(self):
+    async def test_window_ghost_discarded_by_publish(self):
+        """The reload window bug this split fixes: between the config swap and
+        the cache publish, get_provider_instance may build an instance from a
+        stale resolution into the OLD cache. publish must discard it along
+        with the old cache — a removed provider must not survive the reload."""
+        await _seed_cache(
+            {"providers": {"kept": _make_config(), "doomed": _make_config()}}, Settings())
+
+        # New config drops "doomed"; prepare stages the shrunken cache.
+        await prepare_provider_cache({"providers": {"kept": _make_config()}}, Settings())
+
+        # Window: a stale resolution re-populates the OLD cache mid-reload.
+        await get_provider_instance("doomed", _make_config(), Settings())
+        assert "doomed" in provider_registry._provider_cache
+
+        await publish_provider_cache()
+        assert "doomed" not in provider_registry._provider_cache
+        assert "kept" in provider_registry._provider_cache
+
+    @patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False)
+    @pytest.mark.asyncio
+    async def test_publish_drain_task_tracked_until_done(self):
         """The background close task is referenced until it finishes.
 
         asyncio only keeps a weak reference to a running task: an unreferenced
@@ -182,7 +231,7 @@ class TestRebuildProviderCache:
         src/core/usage_db/writer.py.
         """
         import asyncio
-        await rebuild_provider_cache({"providers": {"ok": _make_config()}}, Settings())
+        await _seed_cache({"providers": {"ok": _make_config()}}, Settings())
         old_instance = provider_registry._provider_cache["ok"]
 
         release = asyncio.Event()
@@ -192,7 +241,8 @@ class TestRebuildProviderCache:
 
         old_instance.aclose = slow_aclose
 
-        await rebuild_provider_cache({"providers": {"ok": _make_config()}}, Settings())
+        await prepare_provider_cache({"providers": {"ok": _make_config()}}, Settings())
+        await publish_provider_cache()
         assert provider_registry._drain_tasks, "drain task must be tracked while pools close"
         tracked = next(iter(provider_registry._drain_tasks))
         assert not tracked.done()

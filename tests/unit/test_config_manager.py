@@ -452,6 +452,75 @@ class TestAddReloadCallback:
 
 
 # ===================================================================
+# add_post_swap_callback (two-phase reload)
+# ===================================================================
+
+class TestAddPostSwapCallback:
+    """Post-swap callbacks run AFTER self.config is swapped and cannot abort it."""
+
+    MODELS_V2 = "models:\n  gpt-4:\n    provider: openai\n  gpt-5:\n    provider: openai\n"
+
+    @pytest.mark.asyncio
+    async def test_runs_after_config_swap(self):
+        """Inside a post-swap callback get_config() already returns the NEW
+        config; inside a pre-swap callback it still returns the old one."""
+        cm = _build_config_manager()
+        seen = {}
+
+        async def pre_cb(new_config):
+            seen["pre"] = "gpt-5" in cm.get_config().get("models", {})
+
+        async def post_cb(new_config):
+            seen["post"] = "gpt-5" in cm.get_config().get("models", {})
+
+        cm.add_reload_callback(pre_cb, name="pre")
+        cm.add_post_swap_callback(post_cb, name="post")
+
+        file_map = {
+            "providers.yaml": PROVIDERS_YAML,
+            "models.yaml": self.MODELS_V2,
+            "user_keys.yaml": USER_KEYS_YAML,
+        }
+        with patch("builtins.open", side_effect=_multi_open(file_map)), \
+             patch("src.core.config_manager.logger"):
+            assert await cm.reload_config() is True
+
+        assert seen == {"pre": False, "post": True}
+
+    @pytest.mark.asyncio
+    async def test_failure_is_logged_not_fatal(self):
+        """A failing post-swap callback cannot abort the reload: the config is
+        already published and there is nothing to roll back to — reload still
+        reports success and keeps the new config."""
+        cm = _build_config_manager()
+        failing = AsyncMock(side_effect=RuntimeError("boom"))
+        cm.add_post_swap_callback(failing, name="failing_post")
+
+        with patch("builtins.open", side_effect=_multi_open(ALL_YAMLS)), \
+             patch("src.core.config_manager.logger"):
+            assert await cm.reload_config() is True
+
+        failing.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_pre_swap_failure_skips_post_swap(self):
+        """A pre-swap (aborting) callback failure prevents the swap AND the
+        post-swap callbacks from running at all."""
+        cm = _build_config_manager()
+        original_config = cm.get_config().copy()
+        post = AsyncMock()
+        cm.add_reload_callback(AsyncMock(side_effect=RuntimeError("boom")), name="failing_pre")
+        cm.add_post_swap_callback(post, name="post")
+
+        with patch("builtins.open", side_effect=_multi_open(ALL_YAMLS)), \
+             patch("src.core.config_manager.logger"):
+            assert await cm.reload_config() is False
+
+        post.assert_not_called()
+        assert cm.get_config() == original_config
+
+
+# ===================================================================
 # mtime bookkeeping: a rejected reload must be retried
 # ===================================================================
 

@@ -101,6 +101,7 @@ class ConfigManager:
         self.last_mtimes = {} # Initialize last_mtimes as instance variable
         self._initialize_mtimes()
         self._on_reload_callbacks = []
+        self._post_swap_callbacks = []
         
         self.debug = _env_bool("DEBUG", False)
         self.log_level = os.getenv("LOG_LEVEL", "INFO")
@@ -262,24 +263,43 @@ class ConfigManager:
         return Settings(**values)
 
     def add_reload_callback(self, callback, name: str = ""):
-        """Register an async callback invoked after a successful config load.
+        """Register an async callback invoked BEFORE the new config is published (pre-swap phase).
 
         callback signature: ``async def cb(new_config: dict) -> None``.
-        On callback failure reload is aborted and self.config is NOT swapped
-        (the previous config stays in place). Callbacks run sequentially.
+        Pre-swap callbacks can VETO the reload: on callback failure the swap
+        is aborted and self.config keeps the previous value. Callbacks run
+        sequentially. Use add_post_swap_callback for work that must observe
+        the already-published config instead.
         """
         self._on_reload_callbacks.append((name, callback))
 
+    def add_post_swap_callback(self, callback, name: str = ""):
+        """Register an async callback invoked AFTER self.config is swapped (post-swap phase).
+
+        callback signature: ``async def cb(new_config: dict) -> None``.
+        Post-swap callbacks run once the new config is already published, so a
+        failure can only be logged — there is nothing to roll back to. This is
+        the phase that publishes derived caches (e.g. the provider cache) so
+        they never re-populate from a config the swap is about to retire.
+        """
+        self._post_swap_callbacks.append((name, callback))
+
     async def reload_config(self) -> bool:
-        """Reload config from disk and invoke registered async callbacks.
+        """Reload config from disk in two phases.
 
-        Atomicity: self.config is swapped only AFTER every callback succeeds.
-        If any callback raises, the previous config is retained (return, no swap).
-        Each callback receives the freshly loaded new_config dict.
+        Phase 1 (pre-swap): every add_reload_callback runs with the freshly
+        loaded new_config while self.config still holds the previous value. A
+        raising callback ABORTS the reload: self.config is not swapped and
+        False is returned — the previous config stays in place.
 
-        Returns True when the new config was applied, False when it was rejected
-        (incomplete on disk, or refused by a callback). The caller uses this to
-        decide whether the on-disk state has been consumed — see _poll_once.
+        Phase 2 (post-swap): self.config = new_config, then every
+        add_post_swap_callback runs. Failures there are logged only — the
+        config is already published and there is nothing to roll back to.
+
+        Returns True when the new config was applied (post-swap callback
+        failures included), False when it was rejected (incomplete on disk,
+        or refused by a pre-swap callback). The caller uses this to decide
+        whether the on-disk state has been consumed — see _poll_once.
         """
         logger.info("Reloading configuration", extra={
             "config": {
@@ -300,6 +320,15 @@ class ConfigManager:
                     )
                     return False
             self.config = new_config
+            for name, cb in self._post_swap_callbacks:
+                try:
+                    await cb(new_config)
+                except Exception:
+                    logger.error(
+                        f"Post-swap config reload callback failed: {name or '(unnamed)'}",
+                        extra={"config": {"operation": "reload_post_swap_error", "callback_name": name}},
+                        exc_info=True,
+                    )
             logger.info("Configuration reloaded", extra={
                 "config": {
                     "operation": "reload_complete",

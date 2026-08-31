@@ -1,11 +1,15 @@
 {
   "limit": 50,
   "scan_dir": "src",
-  "total": 16,
+  "total": 19,
   "violations": {
     "src/api/main.py::create_transcription": {
       "label": "src/api/main.py::create_transcription",
       "span": 52
+    },
+    "src/api/main.py::lifespan": {
+      "label": "src/api/main.py::lifespan",
+      "span": 54
     },
     "src/api/middleware.py::RequestLoggerMiddleware.__call__": {
       "label": "src/api/middleware.py::RequestLoggerMiddleware.__call__",
@@ -13,11 +17,15 @@
     },
     "src/core/auth.py::get_api_key": {
       "label": "src/core/auth.py::get_api_key",
-      "span": 92
+      "span": 90
+    },
+    "src/core/config_manager.py::ConfigManager.reload_config": {
+      "label": "src/core/config_manager.py::ConfigManager.reload_config",
+      "span": 57
     },
     "src/core/model_capabilities.py::refresh_provider_capabilities": {
       "label": "src/core/model_capabilities.py::refresh_provider_capabilities",
-      "span": 80
+      "span": 88
     },
     "src/core/usage_db/queries.py::get_requests": {
       "label": "src/core/usage_db/queries.py::get_requests",
@@ -41,15 +49,19 @@
     },
     "src/providers/base.py::BaseProvider.__init__": {
       "label": "src/providers/base.py::BaseProvider.__init__",
-      "span": 97
+      "span": 69
     },
-    "src/providers/base.py::BaseProvider._make_request_inner": {
-      "label": "src/providers/base.py::BaseProvider._make_request_inner",
+    "src/providers/base.py::BaseProvider._make_request_attempt": {
+      "label": "src/providers/base.py::BaseProvider._make_request_attempt",
       "span": 73
     },
     "src/providers/base.py::BaseProvider._stream_request_inner": {
       "label": "src/providers/base.py::BaseProvider._stream_request_inner",
-      "span": 87
+      "span": 94
+    },
+    "src/providers/pool.py::ProviderPool.__init__": {
+      "label": "src/providers/pool.py::ProviderPool.__init__",
+      "span": 51
     },
     "src/services/chat_service/chat_service.py::ChatService.chat_completions": {
       "label": "src/services/chat_service/chat_service.py::ChatService.chat_completions",
