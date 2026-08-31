@@ -1,7 +1,7 @@
 {
   "limit": 50,
   "scan_dir": "src",
-  "total": 19,
+  "total": 18,
   "violations": {
     "src/api/main.py::create_transcription": {
       "label": "src/api/main.py::create_transcription",
@@ -13,7 +13,7 @@
     },
     "src/api/middleware.py::RequestLoggerMiddleware.__call__": {
       "label": "src/api/middleware.py::RequestLoggerMiddleware.__call__",
-      "span": 110
+      "span": 119
     },
     "src/core/auth.py::get_api_key": {
       "label": "src/core/auth.py::get_api_key",
@@ -22,10 +22,6 @@
     "src/core/config_manager.py::ConfigManager.reload_config": {
       "label": "src/core/config_manager.py::ConfigManager.reload_config",
       "span": 57
-    },
-    "src/core/model_capabilities.py::refresh_provider_capabilities": {
-      "label": "src/core/model_capabilities.py::refresh_provider_capabilities",
-      "span": 88
     },
     "src/core/usage_db/queries.py::get_requests": {
       "label": "src/core/usage_db/queries.py::get_requests",
@@ -69,7 +65,7 @@
     },
     "src/services/chat_service/stream_processor.py::StreamProcessor.process_stream": {
       "label": "src/services/chat_service/stream_processor.py::StreamProcessor.process_stream",
-      "span": 60
+      "span": 65
     },
     "src/services/model_service.py::ModelService.retrieve_model": {
       "label": "src/services/model_service.py::ModelService.retrieve_model",
@@ -77,7 +73,7 @@
     },
     "src/services/transcription_service.py::TranscriptionService.create_transcription": {
       "label": "src/services/transcription_service.py::TranscriptionService.create_transcription",
-      "span": 91
+      "span": 84
     }
   }
 }

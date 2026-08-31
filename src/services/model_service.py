@@ -2,7 +2,7 @@
 
 ARCH: the hot path (/v1/models, /v1/models/{id}) reads capabilities from an
 in-memory merged store and NEVER touches the network. Capability data is
-sourced from two layers (see src/core/model_capabilities.py):
+sourced from two layers (see src/core/model_capabilities/):
 
   1. the auto-cache (CapabilitiesCache, refreshed by a background task);
   2. config/model_info.yaml (manual override).

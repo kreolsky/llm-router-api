@@ -57,7 +57,7 @@ class Settings:
     openai_connect_timeout: float = 60.0
     openai_transcription_timeout: float = 3600.0
     openai_embeddings_read_timeout: float = 30.0
-    # --- model capabilities auto-cache (see src/core/model_capabilities.py) ---
+    # --- model capabilities auto-cache (see src/core/model_capabilities/) ---
     model_cache_refresh_interval: int = 3600
     model_cache_enabled: bool = True
     model_cache_path: str = "data/model_cache.json"

@@ -1,4 +1,4 @@
-"""Unit tests for src/core/model_capabilities.py — normalization, rendering, cache."""
+"""Unit tests for src/core/model_capabilities/ — normalization, rendering, cache."""
 
 import json
 import os
@@ -7,12 +7,12 @@ import pytest
 
 from src.core.model_capabilities import (
     CapabilitiesCache,
-    _format_price,
     merge_capabilities,
     normalize_provider_model,
     refresh_provider_capabilities,
     render_capabilities,
 )
+from src.core.model_capabilities.render import _format_price
 
 # ---------------------------------------------------------------------------
 # Price formatting (decision 2 — regression on 4.35e-07)
@@ -373,7 +373,7 @@ class TestRefreshProviderCapabilities:
         async def fake_gpi(*a, **k):
             return _FakeProvider(upstream)
 
-        monkeypatch.setattr("src.core.model_capabilities.get_provider_instance", fake_gpi)
+        monkeypatch.setattr("src.core.model_capabilities.refresh.get_provider_instance", fake_gpi)
         await refresh_provider_capabilities(cm, cache, "orange")
 
         for mid in ("local/chat", "local/reasoner"):
@@ -392,7 +392,7 @@ class TestRefreshProviderCapabilities:
         async def fake_gpi(*a, **k):
             return _FakeProvider(upstream)
 
-        monkeypatch.setattr("src.core.model_capabilities.get_provider_instance", fake_gpi)
+        monkeypatch.setattr("src.core.model_capabilities.refresh.get_provider_instance", fake_gpi)
         await refresh_provider_capabilities(cm, cache, "deepseek")
 
         assert cache.get("deepseek/flash")["context_length"] == 262144
@@ -412,7 +412,7 @@ class TestRefreshProviderCapabilities:
         async def fake_gpi(*a, **k):
             return _Boom()
 
-        monkeypatch.setattr("src.core.model_capabilities.get_provider_instance", fake_gpi)
+        monkeypatch.setattr("src.core.model_capabilities.refresh.get_provider_instance", fake_gpi)
         await refresh_provider_capabilities(cm, cache, "orange")  # must not raise
 
         # existing entry retained
@@ -445,7 +445,7 @@ class TestRefreshProviderCapabilities:
         async def fake_gpi(*a, **k):
             return _FakeProvider(upstream)
 
-        monkeypatch.setattr("src.core.model_capabilities.get_provider_instance", fake_gpi)
+        monkeypatch.setattr("src.core.model_capabilities.refresh.get_provider_instance", fake_gpi)
         await refresh_provider_capabilities(cm, cache, "openrouter")
 
         data = cache.get("gemini/pro")
@@ -471,7 +471,59 @@ class TestRefreshProviderCapabilities:
         async def fake_gpi(*a, **k):
             return _FakeProvider(upstream)
 
-        monkeypatch.setattr("src.core.model_capabilities.get_provider_instance", fake_gpi)
+        monkeypatch.setattr("src.core.model_capabilities.refresh.get_provider_instance", fake_gpi)
         await refresh_provider_capabilities(cm, cache, "openrouter")
 
         assert cache.get("m/free")["pricing"]["prompt"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Package layout + llama native-caps merge inside the normalizer
+# ---------------------------------------------------------------------------
+
+class TestPackageLayout:
+    def test_split_by_concern(self):
+        """normalizers / cache / refresh live as their own modules with the
+        SYSTEM: marker on the package root."""
+        from src.core.model_capabilities import cache, normalizers, refresh  # noqa: F401
+
+        assert hasattr(normalizers, "normalize_provider_model")
+        assert hasattr(cache, "CapabilitiesCache")
+        assert hasattr(refresh, "refresh_provider_capabilities")
+
+
+class TestLlamaNativeCapsMerge:
+    """llama-server exposes vision in a parallel native "models" array; the
+    merge belongs to the llama normalizer (upstream shape knowledge), not to
+    the refresh scheduler."""
+
+    def test_data_entry_plus_native_caps(self):
+        raw = {"id": "/g/Qwen.gguf", "meta": {"n_ctx": 8192}}
+        native = [{"name": "/g/Qwen.gguf", "capabilities": ["completion", "multimodal"]}]
+        stored = normalize_provider_model(raw, native_models=native)
+        assert stored["context_length"] == 8192
+        assert stored["architecture"]["input_modalities"] == ["text", "image"]
+
+    def test_no_meta_but_native_caps_still_normalizes(self):
+        raw = {"id": "x"}
+        native = [{"model": "x", "capabilities": ["multimodal"]}]
+        stored = normalize_provider_model(raw, native_models=native)
+        assert stored["architecture"]["input_modalities"] == ["text", "image"]
+
+    def test_native_caps_matched_by_id_then_name(self):
+        native = [
+            {"model": "/p/a.gguf", "capabilities": ["multimodal"]},
+            {"id": "by-id", "capabilities": ["multimodal"]},
+        ]
+        by_id = normalize_provider_model({"id": "by-id", "name": "irrelevant"}, native_models=native)
+        assert by_id["architecture"]["input_modalities"] == ["text", "image"]
+
+    def test_positional_raw_alone_still_works(self):
+        assert normalize_provider_model({"id": "x"}) == {}
+
+    def test_openrouter_shape_ignores_native_models(self):
+        raw = {"id": "o", "context_length": 4096}
+        native = [{"model": "o", "capabilities": ["multimodal"]}]
+        stored = normalize_provider_model(raw, native_models=native)
+        assert "architecture" not in stored
+        assert stored["context_length"] == 4096

@@ -128,4 +128,7 @@ a green full suite before the merge. Against the rebuilt container on `:8777`:
 
 ## Progress
 
-Not started.
+Done — all five steps implemented, tested and driven live on branch
+`request-path-module-seams` (full suite green: 669 passed, 1 skipped;
+provider-bound payloads byte-identical pre/post across all four endpoints;
+endpoint set and error_code values unchanged).
