@@ -91,10 +91,9 @@ class StreamProcessor:
     captured-usage holder so concurrent streams never overwrite each other.
     """
 
-    def __init__(self, config_manager=None):
-        self.config_manager = config_manager
+    def __init__(self):
         logger.info("StreamProcessor initialized", extra={
-            "stream_processor": {"config_manager": config_manager is not None}
+            "stream_processor": {}
         })
 
     async def process_stream(self,

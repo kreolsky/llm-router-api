@@ -18,7 +18,7 @@ class ChatService(BaseService):
     def __init__(self, config_manager: ConfigManager, model_service: ModelService):
         super().__init__(config_manager)
         self.model_service = model_service
-        self.stream_processor = StreamProcessor(config_manager)
+        self.stream_processor = StreamProcessor()
 
     async def chat_completions(self, request: Request, auth_context: AuthContext) -> Any:
         """Process a chat completion request, returning StreamingResponse or JSONResponse."""

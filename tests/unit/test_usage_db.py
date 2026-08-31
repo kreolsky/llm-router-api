@@ -835,7 +835,7 @@ def build_stats_app() -> FastAPI:
         stats.model_id = "m"
         stats.provider_name = "p"
         stats.stream = True
-        processor = StreamProcessor(config_manager=None)
+        processor = StreamProcessor()
 
         async def body():
             async for chunk in processor.process_stream(
