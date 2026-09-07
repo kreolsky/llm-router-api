@@ -346,6 +346,93 @@ class TestPrepareDispatchPreamble:
 
 
 # ===================================================================
+# _prepare_dispatch — reasoning-field dialect translation
+# ===================================================================
+
+class TestPrepareDispatchDialectTranslation:
+    """_prepare_dispatch applies the per-provider dialect translation AFTER
+    the effort policy — the gated-legal value is what gets re-nested."""
+
+    def _svc(self, providers):
+        return _build_service(models={"m": {"provider": "p"}}, providers=providers)
+
+    def _request(self, body):
+        request = _make_request("req-1", project_name="proj")
+        request.json = AsyncMock(return_value=body)
+        request.headers = {}
+        return request
+
+    @pytest.mark.asyncio
+    @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
+    async def test_openrouter_body_translated_on_the_funnel(self, mock_get):
+        mock_get.return_value = SimpleNamespace(identity=None)
+        svc = self._svc({"p": {"type": "openai", "base_url": "https://x",
+                               "reasoning_dialect": "openrouter"}})
+        request = self._request({"model": "m", "messages": [],
+                                 "thinking": {"type": "enabled"},
+                                 "reasoning_effort": "high"})
+
+        prepared = await svc._prepare_dispatch(
+            request, _make_auth_context(), component="c", log_title="t")
+
+        assert prepared.request_body["reasoning"] == {"effort": "high"}
+        assert "thinking" not in prepared.request_body
+        assert "reasoning_effort" not in prepared.request_body
+
+    @pytest.mark.asyncio
+    @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
+    async def test_default_dialect_drops_thinking_keeps_effort(self, mock_get):
+        mock_get.return_value = SimpleNamespace(identity=None)
+        svc = self._svc({"p": {"type": "openai", "base_url": "https://x"}})
+        request = self._request({"model": "m", "messages": [],
+                                 "thinking": {"type": "enabled"},
+                                 "reasoning_effort": "low"})
+
+        prepared = await svc._prepare_dispatch(
+            request, _make_auth_context(), component="c", log_title="t")
+
+        assert prepared.request_body["reasoning_effort"] == "low"
+        assert "thinking" not in prepared.request_body
+
+    @pytest.mark.asyncio
+    @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
+    async def test_deepseek_body_untouched_on_the_funnel(self, mock_get):
+        """The native dialect: both fields reach the provider verbatim,
+        title-shaped requests included."""
+        mock_get.return_value = SimpleNamespace(identity=None)
+        svc = self._svc({"p": {"type": "openai", "base_url": "https://x",
+                               "reasoning_dialect": "deepseek"}})
+        body = {"model": "m", "messages": [], "thinking": {"type": "disabled"}}
+        request = self._request(dict(body))
+
+        prepared = await svc._prepare_dispatch(
+            request, _make_auth_context(), component="c", log_title="t")
+
+        assert prepared.request_body == body
+
+    @pytest.mark.asyncio
+    @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
+    async def test_policy_gate_fires_before_the_translation(self, mock_get):
+        """A value outside the model's allowed list is a 400 from the policy —
+        the openrouter re-nest never runs for refused principals."""
+        mock_get.return_value = SimpleNamespace(identity=None)
+        svc = _build_service(
+            models={"m": {"provider": "p",
+                          "reasoning_effort": {"allowed": ["low", "high"],
+                                               "param": "reasoning_effort"}}},
+            providers={"p": {"type": "openai", "base_url": "https://x",
+                             "reasoning_dialect": "openrouter"}})
+        request = self._request({"model": "m", "messages": [],
+                                 "thinking": {"type": "enabled"},
+                                 "reasoning_effort": "max"})
+
+        with pytest.raises(HTTPException) as exc_info:
+            await svc._prepare_dispatch(
+                request, _make_auth_context(), component="c", log_title="t")
+        assert exc_info.value.status_code == 400
+
+
+# ===================================================================
 # _resolve_target — the body-agnostic dispatch funnel
 # ===================================================================
 

@@ -80,6 +80,18 @@ class BaseProvider:
                              error_details=f"Unknown identity profile: {self.identity!r} (expected 'passthrough').",
                              provider_name=self.provider_name)
 
+        # Static `reasoning_dialect:` validation — fail at construction
+        # (startup validation / reload veto), not on the first request.
+        # WHY the funnel re-reads the config dict instead of this attribute:
+        # the translation is keyed on the provider entry, and the funnel's
+        # defensive resolve (services/reasoning_dialect.py) must tolerate the
+        # mocked configs tests build; this check is what guarantees the real
+        # path never sees a typo as a silent `openai`.
+        dialect = config.get("reasoning_dialect")
+        if dialect is not None:
+            from ..services.reasoning_dialect import validate_reasoning_dialect
+            validate_reasoning_dialect(dialect, provider_name=self.provider_name)
+
         # Static `headers:` validation — fail at construction (startup
         # validation), not on the first request. Runs BEFORE the code-owned
         # Content-Type default below, so only operator-authored entries are

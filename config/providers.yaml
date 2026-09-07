@@ -4,10 +4,12 @@ providers:
     base_url: https://api.z.ai/api/coding/paas/v4
     api_key_env: ZAI_API_KEY
     identity: passthrough # forward client headers minus the denylist (core/header_policy.py); unset = plain gateway headers
+    reasoning_dialect: deepseek # z.ai speaks the thinking + reasoning_effort wire shape natively
   deepseek:
     type: openai # Совместим с OpenAI API
     base_url: https://api.deepseek.com/v1
     api_key_env: DEEPSEEK_API_KEY
+    reasoning_dialect: deepseek # native: thinking + reasoning_effort both stay on the wire
   kimi:
     type: openai
     base_url: https://api.moonshot.ai/v1
@@ -18,6 +20,7 @@ providers:
     base_url: https://openrouter.ai/api/v1
     api_key_env: OPENROUTER_API_KEY
     proxy: socks5://proxy.red:1331
+    reasoning_dialect: openrouter # re-nest effort to reasoning.effort / {enabled: false}
     headers:
       HTTP-Referer: "https://nnp.space"
       X-Title: "nnp.space"

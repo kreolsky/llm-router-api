@@ -436,8 +436,11 @@ class TestReasoningEffortDerived:
         listed = await svc.list_models(auth_ctx)
         listed_r = next(m for m in listed["data"] if m["id"] == "local/reasoner")
         assert listed_r["reasoning"]["effort_levels"] == cfg["allowed"]
-        assert listed_r["reasoning"]["default_effort"] == cfg["default"]
         assert listed_r["reasoning"]["supported"] is True
+        # no `default` configured -> nothing injected and nothing advertised:
+        # the client-side default is the harness's business, not the router's
+        assert "default" not in cfg
+        assert "default_effort" not in listed_r["reasoning"]
 
         # list and detail render from the same stored form — they cannot diverge
         detail = await svc.retrieve_model("local/reasoner", auth_ctx)
@@ -518,6 +521,93 @@ class TestReasoningEffortDerived:
         assert detail["reasoning"]["effort_levels"] == ["minimal", "full"]  # list replaced
         # deep merge: a derived key model_info does not mention survives
         assert detail["reasoning"]["default_effort"] == "low"
+
+
+# ===================================================================
+# capabilities — the flat /v1/capabilities map
+# ===================================================================
+
+class TestCapabilities:
+    """The flat per-model reasoning map: one derivation with /v1/models."""
+
+    @pytest.mark.asyncio
+    async def test_flat_map_shape(self):
+        """Policy models advertise levels; unknown models are supported=false
+        with an empty list — every visible model is present exactly once."""
+        models = {
+            "m": {"provider": "prov-a", "reasoning_effort": {"allowed": ["low", "high"],
+                                                             "param": "reasoning_effort"}},
+            "plain": {"provider": "prov-a"},
+            "hidden": {"provider": "prov-a", "is_hidden": True},
+        }
+        svc = _build_service(models=models, providers=SAMPLE_PROVIDERS)
+
+        result = await svc.capabilities(_make_auth_context(allowed_models=[]))
+
+        assert result == {
+            "m": {"supported": True, "effort_levels": ["low", "high"]},
+            "plain": {"supported": False, "effort_levels": []},
+        }
+
+    @pytest.mark.asyncio
+    async def test_restricted_user_sees_only_allowed(self):
+        models = {
+            "m": {"provider": "prov-a", "reasoning_effort": {"allowed": ["low"],
+                                                             "param": "reasoning_effort"}},
+            "other": {"provider": "prov-a"},
+        }
+        svc = _build_service(models=models, providers=SAMPLE_PROVIDERS)
+
+        result = await svc.capabilities(_make_auth_context(allowed_models=["other"]))
+
+        assert list(result) == ["other"]
+        assert result["other"] == {"supported": False, "effort_levels": []}
+
+    @pytest.mark.asyncio
+    async def test_matches_the_models_listing(self):
+        """One derivation: the map's supported/effort_levels equal what
+        /v1/models renders per model — the two cannot drift."""
+        with open("config/models.yaml") as f:
+            models = yaml.safe_load(f)["models"]
+        with open("config/providers.yaml") as f:
+            providers = yaml.safe_load(f)["providers"]
+        svc = _build_service(models=models, providers=providers)
+        auth_ctx = _make_auth_context(allowed_models=[])
+
+        caps = await svc.capabilities(auth_ctx)
+        listed = await svc.list_models(auth_ctx)
+
+        for entry in listed["data"]:
+            reasoning = entry.get("reasoning", {})
+            assert caps[entry["id"]] == {
+                "supported": bool(reasoning.get("supported")),
+                "effort_levels": list(reasoning.get("effort_levels") or []),
+            }
+        assert set(caps) == {m["id"] for m in listed["data"]}
+
+    @pytest.mark.asyncio
+    async def test_manual_reasoning_block_keeps_derived_levels(self):
+        """model_info.yaml's manual `reasoning` blocks (deepseek/flash+pro
+        carry {supported, default_enabled}) deep-merge OVER the derived block
+        without erasing the derived effort_levels."""
+        models = {
+            "m": {"provider": "prov-a", "reasoning_effort": {"allowed": ["low", "high", "max"],
+                                                             "param": "reasoning_effort"}},
+        }
+        model_info = {"m": {"reasoning": {"supported": True, "default_enabled": True}}}
+        svc = _build_service(models=models, providers=SAMPLE_PROVIDERS,
+                             model_info=model_info)
+
+        caps = await svc.capabilities(_make_auth_context(allowed_models=[]))
+        detail = await svc.retrieve_model("m", _make_auth_context(allowed_models=[]))
+
+        assert caps["m"] == {"supported": True, "effort_levels": ["low", "high", "max"]}
+        # the merge survival itself, asserted on the stored form the map reads:
+        # manual keys and derived keys coexist key-wise
+        assert detail["reasoning"] == {
+            "supported": True, "default_enabled": True,
+            "effort_levels": ["low", "high", "max"],
+        }
 
 
 # ===================================================================

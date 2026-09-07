@@ -135,6 +135,32 @@ class ModelService(BaseService):
                 models_list.append(self._build_model_response(model_id, **rendered))
         return {"object": "list", "data": models_list}
 
+    async def capabilities(self, auth_context: AuthContext) -> dict[str, dict[str, Any]]:
+        """Flat per-model reasoning map for the GET /v1/capabilities endpoint.
+
+        Reuses _resolve_stored_capabilities — the same derivation /v1/models
+        renders — so the two listings cannot drift (one derivation, no
+        re-typing of the policy). Shape per model:
+        ``{"supported": bool, "effort_levels": [...]}`` with an empty list
+        when nothing is advertised. Filtered exactly like list_models
+        (is_hidden, allowed_models).
+        """
+        allowed_models = auth_context.allowed_models
+        models_config = self.config_manager.get_config().get("models", {})
+
+        out: dict[str, dict[str, Any]] = {}
+        for model_id, model_data in models_config.items():
+            if model_data.get("is_hidden", False):
+                continue
+            if allowed_models and model_id not in allowed_models:
+                continue
+            reasoning = self._resolve_stored_capabilities(model_id).get("reasoning") or {}
+            out[model_id] = {
+                "supported": bool(reasoning.get("supported")),
+                "effort_levels": list(reasoning.get("effort_levels") or []),
+            }
+        return out
+
     async def retrieve_model(
         self,
         model_id: str,

@@ -24,7 +24,7 @@
 #     reasoning:
 #       supported: bool                     # auto-derived from upstream supported_parameters
 #       default_enabled: bool               # manual only — no upstream shape expresses it
-#       effort_levels: [low, medium, high]  # optional; derived from models.yaml reasoning_effort
+#       effort_levels: [low, high]          # optional; derived from models.yaml reasoning_effort
 #       default_effort: str                 # optional; derived from models.yaml reasoning_effort
 #     pricing:                             # numbers per-token; serialized to strings
 #       prompt: float

@@ -136,6 +136,7 @@ EXPECTED_ENDPOINT_NAMES = {
     "/v1/audio/transcriptions": "transcriptions",
     "/v1/models": "models",
     "/v1/models/{model_id:path}": "models",
+    "/v1/capabilities": "capabilities",
     "/tools/generate_key": "generate_key",
 }
 

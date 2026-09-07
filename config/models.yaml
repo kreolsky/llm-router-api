@@ -2,18 +2,21 @@ models:
   deepseek/flash:
     provider: deepseek
     provider_model_name: deepseek-v4-flash
-    options:
-      thinking:
-        type: enabled
+    reasoning_effort:
+      allowed: [low, high, max]       # values permitted to reach the upstream
+      param: reasoning_effort         # wire location: reasoning_effort | reasoning.effort
   deepseek/pro:
     provider: deepseek
     provider_model_name: deepseek-v4-pro
-    options:
-      thinking:
-        type: enabled
+    reasoning_effort:
+      allowed: [low, high, max]
+      param: reasoning_effort
   gemini/mini:
     provider: openrouter
     provider_model_name: google/gemini-3.5-flash-lite
+    reasoning_effort:
+      allowed: [low, high]            # OpenRouter's effort vocabulary below `max`
+      param: reasoning.effort
   local/chat:
     provider: orange
     provider_model_name: dummy
@@ -25,9 +28,8 @@ models:
     provider: orange
     provider_model_name: dummy
     reasoning_effort:
-      allowed: [low, medium, high]   # values permitted to reach the upstream
-      default: high                  # injected when the client sends none
-      param: reasoning_effort        # wire location: reasoning_effort | reasoning.effort
+      allowed: [low, high]            # values permitted to reach the upstream
+      param: reasoning_effort         # wire location: reasoning_effort | reasoning.effort
     options:
       chat_template_kwargs:
         reasoning_strength: high
@@ -35,6 +37,9 @@ models:
   kimi:
     provider: kimi
     provider_model_name: kimi-k2.7-code
+    reasoning_effort:
+      allowed: [low, high]
+      param: reasoning_effort
   embeddings/dummy:
     provider: embedding
     provider_model_name: dummy

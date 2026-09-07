@@ -167,6 +167,17 @@ async def list_models(
     return await app.state.model_service.list_models(auth_context)
 
 
+# ARCH: /v1/capabilities is the flat per-model reasoning map (one derivation
+# with /v1/models, no drift) — a separate endpoint so OpenAI-compat clients
+# parsing /v1/models never see an unexpected shape, while capability readers
+# (Lore, MCP) get the map without per-model detail round-trips.
+@app.get("/v1/capabilities", name="capabilities")
+async def capabilities(
+    auth_context: AuthContext = Depends(check_endpoint_access("/v1/capabilities"))
+):
+    return await app.state.model_service.capabilities(auth_context)
+
+
 # ARCH: the endpoint string "/v1/models/{model_id:path}" differs from "/v1/models" —
 # this is what allows granting access to the model list without access to a
 # specific model's detail endpoint

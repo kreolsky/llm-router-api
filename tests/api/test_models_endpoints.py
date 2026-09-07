@@ -582,6 +582,82 @@ class TestRestrictedUserModelAccess:
         assert response.status_code == 403
 
 
+class TestCapabilitiesEndpoint:
+    """GET /v1/capabilities — the flat per-model reasoning map."""
+
+    @pytest.mark.asyncio
+    async def test_full_access_gets_flat_map(
+        self, base_url: str, api_keys: dict, http_client: httpx.AsyncClient
+    ):
+        """/v1/capabilities returns {model: {supported, effort_levels}} for every
+        visible model; hidden models never appear."""
+        response = await http_client.get(
+            f"{base_url}/v1/capabilities",
+            headers={"Authorization": f"Bearer {api_keys['full_access']}"}
+        )
+        assert response.status_code == 200
+        caps = response.json()
+
+        assert isinstance(caps, dict)
+        assert "embeddings/dummy" not in caps
+        assert "stt/dummy" not in caps
+
+        # the map mirrors models.yaml: local/reasoner advertises its allowed list
+        assert caps["local/reasoner"]["supported"] is True
+        assert caps["local/reasoner"]["effort_levels"] == ["low", "high"]
+        # a model with no reasoning data is supported=false, never absent
+        assert caps["local/chat"] == {"supported": False, "effort_levels": []}
+
+    @pytest.mark.asyncio
+    async def test_map_matches_the_models_listing(
+        self, base_url: str, api_keys: dict, http_client: httpx.AsyncClient
+    ):
+        """One derivation: every /v1/models entry's reasoning block equals the
+        map's row — the listings cannot drift."""
+        headers = {"Authorization": f"Bearer {api_keys['full_access']}"}
+        caps_resp = await http_client.get(f"{base_url}/v1/capabilities", headers=headers)
+        models_resp = await http_client.get(f"{base_url}/v1/models", headers=headers)
+        assert caps_resp.status_code == 200 and models_resp.status_code == 200
+
+        caps = caps_resp.json()
+        for entry in models_resp.json()["data"]:
+            reasoning = entry.get("reasoning", {})
+            assert caps[entry["id"]] == {
+                "supported": bool(reasoning.get("supported")),
+                "effort_levels": list(reasoning.get("effort_levels") or []),
+            }
+        assert set(caps) == {m["id"] for m in models_resp.json()["data"]}
+
+    @pytest.mark.asyncio
+    async def test_limited_user_sees_only_allowed(
+        self, base_url: str, api_keys: dict, http_client: httpx.AsyncClient
+    ):
+        """allowed_models filters the map exactly like /v1/models."""
+        response = await http_client.get(
+            f"{base_url}/v1/capabilities",
+            headers={"Authorization": f"Bearer {api_keys['limited']}"}
+        )
+        assert response.status_code == 200
+        assert response.json() == {"local/chat": {"supported": False, "effort_levels": []}}
+
+    @pytest.mark.asyncio
+    async def test_endpoint_not_in_granted_endpoints_is_403(
+        self, base_url: str, api_keys: dict, http_client: httpx.AsyncClient
+    ):
+        """The transctiber key grants /v1/models but not /v1/capabilities —
+        per-key endpoint access applies to the new endpoint like any other."""
+        response = await http_client.get(
+            f"{base_url}/v1/capabilities",
+            headers={"Authorization": f"Bearer {api_keys['transctiber']}"}
+        )
+        assert response.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_no_auth_is_401(self, base_url: str, http_client: httpx.AsyncClient):
+        response = await http_client.get(f"{base_url}/v1/capabilities")
+        assert response.status_code == 401
+
+
 # Helper function for response validation
 def assert_valid_response_structure(response_data: dict, required_fields: list):
     """Assert that response contains all required fields."""

@@ -27,6 +27,7 @@ tests/
     ├── test_model_capabilities.py
     ├── test_model_service.py
     ├── test_provider_registry.py
+    ├── test_reasoning_dialect.py
     ├── test_startup_validation.py
     ├── test_stat_api_params.py
     ├── test_stream_processor.py
@@ -58,8 +59,8 @@ python -m venv .venv
 | File | What it covers |
 |---|---|
 | `test_auth.py` | `get_api_key` via raw ASGI (non-ASCII bearer → 401 envelope, missing/invalid key), `check_endpoint_access` (empty/unset list unrestricted, mismatch 403 + user_id logged) |
-| `test_base_provider.py` | `retry_on_rate_limit` (backoff, 429 detection, config resolution), `__init__` validation, identity/static-headers fail-fast, `_get_timeout`/`_create_timeout`, concurrency semaphore + queue 503, graceful drain, late-acquisition fail-fast, header-merge parity, defaults drift tripwire, multipart retry resends audio |
-| `test_base_service.py` | `_validate_and_get_config` (access check before existence — 403 before 404), model/provider resolution, `_prepare_dispatch`, identity headers |
+| `test_base_provider.py` | `retry_on_rate_limit` (backoff, 429 detection, config resolution), `__init__` validation, identity/static-headers/reasoning-dialect fail-fast, `_get_timeout`/`_create_timeout`, concurrency semaphore + queue 503, graceful drain, late-acquisition fail-fast, header-merge parity, defaults drift tripwire, multipart retry resends audio |
+| `test_base_service.py` | `_validate_and_get_config` (access check before existence — 403 before 404), model/provider resolution, `_prepare_dispatch` (incl. the reasoning-dialect translation wiring, gate-before-translate), identity headers |
 | `test_chat_service.py` | 400 on invalid UTF-8/malformed JSON body; chat happy paths (stream + non-stream) with a stub provider |
 | `test_config_manager.py` | YAML loading (success, missing file, invalid YAML), hot-reload with callbacks, property getters with env var defaults |
 | `test_context.py` | `RequestContext` dataclass (`with_project_name`, `user_id`, accessor fallbacks) |
@@ -68,8 +69,9 @@ python -m venv .venv
 | `test_logging_config.py` | logging handler wiring |
 | `test_middleware.py` | Request ID injection, `X-Process-Time` header, request/response logging, POST body debug logging |
 | `test_model_capabilities.py` | provider model normalization, capability merge (manual layer wins), rendering, cache load/persist |
-| `test_model_service.py` | `/v1/models` listing/retrieval, hidden models, per-key access filtering |
+| `test_model_service.py` | `/v1/models` listing/retrieval, hidden models, per-key access filtering, the flat `/v1/capabilities` map (one derivation with the listing, model_info merge survival) |
 | `test_provider_registry.py` | provider cache keyed by name, atomic rebuild, failed rebuild keeps old cache, background pool close |
+| `test_reasoning_dialect.py` | per-dialect funnel translation: openai drops `thinking`, deepseek identity, openrouter re-nests effort/`{enabled: false}` (title-shaped passes), vocabulary map `max→high`, malformed fields left in place |
 | `test_startup_validation.py` | eager provider validation collects all failures and refuses to start |
 | `test_stat_api_params.py` | `/stat/api` `days` query parameter contract |
 | `test_stream_processor.py` | Transparent pass-through, reasoning→reasoning_content remap, usage capture, per-stream usage isolation, `[DONE]` sentinel, mid-stream error frame, `open_provider_stream` priming |
@@ -85,7 +87,7 @@ python -m venv .venv
 | File | What it covers |
 |---|---|
 | `test_connectivity.py` | Health check, response time, concurrent requests, error handling for invalid endpoints |
-| `test_models_endpoints.py` | `/v1/models` listing, `/v1/models/{id}` retrieval, hidden models, access control per API key |
+| `test_models_endpoints.py` | `/v1/models` listing, `/v1/models/{id}` retrieval, hidden models, access control per API key, `/v1/capabilities` flat map (auth parity, matches the listing) |
 | `test_chat_completions.py` | Non-streaming and streaming chat, unicode/emoji, long messages, multiple messages, auth, concurrent requests |
 | `test_embeddings.py` | Embedding creation, different encoding formats, multiple inputs, auth |
 | `test_transcriptions.py` | Audio transcription with/without model, response formats, concurrent requests |

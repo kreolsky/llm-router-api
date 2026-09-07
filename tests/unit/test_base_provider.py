@@ -852,6 +852,32 @@ class TestIdentityProfileInit:
         assert "User-Agent" not in provider.headers
 
 
+class TestReasoningDialectInit:
+    """reasoning_dialect config key in BaseProvider.__init__ — fail at
+    construction so a typo never reaches the funnel as a silent `openai`."""
+
+    @pytest.mark.parametrize("dialect", ["openai", "deepseek", "openrouter"])
+    def test_known_dialects_construct(self, dialect):
+        config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
+                  "reasoning_dialect": dialect}
+        with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
+            provider = ProviderStub(config, Settings())
+        assert provider.base_url == config["base_url"]
+
+    def test_unknown_dialect_fails_fast(self):
+        config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
+                  "reasoning_dialect": "openrouter-compatible"}
+        with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
+            with pytest.raises(HTTPException) as exc_info:
+                ProviderStub(config, Settings())
+        assert exc_info.value.status_code == 500
+        assert "reasoning_dialect" in str(exc_info.value.detail)
+
+    def test_absent_key_keeps_current_behavior(self):
+        provider = _build_provider()
+        assert provider.identity is None  # construction unchanged without the key
+
+
 class TestStaticHeadersValidation:
     """Static `headers:` from providers.yaml fails fast at construction."""
 

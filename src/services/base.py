@@ -18,6 +18,7 @@ from ..core.logging import logger
 from ..core.usage_db import RequestStats, request_stats
 from ..providers import get_provider_instance
 from ..providers.base import BaseProvider
+from .reasoning_dialect import translate_reasoning_fields
 from .reasoning_effort import apply_reasoning_effort
 
 
@@ -48,9 +49,9 @@ class PreparedDispatch(ResolvedTarget):
     """Result of the shared service preamble (BaseService._prepare_dispatch).
 
     The JSON wrapper around ResolvedTarget: adds the parsed body and the
-    requested model, and applies the reasoning-effort policy (a body-shaped
-    concern that must NOT ride the shared resolver — multipart endpoints
-    carry no such policy).
+    requested model, applies the reasoning-effort policy, then the per-provider
+    dialect translation (both body-shaped concerns that must NOT ride the
+    shared resolver — multipart endpoints carry neither).
     """
     request_body: dict[str, Any]
     requested_model: str | None
@@ -230,6 +231,11 @@ class BaseService:
 
         # ARCH: the effort policy rides the one dispatch funnel (services/reasoning_effort.py).
         request_body = apply_reasoning_effort(request_body, target.model_config, **target.error_ctx)
+
+        # ARCH: the dialect translation rides the same funnel
+        # (services/reasoning_dialect.py), AFTER the policy — the value the
+        # gate ruled legal is what gets re-nested for the upstream's dialect.
+        request_body = translate_reasoning_fields(request_body, target.provider_config)
 
         # Fields are DERIVED from ResolvedTarget, not re-listed: a field added
         # to the resolver reaches the JSON wrapper without a second edit.
