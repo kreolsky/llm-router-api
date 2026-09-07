@@ -114,25 +114,33 @@ class ModelService(BaseService):
             "capabilities_fetched_at": meta.get("fetched_at"),
         }
 
+    def _iter_visible_models(self, allowed_models: Any):
+        """Yield ``(model_id, model_data)`` for every model the key may see.
+
+        ONE visibility filter for /v1/models and /v1/capabilities:
+        ``is_hidden`` models are dropped and ``allowed_models`` applies
+        (empty/None = unrestricted) — the two listings cannot drift because
+        neither carries its own copy of the rule.
+        """
+        models_config = self.config_manager.get_config().get("models", {})
+        for model_id, model_data in models_config.items():
+            if model_data.get("is_hidden", False):
+                continue
+            if allowed_models and model_id not in allowed_models:
+                continue
+            yield model_id, model_data
+
     async def list_models(self, auth_context: AuthContext) -> dict[str, Any]:
         """Return OpenAI-compatible model list filtered by allowed_models and is_hidden.
 
         Capability fields are rendered identically to retrieve_model, so the
         list and the detail endpoint never diverge.
         """
-        allowed_models = auth_context.allowed_models
-        current_config = self.config_manager.get_config()
-        models_config = current_config.get("models", {})
-
         models_list = []
-        for model_id, model_data in models_config.items():
-            if model_data.get("is_hidden", False):
-                continue
-
-            if not allowed_models or model_id in allowed_models:
-                stored = self._resolve_stored_capabilities(model_id)
-                rendered = render_capabilities(stored)
-                models_list.append(self._build_model_response(model_id, **rendered))
+        for model_id, _model_data in self._iter_visible_models(auth_context.allowed_models):
+            stored = self._resolve_stored_capabilities(model_id)
+            rendered = render_capabilities(stored)
+            models_list.append(self._build_model_response(model_id, **rendered))
         return {"object": "list", "data": models_list}
 
     async def capabilities(self, auth_context: AuthContext) -> dict[str, dict[str, Any]]:
@@ -142,18 +150,11 @@ class ModelService(BaseService):
         renders — so the two listings cannot drift (one derivation, no
         re-typing of the policy). Shape per model:
         ``{"supported": bool, "effort_levels": [...]}`` with an empty list
-        when nothing is advertised. Filtered exactly like list_models
-        (is_hidden, allowed_models).
+        when nothing is advertised. Filtered by the same visibility iterator
+        as list_models (_iter_visible_models).
         """
-        allowed_models = auth_context.allowed_models
-        models_config = self.config_manager.get_config().get("models", {})
-
         out: dict[str, dict[str, Any]] = {}
-        for model_id, model_data in models_config.items():
-            if model_data.get("is_hidden", False):
-                continue
-            if allowed_models and model_id not in allowed_models:
-                continue
+        for model_id, _model_data in self._iter_visible_models(auth_context.allowed_models):
             reasoning = self._resolve_stored_capabilities(model_id).get("reasoning") or {}
             out[model_id] = {
                 "supported": bool(reasoning.get("supported")),

@@ -12,6 +12,7 @@ from fastapi import HTTPException
 from src.core.config_manager import Settings
 from src.providers.base import BaseProvider
 from src.providers.openai import OpenAICompatibleProvider
+from src.services.reasoning_dialect import DEFAULT_REASONING_DIALECT, resolve_dialect
 
 # ---------------------------------------------------------------------------
 # Concrete subclass so we can instantiate the (otherwise abstract-ish) base
@@ -874,8 +875,13 @@ class TestReasoningDialectInit:
         assert "reasoning_dialect" in str(exc_info.value.detail)
 
     def test_absent_key_keeps_current_behavior(self):
-        provider = _build_provider()
-        assert provider.identity is None  # construction unchanged without the key
+        """No key: no validation fires, and the funnel's defensive read
+        resolves the same config to the default dialect."""
+        config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY"}
+        with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
+            provider = ProviderStub(config, Settings())
+        assert provider.base_url == config["base_url"]
+        assert resolve_dialect(config) == DEFAULT_REASONING_DIALECT
 
 
 class TestStaticHeadersValidation:

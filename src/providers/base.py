@@ -13,6 +13,7 @@ from ..core.config_manager import Settings
 from ..core.error_handling import ErrorType, create_error, create_provider_http_error
 from ..core.header_policy import FORBIDDEN_STATIC_HEADERS
 from ..core.logging import logger
+from ..services.reasoning_dialect import validate_reasoning_dialect
 from ..utils.deep_merge import deep_merge
 from ..utils.mask import mask_headers
 from .pool import ProviderPool
@@ -89,7 +90,6 @@ class BaseProvider:
         # path never sees a typo as a silent `openai`.
         dialect = config.get("reasoning_dialect")
         if dialect is not None:
-            from ..services.reasoning_dialect import validate_reasoning_dialect
             validate_reasoning_dialect(dialect, provider_name=self.provider_name)
 
         # Static `headers:` validation — fail at construction (startup

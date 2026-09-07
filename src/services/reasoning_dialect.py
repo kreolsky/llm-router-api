@@ -108,6 +108,11 @@ def _translate_openrouter(request_body: dict[str, Any]) -> dict[str, Any]:
 
     if thinking_type == "disabled" or effort == "off":
         # Disabled wins: drop any effort declared in either location.
+        # WHY `off` is handled here when the effort policy would 400 it:
+        # policy-gated models never reach this line with `off` (the gate
+        # runs first); this covers policy-less openrouter models, which
+        # deploys do carry (gray's glm/flash) — for them `off` must still
+        # translate to a disable, not re-nest verbatim.
         reasoning.pop("effort", None)
         reasoning["enabled"] = False
     elif effort_is_str:
