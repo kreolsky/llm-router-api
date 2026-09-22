@@ -7,7 +7,6 @@
       "Bash(git status:*)",
       "Bash(git commit:*)",
       "Bash(python -m pytest tests/ -k \"\\(deepseek_chat or gemini_mini\\)\" -v)",
-      "Bash(python -m pytest tests/api/test_tools_generate_key.py -v)",
       "Bash(find . -name *.py -type f -exec grep -l \"error_detail\\\\|error.*detail\" {})",
       "Bash(2)",
       "WebFetch(domain:openrouter.ai)",
