@@ -14,7 +14,6 @@ would silently lose exactly the 500s and aborted streams the stats exist to
 record.
 """
 # SYSTEM: request-logging — pure-ASGI request id + Incoming/Outgoing bookends
-import json
 import os
 import time
 
@@ -82,32 +81,6 @@ class RequestLoggerMiddleware:
             user_id="unknown",
             url=url
         )
-
-        # Debug body logging: intercept receive to log body without consuming it
-        if method in ("POST", "PUT", "PATCH") and logger.is_debug_enabled():
-            body_chunks = []
-            original_receive = receive
-
-            async def buffered_receive():
-                message = await original_receive()
-                if message.get("type") == "http.request":
-                    body_chunks.append(message.get("body", b""))
-                    if not message.get("more_body", False):
-                        try:
-                            raw_body = b"".join(body_chunks)
-                            request_body = json.loads(raw_body)
-                            logger.debug_data(
-                                title="Request JSON",
-                                data=request_body,
-                                request_id=request_id,
-                                component="middleware",
-                                data_flow="incoming"
-                            )
-                        except Exception:
-                            logger.debug("Could not parse request JSON", request_id=request_id)
-                return message
-
-            receive = buffered_receive
 
         status_code = None
 
