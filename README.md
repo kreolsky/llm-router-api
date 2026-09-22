@@ -10,7 +10,6 @@ OpenAI-compatible API gateway for multiple LLM providers. One endpoint, multiple
 - `POST /v1/chat/completions` — chat completion (streaming + non-streaming)
 - `POST /v1/embeddings` — text embeddings
 - `POST /v1/audio/transcriptions` — speech-to-text (model optional, fallback to `DEFAULT_STT_MODEL`)
-- `GET /tools/generate_key` — generate an API key in `nnp-v1-<hex>` format
 - `GET /stat/` — token usage dashboard (HTML); backed by `/stat/api/users`, `/stat/api/models`, `/stat/api/usage`
 
 ## Quick Start
