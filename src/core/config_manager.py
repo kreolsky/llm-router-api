@@ -240,14 +240,20 @@ class ConfigManager:
         return self.config
 
     @staticmethod
+    def _missing_sections(config: dict[str, Any]) -> list[str]:
+        """Names of the required sections that are absent or empty."""
+        return [s for s in ("providers", "models", "user_keys") if not config.get(s)]
+
+    @staticmethod
     def _assert_config_complete(config: dict[str, Any]) -> None:
         """Fail-fast: every config section must be present and non-empty."""
-        for section in ("providers", "models", "user_keys"):
-            if not config.get(section):
-                raise RuntimeError(
-                    f"Configuration section '{section}' is missing or empty. "
-                    f"Refusing to start."
-                )
+        missing = ConfigManager._missing_sections(config)
+        if missing:
+            names = ", ".join(f"'{s}'" for s in missing)
+            raise RuntimeError(
+                f"Configuration section(s) {names} missing or empty. "
+                f"Refusing to start."
+            )
     
     def _read_env_settings(self) -> Settings:
         """Resolve every Settings field from its upper-cased env var (see module header)."""
@@ -311,7 +317,7 @@ class ConfigManager:
             }
         })
         new_config = self._load_config(fail_on_error=False)
-        if new_config.get('providers') and new_config.get('models') and new_config.get('user_keys'):
+        if not self._missing_sections(new_config):
             for name, cb in self._on_reload_callbacks:
                 try:
                     await cb(new_config)
