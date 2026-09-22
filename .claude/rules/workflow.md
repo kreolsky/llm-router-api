@@ -16,16 +16,28 @@ entanglement decides how much PROOF. **Neither counts files.**
 
 | Size | Criteria — commits | Branch | Phases |
 |------|--------------------|--------|--------|
-| **S** Quick Fix | ONE commit, low entanglement | no — straight to `dev` | 0 → 3 → 5 |
-| **M** Feature | ONE commit, medium or high entanglement — it moves a contract | no — straight to `dev` | 0 → 3 → 4 → 5 |
+| **S** Quick Fix | ONE commit, low entanglement | no — straight to `dev` | 0 → plan → 3 → 5 |
+| **M** Feature | ONE commit, medium or high entanglement — it moves a contract | no — straight to `dev` | 0 → plan → 3 → 4 → 5 |
 | **L** Epic | the plan's `## Order` carries 2+ commits | yes, from `dev` | 0 → 1 → 2 → 3 → 4 → 5 |
 
 | Entanglement | Tests | Model |
 |--------------|-------|-------|
-| **low** (e≤2) | what this diff can break **+ adjacent**, `--tb=line` | Haiku |
-| **medium** (3–6) | full `tests/unit/` + the `tests/api/` files the diff touches | Sonnet |
-| **high** (≥7) | full `tests/` **+ a repeat run** (races, stream ordering, pool lifecycle) | **Opus** |
-| any, but **L** | the above, plus a green full suite before the merge | per e |
+| **low** (e≤2) → S | what this diff can break **+ adjacent**, `--tb=line` | Haiku |
+| **medium** (3–6) → M | full `tests/unit/` + the `tests/api/` files the diff touches | Sonnet |
+| **high** (≥7) → M | full `tests/` **+ a repeat run** (races, stream ordering, pool lifecycle) | **Opus** |
+| any, but **L** | the above ONCE, over `git diff dev...HEAD`, before the merge — not per commit | per e |
+
+**Inside an L branch a commit is a step, not a release.** The branch owes the proof ONCE,
+at its last step, over `git diff dev...HEAD`: the entanglement-table run, `/review`, the
+live drive. An intermediate commit MAY leave the feature broken — a contract moved without
+its readers, a step's tests still red — as long as `## Progress` names what is broken and
+which step catches up; it owes only `pre-commit-gates.sh` and the targeted tests of its own
+step. No full suite, no `/review`, no drive. Why: nothing runs a feature branch but this
+machine, so keeping it shippable between commits insured a consumer that does not exist.
+
+Entanglement is computed from production `+` lines only, so it cannot be inflated by the
+tests, plans and docs this workflow itself mandates. Scope must still enumerate the
+affected file paths.
 
 **Size is not file count.** It is answered by two questions, in this order:
 
@@ -51,6 +63,8 @@ that was properly tested. Optional tooling: `.claude/scripts/size-estimate.py` (
   new endpoint" proposal MUST cite the grep that proves it does not already exist.
   Building ON an existing mechanism → read its `SYSTEM:` entry file; do not infer its
   contract from one signature or one regex (`coding-constraints.md`).
+- **Plan — after Scope, before any edit.** M/L and hot-path S get the plan FILE; every
+  other S gets the three-line chat form. Both are under `## Plans` below.
 - **Phase 1 — Integration checklist** (L only). Condensed form is fine: one line
   `affected systems: ___` plus skip reasons. Full form in
   `.claude/rules-scoped/integration.md` when 3+ systems are touched.
@@ -67,7 +81,8 @@ that was properly tested. Optional tooling: `.claude/scripts/size-estimate.py` (
   markers (`documentation.md`). If you add/rename/remove/move a `SYSTEM:` marker,
   regenerate `SYSTEMS.md` (`python3 .claude/scripts/systems-index.py --write`) and commit
   it — `pre-commit-gates.sh` blocks on drift.
-- **Phase 4 — Review** (M/L; S only when a Review-gate trigger fires). Auto-invoke
+- **Phase 4 — Review** (M; L once at its last step, over the branch diff — see *a commit is
+  a step, not a release*; S only when a Review-gate trigger fires). Auto-invoke
   `/review` — do not ask. Present findings, wait for approval.
   **Acceptance is reality-facing:** for any change with a runtime surface, "done"
   additionally requires driving the affected flow live — a real request through the running
@@ -82,6 +97,10 @@ that was properly tested. Optional tooling: `.claude/scripts/size-estimate.py` (
   Select test files by "what could this diff break", never by "what mentions the noun".
 - **Phase 5 — Commit & Retro.** Commit only when the user asks. `/retro` runs only when an
   Auto-lessons trigger fired this session — otherwise skip it.
+  **The plan file ships in the FIRST commit of its implementation, at every size** —
+  `## Order` lists code, not the `git add` list, so the plan falls out of the staging set
+  unless it is added deliberately (`git-strategy.md`). A foreign plan is excluded as not
+  yours, not as unlisted.
 
 ## TDD cycle
 
@@ -115,24 +134,14 @@ named by slug alone cannot be placed in time. Plans untouched for 90 days are sw
 `plans/archive/YYYY-MM/` on the next approval. There is no "active plan" pointer: the plan
 to implement is the one the user names.
 
-**A plan has ONE shape, and it is small** — enforced by `plan-shape-gate.py` (the Write|Edit
-hook reports it, `/implement` refuses an off-shape plan), not by remembering this section.
-Exactly these sections, under exactly these names, max 120 lines:
-
-```
-# <title>
-## Decisions   — why the chosen thing is shaped this way
-## Risks
-## Order       — numbered steps, each one a commit (2+ steps ⇒ L ⇒ branch; see sizing)
-## Not doing   — consciously ruled out; comes back only as a fresh task
-## Validation  — how Phase-4 acceptance is driven live; omit only for a no-runtime-surface diff
-## Progress    — only for multi-session work; the resume point
-```
-
-Write to 120. The gate only fires at 150, and that 30-line gap is slack, not budget: a plan
-that lands a little over gets SPLIT on judgement, never shaved line-by-line to pass the
-check. Past 150 the task is too big to plan. No decision IDs (`D7`, `F0`): needing a
-cross-reference registry means the document stopped being an instruction.
+**A plan has ONE shape, and it is small.** The shape is NOT carried here —
+`plan-shape-gate.py --template` prints it, and it is enforced at the two moments a reshape
+is still free: the Write|Edit hook and `/implement`'s plan load, which refuses an off-shape
+plan. Write to 120 lines. The gate only fires at 150, and that 30-line gap is slack, not
+budget: a plan that lands a little over gets SPLIT on judgement, never shaved line-by-line
+to pass the check. Past 150 the task is too big to plan. Why the shape left this file: a
+section list copied into prose is a second source of truth, and it drifts from the gate
+that actually refuses the plan.
 
 **Understanding changed ⇒ delete the file and write it again; never append.** The previous
 version is kept for you in `plans/superseded/` by `plan-snapshot.py`, so a later post-mortem
@@ -151,9 +160,19 @@ or a research appendix. The executor cannot tell a live constraint from a dead o
 discarded version is in git history, which is where history belongs. **Tests are the plan** —
 on a known surface a test list replaces prose entirely.
 
-**No plan for a one-file prose/config edit.** When the expected diff is wording in a single
-doc, prompt or YAML file and no code changes, make the edit and drive it — do not write a
-plan. The plan is the surface an invented requirement lands on.
+**A plan FILE is owed by M and L, and by any S touching a hot path** (the Review-gate list
+below) — and the request saying otherwise ("без плана", "just do it", "правь сразу") skips
+it at any size. Every OTHER S still states its plan, in THREE LINES in the chat, before the
+first edit: intent · the files it will touch · done-when. That is the whole form; it needs
+no file, and it is what keeps an S executable by someone who was not in the conversation.
+Why the narrowing: a plan file is worth a task that moves a contract, not a wording edit in
+one YAML — and the plan is the surface an invented requirement lands on.
+
+**A plan is written FOR A COLD SESSION, and nothing in it may resolve through this chat.**
+The executor is normally a different agent with an empty context, so "as agreed above",
+"the same as last time" or a bare pronoun for a file is a dead end it can only guess past.
+Entry paths that resolve, current behaviour at its line, the exact commands, what "done"
+looks like — `plan-shape-gate.py --template` prints what the file must carry.
 
 ## Review gate
 
@@ -165,7 +184,8 @@ Self-initiate `/review` — never wait to be asked, never auto-fix. Trigger when
   `src/core/auth.py`, `src/core/config_manager.py`, `src/providers/base.py`,
   `src/services/chat_service/stream_processor.py`, `src/core/usage_db/`,
   `src/api/middleware.py`, `config/user_keys.yaml`.
-- User says "done", "ready", "push", "задеплой", or asks for a commit.
+- User says "done", "ready", "push", "задеплой", or asks for a commit — on an L branch,
+  only for the LAST commit of `## Order`; intermediate commits are not reviewed.
 
 **No file-count trigger.** Size decides depth; the hot-path list decides danger.
 
@@ -219,6 +239,10 @@ contradicting the user's latest stated rule (stop and ask which is wrong).
   File:        .claude/rules/workflow.md — new rule.
   ```
 
+- **A rebase invalidates acceptance evidence.** A rebase that changed code (not a clean
+  fast-forward) voids the Phase-4 evidence gathered before it — re-drive the affected flow
+  before calling the work done. Why: the drive proved the old parent, and nobody re-reads a
+  `curl` transcript to notice which commit it was taken against.
 - **Credentials are IN THE PROJECT — read them, never ask.** API keys, the stat key and the
   rest live in `.env` and `config/user_keys.yaml`. Stopping the task to request one of these
   is a hard-rule violation: grep the config first. Only a secret genuinely absent from all
@@ -252,6 +276,10 @@ contradicting the user's latest stated rule (stop and ask which is wrong).
      Reproduce with `curl -N` before theorizing about what a downstream harness "sees".
   8. **Fix #2 in the same area normalizes the class — it does not add another `if`.** If
      the breaking inputs have more than two members, the fix is a projection over them.
+
+  A rule that fires at a moment of judgement is always-loaded, or mechanized, or it does
+  not exist. Why: a rule that has to be remembered at exactly the wrong moment is a rule
+  nobody obeys — write it into this file, or into a gate, or drop it.
 - **Subagent dispatches** (Agent tool) follow `subagent-contract.md`.
 - **Cheap gates run BEFORE the commit**: `.claude/scripts/pre-commit-gates.sh`. Run it
   **UNPIPED** — `gates | tail -2 && git commit` reads the pipeline's LAST stage, so `tail`

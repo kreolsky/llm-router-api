@@ -54,6 +54,14 @@ formatting), so the diff is still reviewable. Two things this does NOT license: 
 `INVARIANT:` text (strip its attribution, never its rule), and promoting a marker between
 classes — only the local-`ARCH:` → `WHY:` demotion is in scope.
 
+## A contract that MOVES carries its existing words
+
+Re-deriving a rationale for a settled question authors a second, competing contract, and the
+derivation is not idempotent — it comes back different every time. Before writing a `WHY:`
+or an `INVARIANT:` for behaviour you are RELOCATING, read the one being replaced
+(`git show <commit>^:<file>` when the line was already deleted) and move it verbatim; match
+the convention of the neighbouring lines rather than inventing one.
+
 ## Single home for contracts
 
 A contract lives in ONE place — the in-code marker on the load-bearing line. `CLAUDE.md`,

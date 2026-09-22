@@ -31,6 +31,11 @@ this a gate.
 Usage:
   plan-shape-gate.py              # check plans changed vs HEAD (+ untracked)
   plan-shape-gate.py PATH ...     # check the named files (used by save-plan.py)
+  plan-shape-gate.py --template   # print the shape a plan must have
+
+`--template` is why workflow.md no longer carries the section list: a shape copied
+into prose is a second source of truth, and it drifts from the gate that refuses the
+plan. The template is RENDERED from the same constants the check reads.
 """
 
 from __future__ import annotations
@@ -54,6 +59,30 @@ REQUIRED = ("Decisions", "Risks", "Order", "Not doing")
 OPTIONAL = ("Validation", "Progress")
 ALLOWED = REQUIRED + OPTIONAL
 
+# What each allowed section is FOR. Keyed by the same names the whitelist checks, so
+# `--template` cannot drift from the check: a section added to ALLOWED without a line
+# here fails the self-check in render_template().
+SECTION_INTENT = {
+    "Decisions": "why the chosen thing is shaped this way; every decision touching "
+                 "existing behaviour carries a `file:line` that resolves",
+    "Risks": "what this can break, and the signal that it did",
+    "Order": "numbered steps, each one a commit (2+ steps => L => branch; see sizing)",
+    "Not doing": "consciously ruled out; comes back only as a fresh task",
+    "Validation": "how Phase-4 acceptance is DRIVEN live (the exact commands and the "
+                  "expected observation); omit only for a no-runtime-surface diff",
+    "Progress": "only for multi-session work; the resume point",
+}
+
+# Phrases that resolve through the chat that produced the plan. The executor is normally
+# a different agent with an empty context, so each of these is a dead end it can only
+# guess past. Reported, not failed: judgement stays human, the tell does not.
+COLD_SESSION_RE = re.compile(
+    r"\b(as (?:agreed|discussed|described) above|as we discussed|same as (?:last time|before)"
+    r"|the (?:above|aforementioned) (?:file|function|approach)|per our (?:chat|discussion)"
+    r"|you already|like I said|as mentioned earlier)\b",
+    re.I,
+)
+
 H2_RE = re.compile(r"^##\s+(.+?)\s*$", re.M)
 # A citation into the tree: `backend/x.py:120`, `pi-driver/src/server.ts:731`, `a.py:12-34`.
 CITE_RE = re.compile(r"`?([\w./\-]+\.(?:py|md|sh|json|yml|yaml)):(\d+)(?:-(\d+))?`?")
@@ -68,6 +97,41 @@ DECISION_ID_RE = re.compile(r"^\s*(?:[-*]\s*)?\*{0,2}([DFR]\d{1,2})\b")
 # the request's language does not carry into the artifact, because the plan is read
 # by an executor and by the tree's own markers, both of which are English.
 CYRILLIC_RE = re.compile(r"[\u0400-\u04FF]")
+
+
+def render_template() -> str:
+    """The plan shape, rendered from the constants the check itself reads."""
+    missing = [s for s in ALLOWED if s not in SECTION_INTENT]
+    if missing:  # a section joined ALLOWED without saying what it is for
+        raise SystemExit(f"SECTION_INTENT is missing: {', '.join(missing)}")
+
+    width = max(len(s) for s in ALLOWED)
+    lines = [
+        "# <title>",
+        "",
+        *(
+            f"## {name.ljust(width)}   # {SECTION_INTENT[name]}"
+            + ("" if name in REQUIRED else "   [optional]")
+            for name in ALLOWED
+        ),
+    ]
+    return "\n".join(
+        [
+            f"Plan shape — exactly these sections, max {MAX_LINES} lines "
+            f"(write to 120; the gap is slack, not budget).",
+            "",
+            *lines,
+            "",
+            "Rules the gate also enforces:",
+            "  - filename `<epoch-ms>-<slug>.md` (save-plan.py writes it)",
+            "  - English only — every heading and body line, whatever the request's language",
+            "  - no decision IDs (D7, F0, R3): needing a registry means it stopped being "
+            "an instruction",
+            "  - written for a COLD session: nothing may resolve through the chat that "
+            "produced it",
+            "  - understanding changed => REWRITE the file, never append",
+        ]
+    )
 
 
 def changed_plans() -> list[Path]:
@@ -173,6 +237,18 @@ def check(path: Path) -> list[str]:
 
     problems += check_citations(text)
 
+    chat_refs = [
+        f"{n}: {m.group(0)}"
+        for n, line in enumerate(lines, 1)
+        if (m := COLD_SESSION_RE.search(line))
+    ]
+    if chat_refs:
+        problems.append(
+            f"resolves through this chat on {len(chat_refs)} line(s) — the executor is a "
+            f"cold session and can only guess past it; name the file, the line and the "
+            f"command instead (first: {chat_refs[0]})"
+        )
+
     seen_ids = sorted(
         {m.group(1) for line in lines if (m := DECISION_ID_RE.match(line))}
     )
@@ -185,6 +261,10 @@ def check(path: Path) -> list[str]:
 
 
 def main() -> int:
+    if "--template" in sys.argv[1:]:
+        print(render_template())
+        return 0
+
     args = [a for a in sys.argv[1:] if not a.startswith("-")]
     targets = [Path(a).resolve() for a in args] if args else changed_plans()
     if not targets:

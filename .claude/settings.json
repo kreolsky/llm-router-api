@@ -92,11 +92,11 @@
           },
           {
             "type": "command",
-            "command": "bash -c 'CMD=\"$CLAUDE_TOOL_INPUT\"; echo \"$CMD\" | grep -qE \"git\\s+commit\" || exit 0; OUT=$(bash .claude/scripts/pre-commit-gates.sh 2>&1); [ $? -eq 0 ] && exit 0; echo \"BLOCKED: pre-commit gates fail. Fix, then commit:\" >&2; echo \"$OUT\" >&2; exit 1'"
+            "command": "bash -c 'CMD=\"$CLAUDE_TOOL_INPUT\"; echo \"$CMD\" | grep -qE \"git\\s+commit\" || exit 0; OUT=$(bash \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/pre-commit-gates.sh 2>&1); [ $? -eq 0 ] && exit 0; echo \"BLOCKED: pre-commit gates fail. Fix, then commit:\" >&2; echo \"$OUT\" >&2; exit 1'"
           },
           {
             "type": "command",
-            "command": "python3 .claude/scripts/plan-snapshot.py"
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/plan-snapshot.py"
           }
         ]
       },
@@ -109,7 +109,7 @@
           },
           {
             "type": "command",
-            "command": "python3 .claude/scripts/plan-snapshot.py"
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/plan-snapshot.py"
           }
         ]
       }
@@ -120,7 +120,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash -c 'if echo \"$CLAUDE_TOOL_INPUT\" | grep -qE \"git\\s+commit\" && [ \"$CLAUDE_EXIT_CODE\" = \"0\" ]; then echo \"{\\\"systemMessage\\\": \\\"Commit successful. Run /retro ONLY if a workflow.md Auto-lessons trigger fired this session (3+ fix iterations / production escape / new pattern / workflow optimization); otherwise skip.\\\"}\"; fi'"
+            "command": "bash -c 'if echo \"$CLAUDE_TOOL_INPUT\" | grep -qE \"git\\s+commit\" && [ \"$CLAUDE_EXIT_CODE\" = \"0\" ]; then echo \"{\\\"systemMessage\\\": \\\"Commit successful. Run /retro ONLY if a workflow.md Auto-lessons trigger fired this session (3+ fix iterations on one issue category / production escape past a green review / a wrong hypothesis that cost real time / the user asked for a lesson). A clean feature, a new pattern or a workflow tweak is NOT a trigger - skip.\\\"}\"; fi'"
           }
         ]
       },
@@ -129,7 +129,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 .claude/scripts/save-plan.py"
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/save-plan.py"
           }
         ]
       },
@@ -138,7 +138,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash -c 'F=\"$CLAUDE_FILE_PATH\"; case \"$F\" in */plans/*.md) ;; *) exit 0;; esac; case \"$F\" in */archive/*|*/superseded/*) exit 0;; esac; OUT=$(python3 .claude/scripts/plan-shape-gate.py \"$F\" 2>&1) && exit 0; echo \"{\\\"systemMessage\\\": \\\"Plan is OFF-SHAPE - /implement will refuse it. Rewrite (do not append):\\n$(echo \\\"$OUT\\\" | tr -d \\\"\\\\\\\"\\\")\\\"}\"'"
+            "command": "bash -c 'F=\"$CLAUDE_FILE_PATH\"; case \"$F\" in */plans/*.md) ;; *) exit 0;; esac; case \"$F\" in */archive/*|*/superseded/*) exit 0;; esac; OUT=$(python3 \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/plan-shape-gate.py \"$F\" 2>&1) && exit 0; echo \"{\\\"systemMessage\\\": \\\"Plan is OFF-SHAPE - /implement will refuse it. Rewrite (do not append):\\n$(echo \\\"$OUT\\\" | tr -d \\\"\\\\\\\"\\\")\\\"}\"'"
           }
         ]
       }

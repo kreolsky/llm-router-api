@@ -9,6 +9,8 @@ alwaysApply: true
   work whose plan's `## Order` carries 2+ commits (`workflow.md` sizing). Never work directly
   on `main`. Why: a branch carrying a single commit pays a merge commit and a pre-merge audit
   for work a direct commit to `dev` would have finished.
+* **A feature branch may be red between commits** (`workflow.md` → *inside an L branch a
+  commit is a step, not a release*); only its tip, before the merge, must be green.
 * **Base branch**: `dev` holds the latest stable changes. Always branch from `dev`.
 * **Pre-merge audit**: `git diff dev <branch> --stat`, review every changed file, get
   confirmation.
