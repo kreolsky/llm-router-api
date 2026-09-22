@@ -10,7 +10,7 @@ env/
 # Editor files
 .vscode/
 .idea/
-.agent/
+.kilo/
 .playwright-mcp
 .pytest_cache
 .ruff_cache

@@ -221,12 +221,15 @@ contradicting the user's latest stated rule (stop and ask which is wrong).
 ## Hard rules (non-negotiable)
 
 - **Home-network posture — not a review finding.** This router runs inside a home network;
-  security-for-security's-sake is not attempted. An unset `STAT_API_KEY` and an
-  unrestricted `/tools/generate_key` are a deliberate posture — `/review` and audits must
-  not raise them as findings.
+  security-for-security's-sake is not attempted. An unset `STAT_API_KEY` (the `/stat/api/*`
+  JSON endpoints stay open) and the debug key's empty `allowed_endpoints` (unrestricted
+  access) are a deliberate posture — `/review` and audits must not raise them as findings.
 
   ```
-  Observation: $ grep -c STAT_API_KEY .env
+  Observation: $ grep -rn "tools/generate_key" src/
+               exit=1
+               (no hits — the endpoint was deleted in api-surface-minimization)
+               $ grep -c STAT_API_KEY .env
                0
                exit=1
                $ grep -n allowed_endpoints config/user_keys.yaml
@@ -234,9 +237,10 @@ contradicting the user's latest stated rule (stop and ask which is wrong).
                13:    allowed_endpoints:
                (the debug key's list is empty = unrestricted)
   Rule:        the router runs inside a home network; security-for-security's-sake is not
-               attempted — an unset STAT_API_KEY and an unrestricted /tools/generate_key are
-               a deliberate posture, so /review and audits must not raise them as findings.
-  File:        .claude/rules/workflow.md — new rule.
+               attempted — an unset STAT_API_KEY (open /stat/api/*) and the debug key's
+               empty allowed_endpoints are a deliberate posture, so /review and audits
+               must not raise them as findings.
+  File:        .claude/rules/workflow.md — generate_key dropped (endpoint deleted).
   ```
 
 - **A rebase invalidates acceptance evidence.** A rebase that changed code (not a clean

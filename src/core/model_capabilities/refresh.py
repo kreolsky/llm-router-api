@@ -142,12 +142,7 @@ async def refresh_provider_capabilities(
 
 
 async def refresh_all_capabilities(config_manager, cache: CapabilitiesCache) -> None:
-    """Refresh capabilities for every provider referenced by models.yaml.
-
-    # ARCH: ONE cache.persist() per refresh cycle, after every provider's
-    # upserts — not one per provider. The in-memory cache is updated per
-    # provider either way; only the disk write is batched.
-    """
+    """Refresh capabilities for every provider referenced by models.yaml."""
     config = config_manager.get_config()
     models_config = config.get("models", {})
     seen: set = set()
@@ -159,7 +154,13 @@ async def refresh_all_capabilities(config_manager, cache: CapabilitiesCache) -> 
                 config_manager, cache, provider_name,
                 models_config=models_config, persist=False,
             )
-    _persist_cache(cache)
+    # ARCH: ONE cache.persist() per refresh cycle, after every provider's
+    # upserts — not one per provider; and only when the cycle actually
+    # refreshed something (``if seen``), so an empty or absent models:
+    # section costs no disk write. The in-memory cache is updated per
+    # provider either way; only the disk write is batched.
+    if seen:
+        _persist_cache(cache)
 
 
 async def capabilities_refresh_loop(config_manager, cache: CapabilitiesCache) -> None:

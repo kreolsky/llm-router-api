@@ -4,6 +4,7 @@ from typing import Any
 from fastapi import Request, UploadFile
 
 from ..core.context import AuthContext
+from ..core.error_handling import ErrorType, create_error
 from ..core.logging import logger
 from ..services.model_service import ModelService
 from ..utils.mask import mask_headers
@@ -25,13 +26,14 @@ class TranscriptionService(BaseService):
     async def create_transcription(
         self,
         request: Request,
-        audio_file: UploadFile,
+        audio_file: UploadFile | None,
         auth_context: AuthContext,
         model_id: str | None = None,
         response_format: str = "json",
         temperature: float = 0.0,
         language: str | None = None,
         return_timestamps: bool = False,
+        file: UploadFile | None = None,
     ) -> Any:
         """Create a transcription from an audio file using the specified or default model."""
         ctx = self._get_request_context(request)
@@ -46,7 +48,22 @@ class TranscriptionService(BaseService):
             data_flow="incoming"
         )
 
-        audio_data = await audio_file.read()
+        # WHY: some clients send 'audio_file', others 'file' — accept both.
+        # The selection lives HERE, after the header log, so the refusal
+        # (the request where the headers were worth having) is still logged.
+        if audio_file:
+            uploaded_file = audio_file
+        elif file:
+            uploaded_file = file
+        else:
+            raise create_error(
+                ErrorType.MISSING_REQUIRED_FIELD,
+                field_name="audio_file or file",
+                request_id=request_id,
+                user_id=user_id,
+            )
+
+        audio_data = await uploaded_file.read()
 
         self._log_service_data(
             title="Transcription Request Parameters",
@@ -56,8 +73,8 @@ class TranscriptionService(BaseService):
                 "temperature": temperature,
                 "language": language,
                 "return_timestamps": return_timestamps,
-                "filename": audio_file.filename,
-                "content_type": audio_file.content_type,
+                "filename": uploaded_file.filename,
+                "content_type": uploaded_file.content_type,
                 "file_size": len(audio_data) if audio_data else 0
             },
             request_id=request_id,
@@ -85,8 +102,8 @@ class TranscriptionService(BaseService):
 
             provider_request_body = {
                 "audio": {
-                    "filename": audio_file.filename,
-                    "content_type": audio_file.content_type,
+                    "filename": uploaded_file.filename,
+                    "content_type": uploaded_file.content_type,
                     "data": audio_data,
                 },
                 "params": {

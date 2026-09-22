@@ -4,14 +4,15 @@ import asyncio
 import contextlib
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ..core.auth import check_endpoint_access
 from ..core.config_manager import ConfigManager
 from ..core.context import AuthContext, request_context
-from ..core.error_handling import ErrorType, create_error, enrich_stats_from_envelope
+from ..core.error_handling import enrich_stats_from_envelope
 from ..core.logging import logger
 from ..core.model_capabilities import CapabilitiesCache, capabilities_refresh_loop
 from ..core.usage_db import close_db, drain_pending_flushes, init_db, request_stats
@@ -100,8 +101,11 @@ app = FastAPI(lifespan=lifespan)
 app.mount("/stat/static", StaticFiles(directory=STATIC_DIR), name="stat_static")
 app.include_router(stat_router)
 
-@app.exception_handler(HTTPException)
-async def custom_http_exception_handler(request: Request, exc: HTTPException):
+# WHY: registered on Starlette's HTTPException, not FastAPI's subclass —
+# router-raised 404/405 are the PARENT class, and a subclass-keyed handler
+# silently leaves them on Starlette's default {"detail": ...}.
+@app.exception_handler(StarletteHTTPException)
+async def custom_http_exception_handler(request: Request, exc: StarletteHTTPException):
     """OpenRouter-compatible error shape + the single error-enrichment point.
 
     Writes error_code / error_message / provider_name into the per-request
@@ -202,7 +206,6 @@ async def create_embeddings(
 @app.post("/v1/audio/transcriptions", name="transcriptions")
 async def create_transcription(
     request: Request,
-    # WHY: some clients send 'audio_file', others 'file' — accept both
     audio_file: UploadFile | None = File(None),
     file: UploadFile | None = File(None),
     model: str | None = Form(None),
@@ -212,16 +215,10 @@ async def create_transcription(
     return_timestamps: bool | None = Form(False),
     auth_context: AuthContext = Depends(check_endpoint_access("/v1/audio/transcriptions"))
 ):
-    if audio_file:
-        uploaded_file = audio_file
-    elif file:
-        uploaded_file = file
-    else:
-        raise create_error(ErrorType.MISSING_REQUIRED_FIELD, field_name="audio_file or file")
-
     return await app.state.transcription_service.create_transcription(
         request=request,
-        audio_file=uploaded_file,
+        audio_file=audio_file,
+        file=file,
         auth_context=auth_context,
         model_id=model,
         response_format=response_format,

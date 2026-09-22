@@ -412,6 +412,27 @@ class TestTranscriptions:
         assert response.status_code == 200, "Transcription without model should use DEFAULT_STT_MODEL and succeed"
     
     @pytest.mark.asyncio
+    async def test_missing_file_returns_missing_required_field_envelope(
+        self,
+        base_url: str,
+        api_keys: dict,
+        http_client: httpx.AsyncClient
+    ):
+        """Multipart POST carrying only model: 400 in the OpenRouter envelope
+        with error_code missing_required_field — the raise lives in the service
+        (after the header log), and the envelope must survive the move."""
+        response = await http_client.post(
+            f"{base_url}/v1/audio/transcriptions",
+            headers={"Authorization": f"Bearer {api_keys['full_access']}"},
+            data={"model": "stt/dummy"}
+        )
+
+        assert response.status_code == 400
+        error = response.json()["error"]
+        assert error["code"] == 400
+        assert error["metadata"]["error_code"] == "missing_required_field"
+
+    @pytest.mark.asyncio
     async def test_create_transcription_empty_file(
         self,
         base_url: str,
