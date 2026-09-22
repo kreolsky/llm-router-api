@@ -4,7 +4,6 @@ import asyncio
 import contextlib
 from contextlib import asynccontextmanager
 
-import uvicorn
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -237,7 +236,3 @@ async def stat_dashboard(request: Request):
     # the key. /stat/static is a mount and cannot carry a dependency at all.
     # The /stat/api/* JSON endpoints live in stat_routes.py (stat_router).
     return await stat_page(request)
-
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
