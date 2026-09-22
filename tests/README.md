@@ -11,7 +11,7 @@ tests/
 │   ├── test_chat_completions.py
 │   ├── test_embeddings.py
 │   ├── test_transcriptions.py
-│   ├── test_endpoint_permissions.py
+│   └── test_endpoint_permissions.py
 └── unit/                    # Unit tests (no external dependencies)
     ├── test_auth.py
     ├── test_base_provider.py

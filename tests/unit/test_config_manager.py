@@ -409,14 +409,12 @@ class TestAssertConfigComplete:
 
     def test_complete_config_passes(self):
         """All three non-empty sections pass validation."""
-        from src.core.config_manager import ConfigManager
         ConfigManager._assert_config_complete(
             {"providers": {"p": {}}, "models": {"m": {}}, "user_keys": {"k": {}}}
         )
 
     def test_missing_sections_lists_all(self):
         """_missing_sections names every empty-or-absent section, not just the first."""
-        from src.core.config_manager import ConfigManager
         assert ConfigManager._missing_sections({"providers": {}}) == ["providers", "models", "user_keys"]
 
 
