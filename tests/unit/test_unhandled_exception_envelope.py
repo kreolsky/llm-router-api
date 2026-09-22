@@ -77,3 +77,52 @@ class TestUnhandledExceptionEnvelope:
         # Starlette always re-raises after the handler responds; the response
         # above was still sent exactly once.
         assert isinstance(raised, RuntimeError)
+
+
+def _body_json(sent: list[dict]) -> dict:
+    starts = [m for m in sent if m["type"] == "http.response.start"]
+    assert len(starts) == 1, f"expected exactly one response.start, got {len(starts)}"
+    body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
+    return starts[0]["status"], json.loads(body)
+
+
+class TestUnmatchedRouteEnvelope:
+    """Router-raised 404/405 are Starlette HTTPExceptions — the app handler is
+    registered on the PARENT class so they answer in the OpenRouter envelope,
+    not Starlette's default {"detail": ...}."""
+
+    def _unmatched_path(self) -> str:
+        """A path no route matches, asserted against app.routes.
+
+        Kept under the /health/ skip prefix so this unit test records no
+        usage row (no DB is initialized here).
+        """
+        path = "/health/__no_such_route__"
+        registered = {getattr(r, "path", None) for r in app.routes}
+        assert path not in registered, f"{path} unexpectedly matches a route"
+        return path
+
+    @pytest.mark.asyncio
+    async def test_unmatched_route_404_answers_in_envelope(self):
+        sent, raised = await _drive(app, "GET", self._unmatched_path())
+        assert raised is None
+        status, envelope = _body_json(sent)
+
+        assert status == 404
+        assert envelope["error"]["code"] == 404
+        assert isinstance(envelope["error"]["message"], str) and envelope["error"]["message"]
+        assert "detail" not in envelope
+
+    @pytest.mark.asyncio
+    async def test_method_not_allowed_405_answers_in_envelope(self):
+        # GET on the POST-only chat route. The endpoint's auth dependency never
+        # runs on a 405. This path records a usage row — _flush_row no-ops
+        # safely with no DB connection in this unit test.
+        sent, raised = await _drive(app, "GET", "/v1/chat/completions")
+        assert raised is None
+        status, envelope = _body_json(sent)
+
+        assert status == 405
+        assert envelope["error"]["code"] == 405
+        assert isinstance(envelope["error"]["message"], str) and envelope["error"]["message"]
+        assert "detail" not in envelope
