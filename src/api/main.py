@@ -25,7 +25,6 @@ from ..services.chat_service.chat_service import ChatService
 from ..services.embedding_service import EmbeddingService
 from ..services.model_service import ModelService
 from ..services.transcription_service import TranscriptionService
-from ..utils.mask import mask_headers
 from .middleware import RequestLoggerMiddleware
 from .stat_page import STATIC_DIR, stat_page
 from .stat_routes import router as stat_router
@@ -214,35 +213,12 @@ async def create_transcription(
     return_timestamps: bool | None = Form(False),
     auth_context: AuthContext = Depends(check_endpoint_access("/v1/audio/transcriptions"))
 ):
-    ctx = request_context(request)
-    request_id = ctx.request_id
-    user_id = ctx.user_id
-
-    logger.debug_data(
-        title="Transcription Request Headers",
-        data=mask_headers(dict(request.headers)),
-        request_id=request_id,
-        component="api",
-        data_flow="incoming"
-    )
-
     if audio_file:
         uploaded_file = audio_file
     elif file:
         uploaded_file = file
     else:
         raise create_error(ErrorType.MISSING_REQUIRED_FIELD, field_name="audio_file or file")
-
-    logger.info(
-        "Transcription file received",
-        request_id=request_id,
-        user_id=user_id,
-        file_details={
-            "filename": uploaded_file.filename,
-            "content_type": uploaded_file.content_type,
-            "size": uploaded_file.size if hasattr(uploaded_file, 'size') else 'unknown'
-        }
-    )
 
     return await app.state.transcription_service.create_transcription(
         request=request,

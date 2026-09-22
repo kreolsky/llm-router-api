@@ -6,6 +6,7 @@ from fastapi import Request, UploadFile
 from ..core.context import AuthContext
 from ..core.logging import logger
 from ..services.model_service import ModelService
+from ..utils.mask import mask_headers
 from .base import BaseService
 
 
@@ -36,6 +37,14 @@ class TranscriptionService(BaseService):
         ctx = self._get_request_context(request)
         request_id = ctx.request_id
         user_id = ctx.user_id
+
+        self._log_service_data(
+            title="Transcription Request Headers",
+            data=mask_headers(dict(request.headers)),
+            request_id=request_id,
+            component="transcription_service",
+            data_flow="incoming"
+        )
 
         audio_data = await audio_file.read()
 
