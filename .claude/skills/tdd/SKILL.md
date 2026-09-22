@@ -18,6 +18,7 @@ Restate the bug/feature concretely: current behavior, expected behavior, code pa
 - Never modify existing tests to make failing code pass.
 
 ## 3. Plan from tests — **HALT for approval before any implementation**
-Tests are the plan. The plan file has ONE shape — `## Decisions` · `## Risks` · `## Order` ·
-`## Not doing` · `## Validation` — max 120 lines, English only, written to `plans/`
-(`workflow.md` → Plans). Check it with `python3 .claude/scripts/plan-shape-gate.py <path>`.
+Tests are the plan. The plan file has ONE shape, and this file does not carry it —
+`python3 .claude/scripts/plan-shape-gate.py --template` prints it. Written to `plans/`
+(`workflow.md` → Plans); check it with `python3 .claude/scripts/plan-shape-gate.py <path>`.
+An S off the hot path is owed no file at all — the three-line chat form is the whole plan.

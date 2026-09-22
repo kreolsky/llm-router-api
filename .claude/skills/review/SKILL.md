@@ -69,3 +69,15 @@ hypothesis about this codebase, not an instruction.
 
 **What moved** · **Evidence** (checks actually run, output verbatim) · **Residual**
 (findings + fix plan, awaiting approval) · **Outside scope**. Wait for approval.
+
+## 8. On an L branch — record the tip that was reviewed
+
+Only after the findings are approved and any fix has landed, and only on a feature branch:
+
+```bash
+git rev-parse HEAD > "$(git rev-parse --git-dir)/review-ok"
+```
+
+`merge-audit.py` compares that SHA to the branch tip, so a commit added afterwards
+invalidates the review instead of riding in under it. Never write it ahead of approval —
+the file is the claim that this exact tip was reviewed.

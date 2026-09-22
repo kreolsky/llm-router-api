@@ -25,7 +25,7 @@ entanglement decides how much PROOF. **Neither counts files.**
 | **low** (e≤2) → S | what this diff can break **+ adjacent**, `--tb=line` | Haiku |
 | **medium** (3–6) → M | full `tests/unit/` + the `tests/api/` files the diff touches | Sonnet |
 | **high** (≥7) → M | full `tests/` **+ a repeat run** (races, stream ordering, pool lifecycle) | **Opus** |
-| any, but **L** | the above ONCE, over `git diff dev...HEAD`, before the merge — not per commit | per e |
+| any, but **L** | the above once at the last step — not per commit; see below | per e |
 
 **Inside an L branch a commit is a step, not a release.** The branch owes the proof ONCE,
 at its last step, over `git diff dev...HEAD`: the entanglement-table run, `/review`, the
@@ -48,11 +48,11 @@ affected file paths.
    the request path (middleware → auth → service → provider → upstream → SSE back), an
    `INVARIANT:` on the path, the httpx pool / semaphore lifecycle, the usage-DB write, the
    config hot-reload. Low → **S**; medium and high → **M**; and it sets the test regime and
-   the model per the second table — regardless of file count.
+   the model per the second table.
 
-Counting files measures the process, not the work: a fix plus its test plus its plan file
-is three files, so the old "≤3 files may go straight to dev" rule tripped on every change
-that was properly tested. Optional tooling: `.claude/scripts/size-estimate.py` (advisory).
+Why never files: a fix plus its test plus its plan file is three files, so counting them
+measures the process instead of the work. Optional tooling:
+`.claude/scripts/size-estimate.py` (advisory).
 
 - **Phase 0 — Scope.** State S/M/L and the entanglement signals. The `━━━ SCOPE ━━━` banner
   is recommended, not mandatory; the sizing judgement behind it is required.
@@ -137,11 +137,11 @@ to implement is the one the user names.
 **A plan has ONE shape, and it is small.** The shape is NOT carried here —
 `plan-shape-gate.py --template` prints it, and it is enforced at the two moments a reshape
 is still free: the Write|Edit hook and `/implement`'s plan load, which refuses an off-shape
-plan. Write to 120 lines. The gate only fires at 150, and that 30-line gap is slack, not
-budget: a plan that lands a little over gets SPLIT on judgement, never shaved line-by-line
-to pass the check. Past 150 the task is too big to plan. Why the shape left this file: a
-section list copied into prose is a second source of truth, and it drifts from the gate
-that actually refuses the plan.
+plan. Write to 120 — and the unit is a paragraph, a bullet or a step, NOT a wrapped line:
+the gate counts content, so a plan is never hard-wrapped into a size problem and never cut
+to fit a line count. The gate fires at 150, and that 30-unit gap is slack, not budget: a
+plan that lands a little over gets SPLIT on judgement, never shaved. Past 150 the task is
+too big to plan.
 
 **Understanding changed ⇒ delete the file and write it again; never append.** The previous
 version is kept for you in `plans/superseded/` by `plan-snapshot.py`, so a later post-mortem

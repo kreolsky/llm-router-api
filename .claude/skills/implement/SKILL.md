@@ -15,8 +15,13 @@ and the skip rules live there — do not duplicate them, refer to them.
 - No plan named → fall back to the newest (`ls -t plans/*.md | head -1`) and **say which one
   you picked and that none was named** — a guessed plan is not an approved one.
 - Display: `━━━ PLAN LOADED ━━━` + filename + first heading.
-- If no plan exists, ask the user to describe the task or enter plan mode first. **HALT.**
-- **Shape check — run it, do not eyeball it:**
+- **No plan file, and none is owed** — the task is an S off the hot path (`workflow.md` → *A
+  plan FILE is owed by*): state the three-line form (intent · files · done-when), display
+  `━━━ PLAN: inline (S) ━━━` with it, and proceed WITHOUT halting. Do not manufacture a file.
+- **No plan file where one IS owed** — M/L, or an S touching the Review-gate hot-path list —
+  ask the user to describe the task or enter plan mode first. **HALT.**
+- **Shape check — run it, do not eyeball it** (a plan FILE only; the inline S form has no
+  shape to check):
   `python3 .claude/scripts/plan-shape-gate.py <plan path>`. Non-zero ⇒ print the output and
   **HALT**: offer to rewrite the plan to shape (rewrite, never append), or to proceed once
   the user says so. This is the gate's hard point — a plan is usually still uncommitted when

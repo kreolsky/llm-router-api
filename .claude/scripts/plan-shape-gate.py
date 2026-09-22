@@ -66,7 +66,9 @@ SECTION_INTENT = {
     "Decisions": "why the chosen thing is shaped this way; every decision touching "
                  "existing behaviour carries a `file:line` that resolves",
     "Risks": "what this can break, and the signal that it did",
-    "Order": "numbered steps, each one a commit (2+ steps => L => branch; see sizing)",
+    "Order": "numbered steps, each one a commit (2+ steps => L => branch; see sizing); "
+             "lists the CODE of each commit — this plan file rides in step 1, unlisted; "
+             "a step MAY leave the feature broken: say what, and which step catches up",
     "Not doing": "consciously ruled out; comes back only as a fresh task",
     "Validation": "how Phase-4 acceptance is DRIVEN live (the exact commands and the "
                   "expected observation); omit only for a no-runtime-surface diff",
@@ -83,6 +85,14 @@ COLD_SESSION_RE = re.compile(
     re.I,
 )
 
+# A line that OPENS a logical unit: heading, list item, numbered step, table row.
+# Anything else non-blank continues the unit above it — i.e. it is a hard wrap.
+# Why the cap counts units and not raw lines: wrapping prose to a column width inflates
+# the same content ~3x and manufactures a size problem the plan does not have. Measured
+# in raw lines, the cheapest way to pass is to DELETE content, which is the one outcome
+# the cap was never meant to buy. Unwrapping is free; shaving is not.
+UNIT_START_RE = re.compile(r"^\s*(?:#{1,6}\s|[-*+]\s|\d+[.)]\s|\|)")
+
 H2_RE = re.compile(r"^##\s+(.+?)\s*$", re.M)
 # A citation into the tree: `backend/x.py:120`, `pi-driver/src/server.ts:731`, `a.py:12-34`.
 CITE_RE = re.compile(r"`?([\w./\-]+\.(?:py|md|sh|json|yml|yaml)):(\d+)(?:-(\d+))?`?")
@@ -97,6 +107,26 @@ DECISION_ID_RE = re.compile(r"^\s*(?:[-*]\s*)?\*{0,2}([DFR]\d{1,2})\b")
 # the request's language does not carry into the artifact, because the plan is read
 # by an executor and by the tree's own markers, both of which are English.
 CYRILLIC_RE = re.compile(r"[\u0400-\u04FF]")
+
+
+def logical_lines(text: str) -> int:
+    """Paragraphs, bullets and steps — a hard wrap does not add to the count."""
+    count = 0
+    in_fence = continuing = False
+    for raw in text.splitlines():
+        if raw.lstrip().startswith("```"):
+            in_fence = not in_fence
+            count += 1
+            continuing = False
+        elif in_fence:
+            count += 1               # inside a fence every line is real
+        elif not raw.strip():
+            continuing = False
+        else:
+            if UNIT_START_RE.match(raw) or not continuing:
+                count += 1
+            continuing = True
+    return count
 
 
 def render_template() -> str:
@@ -117,10 +147,14 @@ def render_template() -> str:
     ]
     return "\n".join(
         [
-            f"Plan shape — exactly these sections, max {MAX_LINES} lines "
-            f"(write to 120; the gap is slack, not budget).",
+            f"Plan shape — exactly these sections, max {MAX_LINES} paragraphs/bullets/"
+            f"steps (write to 120; the gap is slack, not budget).",
             "",
             *lines,
+            "",
+            "ONE LINE PER paragraph, bullet and step. Do NOT hard-wrap a plan to a column",
+            "width: the cap counts CONTENT, so wrapping cannot push a plan over it — and a",
+            "plan is never cut to fit a line count. Unwrapping is free; shaving is not.",
             "",
             "Rules the gate also enforces:",
             "  - filename `<epoch-ms>-<slug>.md` (save-plan.py writes it)",
@@ -203,9 +237,20 @@ def check(path: Path) -> list[str]:
 
     problems: list[str] = []
     lines = text.splitlines()
-    if len(lines) > MAX_LINES:
+    units = logical_lines(text)
+    if units > MAX_LINES:
         problems.append(
-            f"{len(lines)} lines > {MAX_LINES} — the task is too big to plan; split it"
+            f"{units} paragraphs/bullets/steps > {MAX_LINES} — the task is too big to "
+            f"plan; SPLIT it, do not shave it"
+        )
+    elif len(lines) > MAX_LINES:
+        # Over the cap on raw lines but under it on content: the file is hard-wrapped.
+        # Say so instead of staying silent, or the next session shaves real content to
+        # fix a problem the wrapping invented.
+        print(
+            f"note {path.name}: {len(lines)} raw lines but {units} logical ones — it is "
+            f"hard-wrapped. That is fine; the cap counts content. Never cut a plan to a "
+            f"line count."
         )
     if not H1_RE.search(text):
         problems.append("no `# <title>` heading")

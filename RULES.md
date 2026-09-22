@@ -58,7 +58,10 @@ push**: `invariant-why`, `systems-index`, `func-length`, `debt-ledger`,
 Each is zero-net-growth against a committed baseline in `.claude/baselines/`; intentional
 growth is a `--update` in the same commit with justification. `plan-shape-gate.py`
 deliberately does NOT gate the commit — it fires on the plan write and at `/implement`
-load, the two moments where a reshape is still free. Ruff gates `src/` **and `tests/`**
+load, the two moments where a reshape is still free; its cap counts paragraphs, bullets and
+steps, never wrapped lines, so a plan is never cut to fit a column width
+(`--template` prints the shape). `merge-audit.py` is read-only and gates no commit either —
+`/merge` runs it. Ruff gates `src/` **and `tests/`**
 (rule set pinned in `pyproject.toml`, binary in `requirements-dev.txt`; `tests/**`
 carries per-file-ignores for what is CORRECT in a test).
 
@@ -74,7 +77,12 @@ carries per-file-ignores for what is CORRECT in a test).
 
 ## Skills (invoke via `/command`)
 
+- `/grill` — interrogate a plan or design by rounds until nothing is silently assumed.
 - `/implement` — orchestrate the workflow phases (scope → TDD → implement → review → commit).
 - `/tdd` — TDD initialization.  `/review` — post-implementation self-review.
+- `/merge` — pre-merge audit (`merge-audit.py`) + merge an L branch into `dev`.
 - `/retro` — session retrospective and lesson capture.
 - `/run-tests` — full suite in Docker.  `/deploy-server` — rsync `src/` + restart the container.
+- **Audits, three different questions** — `/intent-audit` (markers vs code) ·
+  `/liveness-audit` (is this layer reachable from a root) · `/reality-audit` (prose in
+  `CLAUDE.md` / `RULES.md` / skills / lessons vs code).
