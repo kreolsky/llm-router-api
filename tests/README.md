@@ -12,7 +12,6 @@ tests/
 │   ├── test_embeddings.py
 │   ├── test_transcriptions.py
 │   ├── test_endpoint_permissions.py
-│   └── test_tools_generate_key.py
 └── unit/                    # Unit tests (no external dependencies)
     ├── test_auth.py
     ├── test_base_provider.py
@@ -92,7 +91,6 @@ python -m venv .venv
 | `test_embeddings.py` | Embedding creation, different encoding formats, multiple inputs, auth |
 | `test_transcriptions.py` | Audio transcription with/without model, response formats, concurrent requests |
 | `test_endpoint_permissions.py` | Per-key endpoint access: full access, restricted, invalid key, no auth |
-| `test_tools_generate_key.py` | Key generation endpoint, key format validation |
 
 ## Environment
 

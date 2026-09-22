@@ -25,8 +25,6 @@ from ..services.chat_service.chat_service import ChatService
 from ..services.embedding_service import EmbeddingService
 from ..services.model_service import ModelService
 from ..services.transcription_service import TranscriptionService
-from ..utils.client_address import client_host
-from ..utils.generate_key import generate_key
 from ..utils.mask import mask_headers
 from .middleware import RequestLoggerMiddleware
 from .stat_page import STATIC_DIR, stat_page
@@ -256,33 +254,6 @@ async def create_transcription(
         language=language,
         return_timestamps=return_timestamps,
     )
-
-@app.get("/tools/generate_key", name="generate_key")
-async def generate_key_endpoint(
-    request: Request,
-    auth_context: AuthContext = Depends(check_endpoint_access("/tools/generate_key"))
-):
-    ctx = request_context(request)
-    request_id = ctx.request_id
-    user_id = ctx.user_id
-
-    logger.info(
-        "Key generation request received",
-        request_id=request_id,
-        user_id=user_id,
-        method=request.method,
-        url=str(request.url),
-        client_host=client_host(request)
-    )
-
-    key = generate_key()
-    logger.debug_data(
-        title="Generated API Key",
-        data={"key": f"{key[:10]}..."},
-        request_id=request_id
-    )
-    return {"key": key}
-
 
 @app.get("/stat/")
 async def stat_dashboard(request: Request):
