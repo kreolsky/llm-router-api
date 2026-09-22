@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 from src.core.context import AuthContext, RequestContext
 from src.core.usage_db import RequestStats
@@ -131,3 +132,28 @@ class TestIdentityHeadersForwarded:
         assert response == {"text": "ok"}
         kwargs = provider_instance.transcriptions.call_args.kwargs
         assert kwargs["extra_headers"] == {"user-agent": "Kilo-Code/7.5.5"}
+
+
+class TestRefusalLogsHeaders:
+
+    @pytest.mark.asyncio
+    async def test_refusal_logs_headers_first(self):
+        """A request with neither audio_file nor file is refused by the SERVICE,
+        after the header log — the route no longer refuses anything, so the one
+        refusal where the headers were worth having is still logged."""
+        service = TranscriptionService(_make_config_manager(), model_service=MagicMock())
+        request = _make_request()
+        request.headers = {}
+
+        with patch.object(TranscriptionService, "_log_service_data") as mock_log:
+            with pytest.raises(HTTPException) as exc_info:
+                await service.create_transcription(
+                    request, None, _make_auth_context(), file=None, model_id="stt/dummy"
+                )
+
+        assert exc_info.value.status_code == 400
+        detail = exc_info.value.detail
+        assert detail["error"]["metadata"]["error_code"] == "missing_required_field"
+        # exactly ONE log call — the headers — and it happened before the raise
+        assert mock_log.call_count == 1
+        assert mock_log.call_args.kwargs["title"] == "Transcription Request Headers"
