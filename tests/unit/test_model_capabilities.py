@@ -9,6 +9,7 @@ from src.core.model_capabilities import (
     CapabilitiesCache,
     merge_capabilities,
     normalize_provider_model,
+    refresh_all_capabilities,
     refresh_provider_capabilities,
     render_capabilities,
 )
@@ -352,6 +353,18 @@ class _FakeCM:
         return self._cfg
 
 
+class _CountingCache(CapabilitiesCache):
+    """Counts persist() calls through the public method — no patched seams."""
+
+    def __init__(self, path):
+        super().__init__(path)
+        self.persist_calls = 0
+
+    def persist(self):
+        self.persist_calls += 1
+        super().persist()
+
+
 class TestRefreshProviderCapabilities:
     @pytest.mark.asyncio
     async def test_single_model_fallback_for_dummy_placeholder(self, tmp_path, monkeypatch):
@@ -475,6 +488,52 @@ class TestRefreshProviderCapabilities:
         await refresh_provider_capabilities(cm, cache, "openrouter")
 
         assert cache.get("m/free")["pricing"]["prompt"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_refresh_all_persists_once(self, tmp_path, monkeypatch):
+        """refresh_all_capabilities writes the cache file ONCE per cycle, not
+        once per provider — one persist per refresh cycle."""
+        models = {
+            "a/one": {"provider": "pa", "provider_model_name": "m1"},
+            "b/two": {"provider": "pb", "provider_model_name": "m2"},
+        }
+        cm = _FakeCM(models)
+        cache = _CountingCache(str(tmp_path / "c.json"))
+        upstream = {
+            "data": [
+                {"id": "m1", "context_length": 8192},
+                {"id": "m2", "context_length": 16384},
+            ]
+        }
+
+        async def fake_gpi(*a, **k):
+            return _FakeProvider(upstream)
+
+        monkeypatch.setattr("src.core.model_capabilities.refresh.get_provider_instance", fake_gpi)
+        await refresh_all_capabilities(cm, cache)
+
+        assert cache.persist_calls == 1
+        assert cache.get("a/one")["context_length"] == 8192
+        assert cache.get("b/two")["context_length"] == 16384
+        assert os.path.exists(str(tmp_path / "c.json"))
+
+    @pytest.mark.asyncio
+    async def test_refresh_provider_default_persists(self, tmp_path, monkeypatch):
+        """A lone refresh_provider_capabilities (the ?refresh=true debug path)
+        keeps the default persist=True and still reaches disk."""
+        models = {"local/chat": {"provider": "orange", "provider_model_name": "dummy"}}
+        cm = _FakeCM(models)
+        cache = _CountingCache(str(tmp_path / "c.json"))
+        upstream = {"data": [{"id": "/p/m.gguf", "context_length": 32768}]}
+
+        async def fake_gpi(*a, **k):
+            return _FakeProvider(upstream)
+
+        monkeypatch.setattr("src.core.model_capabilities.refresh.get_provider_instance", fake_gpi)
+        await refresh_provider_capabilities(cm, cache, "orange")
+
+        assert cache.persist_calls == 1
+        assert os.path.exists(str(tmp_path / "c.json"))
 
 
 # ---------------------------------------------------------------------------

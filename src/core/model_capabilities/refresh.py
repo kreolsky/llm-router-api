@@ -83,11 +83,20 @@ def _provider_entries(
     ]
 
 
+def _persist_cache(cache: CapabilitiesCache) -> None:
+    """The one persist rule: write to disk, warn and never raise on failure."""
+    try:
+        cache.persist()
+    except Exception as e:
+        logger.warning(f"Capabilities cache persist failed: {e}", exc_info=True)
+
+
 async def refresh_provider_capabilities(
     config_manager,
     cache: CapabilitiesCache,
     provider_name: str,
     models_config: dict[str, Any] | None = None,
+    persist: bool = True,
 ) -> None:
     """Refresh capabilities for every model_id backed by ``provider_name``.
 
@@ -95,6 +104,10 @@ async def refresh_provider_capabilities(
     model_ids. On any provider error: warn and KEEP existing entries
     (stale-if-error). The task takes provider instances through the registry so
     a config reload (which rebuilds the provider cache) is respected.
+
+    ``persist=False`` lets refresh_all_capabilities batch many providers into
+    ONE disk write per cycle; the direct caller (the ``?refresh=true`` debug
+    path) keeps the default and still reaches disk.
     """
     config = config_manager.get_config()
     if models_config is None:
@@ -124,14 +137,17 @@ async def refresh_provider_capabilities(
             cache.upsert(model_id, normalize_provider_model(raw, native_models),
                          source=provider_name)
 
-    try:
-        cache.persist()
-    except Exception as e:
-        logger.warning(f"Capabilities cache persist failed: {e}", exc_info=True)
+    if persist:
+        _persist_cache(cache)
 
 
 async def refresh_all_capabilities(config_manager, cache: CapabilitiesCache) -> None:
-    """Refresh capabilities for every provider referenced by models.yaml."""
+    """Refresh capabilities for every provider referenced by models.yaml.
+
+    # ARCH: ONE cache.persist() per refresh cycle, after every provider's
+    # upserts — not one per provider. The in-memory cache is updated per
+    # provider either way; only the disk write is batched.
+    """
     config = config_manager.get_config()
     models_config = config.get("models", {})
     seen: set = set()
@@ -140,8 +156,10 @@ async def refresh_all_capabilities(config_manager, cache: CapabilitiesCache) -> 
         if provider_name and provider_name not in seen:
             seen.add(provider_name)
             await refresh_provider_capabilities(
-                config_manager, cache, provider_name, models_config=models_config
+                config_manager, cache, provider_name,
+                models_config=models_config, persist=False,
             )
+    _persist_cache(cache)
 
 
 async def capabilities_refresh_loop(config_manager, cache: CapabilitiesCache) -> None:

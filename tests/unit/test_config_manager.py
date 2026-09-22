@@ -414,6 +414,11 @@ class TestAssertConfigComplete:
             {"providers": {"p": {}}, "models": {"m": {}}, "user_keys": {"k": {}}}
         )
 
+    def test_missing_sections_lists_all(self):
+        """_missing_sections names every empty-or-absent section, not just the first."""
+        from src.core.config_manager import ConfigManager
+        assert ConfigManager._missing_sections({"providers": {}}) == ["providers", "models", "user_keys"]
+
 
 # ===================================================================
 # add_reload_callback
