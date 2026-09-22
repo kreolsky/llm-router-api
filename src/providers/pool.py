@@ -36,10 +36,10 @@ class ProviderPool:
         # (HTTPX_MAX_CONNECTIONS, etc.) are applied per backend pool, not shared.
         self.client = self._build_client()
 
-        # ARCH: per-instance concurrency gate (asyncio.Semaphore). Only created when
-        # `max_concurrent` is a positive int; otherwise None (no limiting). The semaphore
-        # is owned per-instance, so a config reload that changes max_concurrent only takes
-        # effect after a config reload rebuilds the cache (semaphore is per-instance).
+        # ARCH: per-instance concurrency gate (asyncio.Semaphore), only when
+        # `max_concurrent` is a positive int; else None (no limiting). A changed
+        # max_concurrent always rebuilds: the changed entry fails the reuse
+        # equality check (providers/__init__.py), so the new gate applies.
         # ARCH: in-flight accounting for graceful drain. A config reload swaps the
         # provider cache and closes the OLD pools, but long-lived SSE streams are
         # still reading from them — closing mid-stream aborts live generations.

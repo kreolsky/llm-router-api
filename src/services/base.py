@@ -111,7 +111,7 @@ class BaseService:
         """Per-request upstream headers for providers with an identity profile.
 
         passthrough: forward the client's headers verbatim minus the denylist.
-        Returns None when the provider has no profile (behavior unchanged).
+        Unset identity: returns None — no client headers go upstream.
         """
         identity = getattr(provider_instance, "identity", None)
         if not identity:

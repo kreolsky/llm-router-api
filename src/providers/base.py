@@ -71,10 +71,10 @@ class BaseProvider:
         # "the operator did not touch this backend".
         self.provider_config = dict(config)
 
-        # ARCH: single identity mode. `passthrough` forwards every client
-        # header upstream verbatim minus the denylist
-        # (core/header_policy.py); the headers are assembled by the service
-        # layer per request and arrive via extra_headers.
+        # ARCH: identity is opt-in. `passthrough`: every client header goes
+        # upstream verbatim minus the denylist (core/header_policy.py),
+        # assembled per request by the service layer via extra_headers.
+        # Unset: no forwarding — plain gateway headers only.
         self.identity = config.get("identity")
         if self.identity not in (None, "passthrough"):
             raise create_error(ErrorType.PROVIDER_CONFIG_ERROR,
@@ -247,7 +247,7 @@ class BaseProvider:
             merged[name] = value
         return merged
 
-    # WHY noqa ASYNC109 (both _make_request defs): `timeout` is the provider
+    # WHY noqa ASYNC109 (all _make_request* defs): `timeout` is the provider
     # API parameter passed straight to httpx (per-request httpx.Timeout), not
     # a wait bound this function owns — wrapping the body in asyncio.timeout()
     # would double-cap streaming-adjacent calls for no benefit.
