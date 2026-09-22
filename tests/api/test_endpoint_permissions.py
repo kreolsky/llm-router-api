@@ -338,18 +338,6 @@ class TestLimitedUserPermissions:
         )
         assert response.status_code == 403, "limited user should be denied retrieving gemini/mini"
 
-    @pytest.mark.asyncio
-    async def test_limited_generate_key(
-        self, base_url, api_keys, http_client
-    ):
-        """Generate key should succeed — limited user has no endpoint restrictions."""
-        response = await http_client.get(
-            f"{base_url}/tools/generate_key",
-            headers={"Authorization": f"Bearer {api_keys['limited']}"}
-        )
-        assert response.status_code == 200
-        assert "key" in response.json()
-
 
 class TestTransctiberUserPermissions:
     """Test permissions for user with allowed_endpoints: [/v1/audio/transcriptions, /v1/models]."""
@@ -441,14 +429,3 @@ class TestTransctiberUserPermissions:
             json={"model": "embeddings/dummy", "input": sample_texts_for_embedding, "encoding_format": "float"}
         )
         assert response.status_code == 403, "transctiber should be denied embeddings"
-
-    @pytest.mark.asyncio
-    async def test_transctiber_generate_key_denied(
-        self, base_url, api_keys, http_client
-    ):
-        """Generate key should return 403 — endpoint not allowed."""
-        response = await http_client.get(
-            f"{base_url}/tools/generate_key",
-            headers={"Authorization": f"Bearer {api_keys['transctiber']}"}
-        )
-        assert response.status_code == 403, "transctiber should be denied generate_key"

@@ -4,7 +4,6 @@ import asyncio
 import contextlib
 from contextlib import asynccontextmanager
 
-import uvicorn
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -25,9 +24,6 @@ from ..services.chat_service.chat_service import ChatService
 from ..services.embedding_service import EmbeddingService
 from ..services.model_service import ModelService
 from ..services.transcription_service import TranscriptionService
-from ..utils.client_address import client_host
-from ..utils.generate_key import generate_key
-from ..utils.mask import mask_headers
 from .middleware import RequestLoggerMiddleware
 from .stat_page import STATIC_DIR, stat_page
 from .stat_routes import router as stat_router
@@ -216,35 +212,12 @@ async def create_transcription(
     return_timestamps: bool | None = Form(False),
     auth_context: AuthContext = Depends(check_endpoint_access("/v1/audio/transcriptions"))
 ):
-    ctx = request_context(request)
-    request_id = ctx.request_id
-    user_id = ctx.user_id
-
-    logger.debug_data(
-        title="Transcription Request Headers",
-        data=mask_headers(dict(request.headers)),
-        request_id=request_id,
-        component="api",
-        data_flow="incoming"
-    )
-
     if audio_file:
         uploaded_file = audio_file
     elif file:
         uploaded_file = file
     else:
         raise create_error(ErrorType.MISSING_REQUIRED_FIELD, field_name="audio_file or file")
-
-    logger.info(
-        "Transcription file received",
-        request_id=request_id,
-        user_id=user_id,
-        file_details={
-            "filename": uploaded_file.filename,
-            "content_type": uploaded_file.content_type,
-            "size": uploaded_file.size if hasattr(uploaded_file, 'size') else 'unknown'
-        }
-    )
 
     return await app.state.transcription_service.create_transcription(
         request=request,
@@ -257,40 +230,9 @@ async def create_transcription(
         return_timestamps=return_timestamps,
     )
 
-@app.get("/tools/generate_key", name="generate_key")
-async def generate_key_endpoint(
-    request: Request,
-    auth_context: AuthContext = Depends(check_endpoint_access("/tools/generate_key"))
-):
-    ctx = request_context(request)
-    request_id = ctx.request_id
-    user_id = ctx.user_id
-
-    logger.info(
-        "Key generation request received",
-        request_id=request_id,
-        user_id=user_id,
-        method=request.method,
-        url=str(request.url),
-        client_host=client_host(request)
-    )
-
-    key = generate_key()
-    logger.debug_data(
-        title="Generated API Key",
-        data={"key": f"{key[:10]}..."},
-        request_id=request_id
-    )
-    return {"key": key}
-
-
 @app.get("/stat/")
 async def stat_dashboard(request: Request):
     # The page stays open even with STAT_API_KEY set: it is what prompts for
     # the key. /stat/static is a mount and cannot carry a dependency at all.
     # The /stat/api/* JSON endpoints live in stat_routes.py (stat_router).
     return await stat_page(request)
-
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)

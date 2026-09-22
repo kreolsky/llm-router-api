@@ -107,18 +107,9 @@ class TestRequestLoggerMiddleware:
         assert req_kwargs["user_id"] == "unknown"
 
     @patch("src.api.middleware.logger")
-    def test_post_body_logged_in_debug(self, mock_logger, client):
-        """POST body is logged when debug is enabled."""
+    def test_middleware_does_not_intercept_body(self, mock_logger, client):
+        """The middleware owns no body log — services log the parsed body."""
         mock_logger.is_debug_enabled.return_value = True
-        client.post("/echo", json={"key": "value"})
-        mock_logger.debug_data.assert_called()
-        data_call = mock_logger.debug_data.call_args
-        assert data_call.kwargs["title"] == "Request JSON"
-
-    @patch("src.api.middleware.logger")
-    def test_post_body_not_logged_when_debug_off(self, mock_logger, client):
-        """POST body is NOT logged when debug is disabled."""
-        mock_logger.is_debug_enabled.return_value = False
         client.post("/echo", json={"key": "value"})
         mock_logger.debug_data.assert_not_called()
 
@@ -137,7 +128,6 @@ EXPECTED_ENDPOINT_NAMES = {
     "/v1/models": "models",
     "/v1/models/{model_id:path}": "models",
     "/v1/capabilities": "capabilities",
-    "/tools/generate_key": "generate_key",
 }
 
 
