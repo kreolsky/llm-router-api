@@ -119,4 +119,13 @@ Branch `review-fixes-round` from `dev`. The plan file ships in commit 1.
 
 ## Progress
 
-Not started.
+- [x] 1 — `11531c5` selection + raise in the service, two tests.
+- [x] 2 — `a968df9` handler on StarletteHTTPException, `test_unhandled_exception_envelope.py`.
+- [x] 3 — `4c59398` persist guard, ARCH placement, README connector, redundant import, rule text.
+- [x] Full suite 732 passed / 1 skipped (4 chat failures were upstream `ConnectError`,
+      no chat-path code touched); gates green; merged into `dev` (`40552a9`).
+- Driven at review time: 404/405 envelope (unit + live `curl`), transcription refusal
+  400 + exactly one "Transcription Request Headers" line, `scripts/generate_key.py`
+  output, `curl -N` streaming smoke. Still never driven (operator procedures, need
+  env/config change or restart): DEBUG single-body-log, empty `models:` reload reject
+  on the live container, startup refusal message verbatim, cache mtime per cycle.
