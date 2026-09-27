@@ -9,7 +9,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from ...core.error_handling import enrich_stats_from_envelope
+from ...core.error_handling import enrich_stats_from_envelope, log_provider_error
 from ...core.logging import logger
 from ...core.usage_db import RequestStats
 
@@ -129,7 +129,9 @@ class StreamProcessor:
         })
 
         try:
-            async for chunk in self._passthrough(provider_stream, request_id, captured_usage, chunk_stats):
+            async for chunk in self._passthrough(
+                    provider_stream, captured_usage, chunk_stats,
+                    _StreamContext(request_id, user_id, model_id, provider_name, req_stats)):
                 yield chunk
         except Exception as e:
             logger.error("Stream processing failed", extra={
@@ -167,13 +169,14 @@ class StreamProcessor:
 
     async def _passthrough(self,
                            provider_stream: AsyncGenerator[bytes, None],
-                           request_id: str,
                            captured_usage: dict[str, Any],
-                           stats: "_StreamStats") -> AsyncGenerator[bytes, None]:
-        """Forward chunks unchanged, only peeking for reasoning fields and usage.
+                           stats: "_StreamStats",
+                           ctx: "_StreamContext") -> AsyncGenerator[bytes, None]:
+        """Forward chunks unchanged, only peeking for reasoning fields, usage
+        and upstream error frames.
 
-        Both peeks are gated on a raw byte substring test, so a chunk that
-        carries neither costs one scan and no parsing.
+        Every peek is gated on a raw byte substring test, so a chunk that
+        carries none of them costs one scan and no parsing.
         """
         is_debug = logger.is_debug_enabled()
         async for chunk in provider_stream:
@@ -182,15 +185,22 @@ class StreamProcessor:
 
             if is_debug:
                 preview = chunk.decode('utf-8', errors='replace')[:200].replace('\n', '\\n')
-                logger.debug(f"Chunk {stats.chunks} ({len(chunk)}B): {preview}", request_id=request_id)
+                logger.debug(f"Chunk {stats.chunks} ({len(chunk)}B): {preview}", request_id=ctx.request_id)
 
             if b'"reasoning"' in chunk:
                 chunk = _remap_reasoning_in_chunk(chunk)
 
+            # INVARIANT: the chunk is yielded before the usage and error peeks and
+            # is never rewritten by them.
+            # Why: the router is transparent — the client must see the upstream's
+            # own error text and framing; these peeks only log and record.
             yield chunk
 
             if b'"usage"' in chunk and b'"prompt_tokens"' in chunk:
                 _capture_usage_from_chunk(chunk, captured_usage)
+
+            if b'"error"' in chunk:
+                _note_upstream_error(chunk, ctx)
 
 
 @dataclass
@@ -198,6 +208,52 @@ class _StreamStats:
     """Per-stream counters used only for the completion and failure log lines."""
     chunks: int = 0
     bytes: int = 0
+
+
+@dataclass(frozen=True)
+class _StreamContext:
+    """Per-stream identity the error peek logs and records against."""
+    request_id: str
+    user_id: str
+    model_id: str
+    provider_name: str
+    req_stats: RequestStats
+
+
+def _note_upstream_error(chunk: bytes, ctx: _StreamContext) -> None:
+    """Log and record every complete ``data:`` line carrying a top-level error.
+
+    An upstream (llama-server) can fail after the 200 by sending a
+    ``{"error": {...}}`` frame and closing without ``[DONE]``; without this
+    the request logged as completed and its usage row read as a success.
+    Best-effort like the other peeks: a line split across chunks, or one that
+    is not JSON, passes unlogged.
+    """
+    try:
+        text = chunk.decode('utf-8')
+    except UnicodeDecodeError:
+        return
+    for line in text.split('\n'):
+        line = line.rstrip('\r')
+        if not line.startswith('data: '):
+            continue
+        try:
+            payload = json.loads(line[6:])
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict) or not isinstance(payload.get("error"), dict):
+            continue
+        code = payload["error"].get("code")
+        log_provider_error(
+            ctx.provider_name, line[:200],
+            code if isinstance(code, int) and not isinstance(code, bool) else 0,
+            request_id=ctx.request_id, user_id=ctx.user_id, model_id=ctx.model_id,
+        )
+        # overwrite=True: the upstream frame is the terminal error of the request.
+        enrich_stats_from_envelope(
+            ctx.req_stats, payload,
+            default_error_code="provider_stream_error", overwrite=True,
+        )
 
 
 def _capture_usage_from_chunk(chunk: bytes, captured_usage: dict[str, Any]) -> None:

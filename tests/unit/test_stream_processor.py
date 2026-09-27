@@ -1,6 +1,7 @@
 """Unit tests for StreamProcessor."""
 
 import json
+import logging
 
 import pytest
 from fastapi import HTTPException
@@ -297,6 +298,65 @@ class TestStatsEnrichment:
             async_gen([b"data: {}\n\n"]), "m", "r", "u", "p", stats=stats))
         assert stats.has_usage is False
         assert stats.total_tokens == 0
+
+    @pytest.mark.asyncio
+    async def test_upstream_error_frame_is_forwarded_verbatim_and_recorded(self):
+        """A llama-server late failure must not read as a clean success."""
+        sp = StreamProcessor()
+        stats = RequestStats(model_id="m", provider_name="p", stream=True)
+        chunks = [_DELTA_CHUNK, _LLAMA_ERROR_FRAME]
+        result = await collect(sp.process_stream(
+            async_gen(chunks), "m", "r", "u", "p", stats=stats))
+        assert b"".join(result) == b"".join(chunks)
+        assert stats.error_code == "provider_stream_error"
+        assert "peg-native" in stats.error_message
+        assert stats.has_usage is False
+
+    @pytest.mark.asyncio
+    async def test_upstream_error_frame_is_logged(self, caplog):
+        sp = StreamProcessor()
+        with caplog.at_level(logging.ERROR, logger="nnp-llm-router"):
+            await collect(sp.process_stream(
+                async_gen([_DELTA_CHUNK, _LLAMA_ERROR_FRAME]), "m", "r", "u", "p",
+                stats=RequestStats()))
+        errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+        assert any(m.startswith("Provider 'p' returned error 500:") for m in errors)
+        line = _LLAMA_ERROR_FRAME.decode().split("\n", 1)[0]
+        assert any(line[:200] in m for m in errors)
+
+    @pytest.mark.asyncio
+    async def test_delta_containing_error_substring_is_not_an_error(self, caplog):
+        sp = StreamProcessor()
+        stats = RequestStats()
+        delta = sse(json.dumps({"choices": [{"delta": {"content": "error"}}]}))
+        with caplog.at_level(logging.ERROR, logger="nnp-llm-router"):
+            result = await collect(sp.process_stream(
+                async_gen([delta]), "m", "r", "u", "p", stats=stats))
+        assert b'"error"' in delta  # the byte gate fires; only the parse must reject it
+        assert result == [delta]
+        assert stats.error_code is None
+        assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+    @pytest.mark.asyncio
+    async def test_error_frame_with_prior_usage_keeps_partial_usage(self):
+        sp = StreamProcessor()
+        stats = RequestStats()
+        usage = {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6}
+        await collect(sp.process_stream(
+            async_gen([sse(json.dumps({"usage": usage})), _LLAMA_ERROR_FRAME]),
+            "m", "r", "u", "p", stats=stats))
+        assert stats.has_usage is True
+        assert stats.total_tokens == 6
+        assert stats.error_code == "provider_stream_error"
+
+
+_DELTA_CHUNK = sse(json.dumps({"choices": [{"delta": {"content": "Hi"}}]}))
+_LLAMA_ERROR_FRAME = sse(json.dumps({"error": {
+    "code": 500,
+    "message": "Failed to parse input at pos 12: the model output does not match "
+               "the peg-native format",
+    "type": "server_error",
+}}))
 
 
 # ---------------------------------------------------------------------------
