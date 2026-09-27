@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse
@@ -28,6 +29,20 @@ from ..services.transcription_service import TranscriptionService
 from .middleware import RequestLoggerMiddleware
 from .stat_page import STATIC_DIR, stat_page
 from .stat_routes import router as stat_router
+
+# WHY: the deploy host has no git and receives src/ by rsync, so deploy-server writes
+# `git describe` into src/VERSION after the sync; read once, a restart picks up a new one.
+_VERSION_FILE = Path(__file__).resolve().parents[1] / "VERSION"
+
+
+def read_app_version(path: Path) -> str:
+    """The deployed release string, or "dev" for a tree deploy-server never stamped."""
+    if not path.is_file():
+        return "dev"
+    return path.read_text(encoding="utf-8").strip() or "dev"
+
+
+APP_VERSION = read_app_version(_VERSION_FILE)
 
 
 async def _validate_providers(config_manager: ConfigManager) -> None:
@@ -158,7 +173,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok"}
+    return {"status": "ok", "version": APP_VERSION}
 
 @app.get("/v1/models", name="models")
 async def list_models(

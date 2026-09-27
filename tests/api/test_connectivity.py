@@ -24,7 +24,10 @@ class TestConnectivity:
             response = await http_client.get(f"{base_url}/health")
         
         assert response.status_code == 200
-        assert response.json() == {"status": "ok"}
+        body = response.json()
+        assert body["status"] == "ok"
+        assert isinstance(body["version"], str) and body["version"]
+        assert set(body) == {"status", "version"}
         assert timer.elapsed < 5.0, "Health check should respond quickly"
     
     @pytest.mark.asyncio
@@ -192,7 +195,8 @@ class TestConnectivity:
             await asyncio.sleep(0.1)  # Small delay between requests
         
         # All responses should be identical
-        expected_response = {"status": "ok"}
+        expected_response = health_responses[0]
+        assert expected_response["status"] == "ok"
         for i, response_data in enumerate(health_responses):
             assert response_data == expected_response, \
                 f"Health response {i} differs from expected: {response_data}"
@@ -237,7 +241,7 @@ class TestConnectivity:
             
             # Every 25 requests, check that response is still consistent
             if i % 25 == 0:
-                assert response.json() == {"status": "ok"}
+                assert response.json()["status"] == "ok"
     
     @pytest.mark.asyncio
     async def test_service_timeout_handling(self, base_url: str):

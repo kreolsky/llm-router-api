@@ -4,7 +4,7 @@ OpenAI-compatible API gateway for multiple LLM providers. One endpoint, multiple
 
 ## Endpoints
 
-- `GET /health` — healthcheck
+- `GET /health` — healthcheck; `version` is the deployed release (`dev` for an unstamped tree)
 - `GET /v1/models` — list models (filtered by API key permissions) with declared capabilities (context, vision, pricing)
 - `GET /v1/models/{model_id}` — model details; `?refresh=true` for a debug best-effort upstream refresh
 - `GET /v1/capabilities` — flat per-model reasoning map `{supported, effort_levels}` (same access filtering as `/v1/models`)
@@ -257,6 +257,10 @@ See [tests/README.md](tests/README.md) for details on what each test file covers
 | `DEFAULT_STT_MODEL` | stt/dummy | Fallback transcription model |
 | `STAT_API_KEY` | *(unset)* | When set, `/stat/api/*` requires a matching `X-Stat-Key` header |
 | `USAGE_DB_PATH` | data/usage.db | SQLite path for the token usage dashboard. Opened by the container process only — the file lives on the `nnp-ai-router_usage_data` named volume; a host-side sqlite3 open loses later commits (see `INVARIANT(data-loss)` in `docker-compose.yml`) |
+
+## Releases
+
+Versions are annotated git tags `vMAJOR.MINOR.PATCH` on `main`, each with a release note in [`docs/release/`](docs/release/). Major = a change a client of the router has to adapt to (response shape, error envelope, access rule, removed endpoint or config key); minor = a new feature; patch = fixes only. The deployed version is visible at `GET /health`.
 
 ## License
 

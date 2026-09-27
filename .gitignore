@@ -24,6 +24,7 @@ logs/
 .env
 
 # Other
+src/VERSION
 .DS_Store
 *.sqlite3
 *.db

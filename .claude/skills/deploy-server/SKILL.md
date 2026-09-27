@@ -39,6 +39,14 @@ git diff --stat HEAD requirements.txt Dockerfile
 - Изменены `requirements.txt` или `Dockerfile` → **full rebuild** (Шаг 3b).
 - Изменены `config/` → **остановиться и спросить пользователя** (это authoritative на сервере).
 
+Версия, которую сервер покажет в `/health`:
+
+```bash
+VER=$(git describe --tags --always --dirty)   # v1.0.0 | v1.0.0-3-gabc1234 | …-dirty
+```
+
+Неизменённый релизный тег даёт чистое `vX.Y.Z`; всё остальное — честно видно как не-релиз.
+
 ### Шаг 2. Проверить состояние сервера
 
 ```bash
@@ -59,6 +67,7 @@ ssh docker "cat /home/serge/docker/server-ai-api/requirements.txt" | diff - requ
 
 ```bash
 rsync -av --delete src/ docker:/home/serge/docker/server-ai-api/src/
+ssh docker "echo '$VER' > /home/serge/docker/server-ai-api/src/VERSION"
 ssh docker "cd /home/serge/docker/server-ai-api && docker compose restart"
 ```
 
@@ -68,6 +77,7 @@ ssh docker "cd /home/serge/docker/server-ai-api && docker compose restart"
 rsync -av --delete src/ docker:/home/serge/docker/server-ai-api/src/
 scp requirements.txt docker:/home/serge/docker/server-ai-api/
 scp Dockerfile docker:/home/serge/docker/server-ai-api/
+ssh docker "echo '$VER' > /home/serge/docker/server-ai-api/src/VERSION"
 ssh docker "cd /home/serge/docker/server-ai-api && docker compose up --build -d"
 ```
 
@@ -75,7 +85,10 @@ ssh docker "cd /home/serge/docker/server-ai-api && docker compose up --build -d"
 
 ```bash
 sleep 3 && ssh docker "docker logs server-ai-api-api-1 --tail 20"
+ssh docker "curl -s localhost:8777/health"   # {"status":"ok","version":"$VER"}
 ```
+
+`VERSION` пишется ПОСЛЕ rsync: `--delete` удаляет его на сервере, потому что локально файла нет.
 
 Должно быть:
 - `Configuration manager initialized` — конфиги загрузились.
@@ -99,6 +112,7 @@ sleep 3 && ssh docker "docker logs server-ai-api-api-1 --tail 20"
 ```
 Synced src/ → docker:/home/serge/docker/server-ai-api/src/
 Restarted container, worker up clean
+/health: version <VER>
 ```
 
 При full rebuild — упомянуть, что пересобрался образ.

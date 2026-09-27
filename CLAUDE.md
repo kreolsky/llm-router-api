@@ -60,6 +60,10 @@ All env-backed settings are read via `ConfigManager` **once, at construction** i
 * **Per-provider concurrency**: optional `max_concurrent` key per provider in `providers.yaml` gates outbound requests via an `asyncio.Semaphore`; queued requests fail fast with 503 after `QUEUE_WAIT_TIMEOUT` (default `30.0`). Takes effect only after a config reload rebuilds the cache (semaphore is per-instance).
 * **Model capabilities cache**: `MODEL_CACHE_ENABLED` (default `true`), `MODEL_CACHE_REFRESH_INTERVAL` (default `3600`s), `MODEL_CACHE_PATH` (default `data/model_cache.json`). `data/` is mounted in `docker-compose.yml`, so the cache survives restarts.
 
+## Releases
+
+A release is an annotated tag `vX.Y.Z` + release note (`docs/release/`) + fast-forward `dev` → `main` — the `release` skill (pre-flight: `.claude/scripts/release-audit.py`). Releasing does NOT deploy: `deploy-server` stamps `git describe` into the server's `src/VERSION`, which `/health` reports.
+
 ## Architecture Discovery
 
 Start at **`SYSTEMS.md`** — the generated subsystem catalog (name · description · entry file
