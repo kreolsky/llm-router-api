@@ -18,9 +18,11 @@ every finding here is a judgement call.
 
 ## 1. Narrow the reading list
 
-    python3 .claude/scripts/marker-drift.py --system <name>     # or --path <dir>
+    grep -rnE "(ARCH|INVARIANT|WHY|DEBT|SYSTEM):" <entry dir>
+    git blame -L <line>,+1 <file>          # when the marker was written
+    git log --oneline -L <line>,+15:<file> # what changed under it since
 
-Ranks markers whose guarded code was changed by commits NEWER than the marker line. It is
+Read first the markers whose guarded code changed in commits NEWER than the marker line. It is
 a reading list, not a verdict — and it is blind to a marker that is wrong from birth, so
 also read the entry file's header in full. Ignore a file that was reformatted wholesale
 (blame resets every line and floods the ranking).
@@ -43,7 +45,7 @@ as the live contract and rebuilds what it describes.
 layer-consumer rule literally: name a consumer `file:line` AND the producer that writes
 what the consumer reads. No producer ⇒ dead, however many readers. A case already
 reported as a failure elsewhere is not a consumer. For an external surface the default is
-USE, not BUILD — grep `vendor/dsh/packages/` before accepting that a layer is ours.
+USE, not BUILD — check `requirements.txt` and the upstream API before accepting that a layer is ours.
 
 ## 3. Report — then stop
 
@@ -54,7 +56,9 @@ consequence is the finding; the line is supporting detail.
 
 **Never auto-fix, never delete.** A marker contradicting code means one of the two is
 wrong and the user decides which (`documentation.md`, Maintenance). A dead layer found
-here becomes its own task with its own plan whose only deliverable is the absence — folding
+here becomes its own task with its own plan whose only deliverable is the absence (written through plan mode, so
+`save-plan.py` lands it as `plans/<epoch-ms>-<slug>.md` — never `.claude/plans/`, never a
+date-named file; `workflow.md` → *Plans*) — folding
 the removal into whatever change found it is how it gets deferred forever.
 
 Close with a fix ORDER, not a question: vocabulary first (one place, once), then the lines

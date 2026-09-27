@@ -7,10 +7,11 @@ OpenAI-compatible API gateway for multiple LLM providers. One endpoint, multiple
 - `GET /health` — healthcheck
 - `GET /v1/models` — list models (filtered by API key permissions) with declared capabilities (context, vision, pricing)
 - `GET /v1/models/{model_id}` — model details; `?refresh=true` for a debug best-effort upstream refresh
+- `GET /v1/capabilities` — flat per-model reasoning map `{supported, effort_levels}` (same access filtering as `/v1/models`)
 - `POST /v1/chat/completions` — chat completion (streaming + non-streaming)
 - `POST /v1/embeddings` — text embeddings
 - `POST /v1/audio/transcriptions` — speech-to-text (model optional, fallback to `DEFAULT_STT_MODEL`)
-- `GET /stat/` — token usage dashboard (HTML); backed by `/stat/api/users`, `/stat/api/models`, `/stat/api/usage`
+- `GET /stat/` — token usage dashboard (HTML); backed by `/stat/api/users`, `/stat/api/models`, `/stat/api/usage`, `/stat/api/summary`, `/stat/api/requests` (guarded by `X-Stat-Key` when `STAT_API_KEY` is set)
 
 ## Quick Start
 
@@ -54,7 +55,10 @@ providers:
     headers:                              # extra headers (optional)
       HTTP-Referer: "https://myapp.com"
     identity: passthrough                 # optional: forward client headers minus the denylist (see below)
+    reasoning_dialect: deepseek           # optional: openai (default) | deepseek | openrouter
 ```
+
+`reasoning_dialect` re-shapes the client's `thinking` / `reasoning_effort` fields for the upstream family (`src/services/reasoning_dialect.py`); an unknown value fails startup validation.
 
 `type` determines the provider class: `openai` (pass-through). Any OpenAI-compatible API works with `type: openai`. The optional `proxy` key routes all of that provider's traffic through a SOCKS5/HTTP proxy (requires the `httpx[socks]` extra); unset = direct connection.
 
@@ -90,17 +94,20 @@ models:
     provider_model_name: deepseek-chat    # name sent to provider API
     options:                              # deep-merged into request body
       temperature: 0.7
+    reasoning_effort:                     # optional: gate the effort values sent upstream
+      allowed: [low, high, max]           # a client value outside this list -> 400
+      param: reasoning_effort             # or reasoning.effort
   embeddings/local:
     provider: embedding
     provider_model_name: text-embedding
     is_hidden: true                       # hidden from /v1/models listing
 ```
 
-`options` are deep-merged into the request body, so you can set default parameters per model. `is_hidden` keeps the model usable but invisible in the model list.
+`options` are deep-merged into the request body, so you can set default parameters per model. `is_hidden` keeps the model usable but invisible in the model list. `reasoning_effort` is soft-validated on load: a malformed block is logged and dropped (`src/services/reasoning_effort.py`).
 
 ### model_info.yaml — manual capability catalog
 
-Declares per-model capabilities (context, output limit, vision/modalities, supported parameters, pricing). This is the **manual override** layer; the **auto-cache** (`src/core/model_capabilities.py`, persisted to `data/model_cache.json`) fills the rest from upstream `/models` responses. `model_info.yaml` always wins over the auto-cache. All fields optional.
+Declares per-model capabilities (context, output limit, vision/modalities, supported parameters, pricing). This is the **manual override** layer; the **auto-cache** (`src/core/model_capabilities/`, persisted to `data/model_cache.json`) fills the rest from upstream `/models` responses. `model_info.yaml` always wins over the auto-cache. All fields optional.
 
 ```yaml
 model_info:
@@ -157,29 +164,39 @@ OPENAI_API_KEY=sk-...
 src/
 ├── api/
 │   ├── main.py            # FastAPI app, lifespan, routes
-│   └── middleware.py       # Request ID injection, request/response logging
+│   ├── middleware.py      # Request ID injection, request/response logging, usage row per request
+│   ├── stat_page.py       # /stat/ dashboard HTML
+│   └── stat_routes.py     # /stat/api/* JSON endpoints
 ├── core/
 │   ├── auth.py            # Bearer token extraction, constant-time comparison, endpoint access
-│   ├── config_manager.py  # YAML loading, hot-reload task, env-based properties
-│   ├── model_capabilities.py  # Capabilities: render/normalize/merge + auto-cache + background refresh
+│   ├── config_manager.py  # YAML loading, hot-reload task, frozen env Settings
+│   ├── context.py         # Typed RequestContext (request_id, project_name)
+│   ├── header_policy.py   # Passthrough-identity header denylist
+│   ├── model_capabilities/  # Capabilities: normalize/merge/render + auto-cache + background refresh
+│   ├── usage_db/          # SQLite usage writer and dashboard queries
 │   ├── error_handling/    # ErrorType enum, ErrorHandler factory, ErrorLogger
 │   └── logging/           # Logger with request/response/debug_data methods
 ├── providers/
-│   ├── __init__.py        # Provider registry with instance caching
+│   ├── __init__.py        # Provider registry: two-phase cache rebuild, lookup by name
 │   ├── base.py            # Retry decorator, _make_request, _stream_request, error extraction
-│   ├── openai.py          # OpenAI-compatible: chat, embeddings, transcriptions
+│   ├── pool.py            # Per-provider httpx client, concurrency gate, graceful drain
+│   └── openai.py          # OpenAI-compatible: chat, embeddings, transcriptions
 ├── services/
-│   ├── base.py            # Model validation (access → existence → provider), provider instantiation
+│   ├── base.py            # Model validation (access → existence → provider), dispatch funnel
 │   ├── chat_service/
 │   │   ├── chat_service.py    # Orchestrator: validation → provider → StreamingResponse/JSONResponse
 │   │   └── stream_processor.py # Byte-for-byte SSE pass-through, usage capture, reasoning remap
+│   ├── reasoning_effort.py    # Per-model effort policy (gate + default)
+│   ├── reasoning_dialect.py   # Per-provider thinking/effort translation
 │   ├── embedding_service.py
 │   ├── model_service.py   # Model listing/retrieval from merged capabilities (no network)
 │   └── transcription_service.py  # Default model fallback
 └── utils/
     ├── deep_merge.py      # Recursive dict merge (for model options)
-    ├── unicode.py          # Decode \uXXXX in provider error messages
-    └── generate_key.py    # nnp-v1-<64 hex chars> key generation
+    ├── unicode.py         # Decode \uXXXX in provider error messages
+    ├── mask.py            # Header masking for debug logs
+    ├── client_address.py  # Client address for logs and stats
+    └── generate_key.py    # nnp-v1-<64 hex chars> key generation (CLI: scripts/generate_key.py)
 ```
 
 ## Key Features
@@ -238,4 +255,9 @@ See [tests/README.md](tests/README.md) for details on what each test file covers
 | `LOG_MAX_BYTES` | 52428800 | Size at which a log file rotates (50 MB) |
 | `LOG_BACKUP_COUNT` | 3 | Rotated log files kept per log |
 | `DEFAULT_STT_MODEL` | stt/dummy | Fallback transcription model |
+| `STAT_API_KEY` | *(unset)* | When set, `/stat/api/*` requires a matching `X-Stat-Key` header |
 | `USAGE_DB_PATH` | data/usage.db | SQLite path for the token usage dashboard. Opened by the container process only — the file lives on the `nnp-ai-router_usage_data` named volume; a host-side sqlite3 open loses later commits (see `INVARIANT(data-loss)` in `docker-compose.yml`) |
+
+## License
+
+[MIT](LICENSE) © 2025-2026 Serge Zaigraeff

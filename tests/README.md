@@ -19,14 +19,17 @@ tests/
     ├── test_chat_service.py
     ├── test_config_manager.py
     ├── test_context.py
+    ├── test_dump_model_info.py
     ├── test_embedding_service.py
     ├── test_error_handling.py
     ├── test_logging_config.py
     ├── test_middleware.py
     ├── test_model_capabilities.py
     ├── test_model_service.py
+    ├── test_provider_pool.py
     ├── test_provider_registry.py
     ├── test_reasoning_dialect.py
+    ├── test_reasoning_effort.py
     ├── test_startup_validation.py
     ├── test_stat_api_params.py
     ├── test_stream_processor.py
@@ -63,14 +66,17 @@ python -m venv .venv
 | `test_chat_service.py` | 400 on invalid UTF-8/malformed JSON body; chat happy paths (stream + non-stream) with a stub provider |
 | `test_config_manager.py` | YAML loading (success, missing file, invalid YAML), hot-reload with callbacks, property getters with env var defaults |
 | `test_context.py` | `RequestContext` dataclass (`with_project_name`, `user_id`, accessor fallbacks) |
+| `test_dump_model_info.py` | `scripts/dump_model_info.py` draft printer over a cache file |
 | `test_embedding_service.py` | embedding request handling over a mock provider |
 | `test_error_handling.py` | `ErrorType` enum (format_message incl. placeholder strip, create_error_detail, status codes), `create_error` log level by status (4xx WARNING, 5xx ERROR), `create_provider_http_error` metadata |
 | `test_logging_config.py` | logging handler wiring |
 | `test_middleware.py` | Request ID injection, `X-Process-Time` header, request/response logging, POST body debug logging |
 | `test_model_capabilities.py` | provider model normalization, capability merge (manual layer wins), rendering, cache load/persist |
 | `test_model_service.py` | `/v1/models` listing/retrieval, hidden models, per-key access filtering, the flat `/v1/capabilities` map (one derivation with the listing, model_info merge survival) |
+| `test_provider_pool.py` | `ProviderPool` in isolation: httpx client construction, concurrency gate, in-flight accounting, graceful drain |
 | `test_provider_registry.py` | provider cache keyed by name, atomic rebuild, failed rebuild keeps old cache, background pool close |
 | `test_reasoning_dialect.py` | per-dialect funnel translation: openai drops `thinking`, deepseek identity, openrouter re-nests effort/`{enabled: false}` (title-shaped passes), vocabulary map `max→high`, malformed fields left in place |
+| `test_reasoning_effort.py` | per-model effort policy (allowed gate → 400, default injection, both param dialects) and its load-time validation |
 | `test_startup_validation.py` | eager provider validation collects all failures and refuses to start |
 | `test_stat_api_params.py` | `/stat/api` `days` query parameter contract |
 | `test_stream_processor.py` | Transparent pass-through, reasoning→reasoning_content remap, usage capture, per-stream usage isolation, `[DONE]` sentinel, mid-stream error frame, `open_provider_stream` priming |

@@ -79,7 +79,7 @@ sleep 3 && ssh docker "docker logs server-ai-api-api-1 --tail 20"
 
 Должно быть:
 - `Configuration manager initialized` — конфиги загрузились.
-- `Application startup complete` — стартанули все воркеры (uvicorn запускает 4).
+- `Application startup complete` — воркер стартанул (один: `API_WORKERS=1`, см. *Process Model* в `CLAUDE.md`).
 - Нет `Traceback`, `ImportError`, `ModuleNotFoundError`.
 
 Если ошибки — показать пользователю tail-50 и не считать деплой успешным.
@@ -98,7 +98,7 @@ sleep 3 && ssh docker "docker logs server-ai-api-api-1 --tail 20"
 
 ```
 Synced src/ → docker:/home/serge/docker/server-ai-api/src/
-Restarted container, N workers up clean
+Restarted container, worker up clean
 ```
 
 При full rebuild — упомянуть, что пересобрался образ.

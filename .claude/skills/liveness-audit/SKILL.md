@@ -48,7 +48,7 @@ Rank by the subtree behind each root, never by the candidate in front of you —
 with its line count even when it needs its own task, BEFORE any small one: a finding of a few
 dozen lines, offered alone, is not an audit result.
 
-`.claude/scripts/deletion-tail.py <name>` finds residual references so a later sweep lands
+`grep -rn <name> src tests config .claude` finds residual references so a later sweep lands
 in one commit instead of three.
 
 ## 3. One numbered round of root questions — then stop
@@ -69,14 +69,13 @@ owes its own answer. State the premise: the operator often holds a fact that voi
 ## 4. Never delete here
 
 The audit's deliverable is the ranked question round. A root ruled unwanted becomes its
-own task whose only deliverable is the absence — folding removal into the audit that found
+own task whose only deliverable is the absence (planned through plan mode, so `save-plan.py`
+lands it as `plans/<epoch-ms>-<slug>.md` — never `.claude/plans/`, never a date-named file) — folding removal into the audit that found
 it is how it gets deferred forever.
 
 **Demolition order once approved is intent → root → sweep, and only the middle step is
 dangerous**: kill the intent (the product decision, the doc, the manifest) and the root stops
 being a root; cut the root under a live drive; the subtree is then unreachable and its removal
-proves nothing, so it is mechanical work a cheap model finishes. Leaf-first demolition in the
-same window cost 33 `fix` commits in 11 days — see
-`docs/pi-to-dsh-migration-postmortem.md` § "1 сентября".
+proves nothing, so it is mechanical work a cheap model finishes.
 
 "The walk found no root" is never a reason to keep a layer quietly. Say it, with the size.

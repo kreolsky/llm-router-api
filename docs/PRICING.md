@@ -6,7 +6,7 @@ the locally-hosted models. Stored pricing is **USD per token** (OpenRouter
 convention, see the INVARIANT in `src/core/usage_db/writer.py`) and cost is
 frozen at write time, so these rates only affect **new** `usage_events` rows.
 
-Cost formula (src/core/usage_db/writer.py:206-209):
+Cost formula (`_compute_cost_usd` in src/core/usage_db/writer.py):
 
 ```
 cost = max(prompt - cached, 0) * prompt_price
