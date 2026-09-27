@@ -103,16 +103,12 @@ class ConfigManager:
         self._on_reload_callbacks = []
         self._post_swap_callbacks = []
         
-        self.debug = _env_bool("DEBUG", False)
-        self.log_level = os.getenv("LOG_LEVEL", "INFO")
         self.settings = self._read_env_settings()
 
         # Log configuration initialization
         logger.info("Configuration manager initialized", extra={
             "config": {
                 "config_dir": config_dir,
-                "debug_enabled": self.debug,
-                "log_level": self.log_level,
                 "providers_config_exists": os.path.exists(self.providers_path),
                 "models_config_exists": os.path.exists(self.models_path),
                 "user_keys_config_exists": os.path.exists(self.user_keys_path),

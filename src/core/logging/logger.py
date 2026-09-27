@@ -52,36 +52,21 @@ class Logger:
                 
         return kwargs, exc_info
 
+    def _log(self, level: int, message: str, **kwargs):
+        processed_kwargs, exc_info = self._process_kwargs(kwargs)
+        self._logger.log(level, message, extra=processed_kwargs or None, exc_info=exc_info)
+
     def info(self, message: str, **kwargs):
-        processed_kwargs, _ = self._process_kwargs(kwargs)
-        if processed_kwargs:
-            self._logger.info(message, extra=processed_kwargs)
-        else:
-            self._logger.info(message)
+        self._log(logging.INFO, message, **kwargs)
 
     def debug(self, message: str, **kwargs):
-        processed_kwargs, _ = self._process_kwargs(kwargs)
-        if processed_kwargs:
-            self._logger.debug(message, extra=processed_kwargs)
-        else:
-            self._logger.debug(message)
+        self._log(logging.DEBUG, message, **kwargs)
 
     def warning(self, message: str, **kwargs):
-        processed_kwargs, _ = self._process_kwargs(kwargs)
-        if processed_kwargs:
-            self._logger.warning(message, extra=processed_kwargs)
-        else:
-            self._logger.warning(message)
+        self._log(logging.WARNING, message, **kwargs)
 
     def error(self, message: str, **kwargs):
-        processed_kwargs, exc_info = self._process_kwargs(kwargs)
-        if exc_info is None:
-            exc_info = False
-            
-        if processed_kwargs:
-            self._logger.error(message, extra=processed_kwargs, exc_info=exc_info)
-        else:
-            self._logger.error(message, exc_info=exc_info)
+        self._log(logging.ERROR, message, **kwargs)
     
     def _truncate_large_values(self, data: Any, max_length: int = 1000) -> Any:
         """Recursively truncate large strings in nested data structures."""
