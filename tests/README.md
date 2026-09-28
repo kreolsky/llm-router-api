@@ -62,7 +62,7 @@ python -m venv .venv
 |---|---|
 | `test_auth.py` | `get_api_key` via raw ASGI (non-ASCII bearer → 401 envelope, missing/invalid key), `check_endpoint_access` (empty/unset list unrestricted, mismatch 403 + user_id logged) |
 | `test_base_provider.py` | `retry_on_rate_limit` (backoff, 429 detection, config resolution), `__init__` validation, identity/static-headers/reasoning-dialect fail-fast, `_get_timeout`/`_create_timeout`, concurrency semaphore + queue 503, graceful drain, late-acquisition fail-fast, header-merge parity, defaults drift tripwire, multipart retry resends audio |
-| `test_base_service.py` | `_validate_and_get_config` (access check before existence — 403 before 404), model/provider resolution, `_prepare_dispatch` (incl. the reasoning-dialect translation wiring, gate-before-translate), identity headers |
+| `test_base_service.py` | `resolve_model` (access check before existence — 403 before 404), model/provider resolution, `_prepare_dispatch` (incl. the reasoning-dialect translation wiring from the called instance's entry, gate-before-translate), identity headers |
 | `test_chat_service.py` | 400 on invalid UTF-8/malformed JSON body; chat happy paths (stream + non-stream) with a stub provider |
 | `test_config_manager.py` | YAML loading (success, missing file, invalid YAML), hot-reload with callbacks, property getters with env var defaults |
 | `test_context.py` | `RequestContext` dataclass (`with_project_name`, `user_id`, accessor fallbacks) |

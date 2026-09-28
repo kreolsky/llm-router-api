@@ -8,7 +8,8 @@ harness (dsh) emits the DeepSeek wire shape — ``thinking: {type}`` on every
 turn, ``reasoning_effort`` beside it when a level is resolved — whatever the
 upstream; the router re-shapes those two fields per dialect:
 
-    reasoning_dialect: openai | deepseek | openrouter   (providers.yaml; default openai)
+    reasoning_dialect: openai | deepseek | openrouter   (providers.yaml; default openai;
+                       validated by core/config_schema.py parse_provider)
 
   openai (default): ``thinking`` is dropped — the dialect has no such field —
       and ``reasoning_effort`` passes through untouched.
@@ -35,45 +36,10 @@ whatever its shape.
 """
 from typing import Any
 
-from ..core.error_handling import ErrorType, create_error
-
-# Wire dialects a provider entry may name; the first is the default because a
-# third-party OpenAI-compat gateway must work with no config change.
-REASONING_DIALECTS = ("openai", "deepseek", "openrouter")
-DEFAULT_REASONING_DIALECT = "openai"
-
 # dsh spells `max`; OpenRouter's reasoning.effort tops out at `high`. Anything
 # not in the map passes through verbatim — the upstream judges its own vocabulary.
 _OPENROUTER_EFFORT_MAP = {"low": "low", "medium": "medium", "high": "high", "max": "high"}
 _THINKING_TYPES = ("enabled", "disabled")
-
-
-def validate_reasoning_dialect(value: Any, provider_name: str | None = None) -> None:
-    """Raise PROVIDER_CONFIG_ERROR unless ``value`` names a known dialect.
-
-    Consumed by BaseProvider.__init__ (startup validation / reload veto), so a
-    typo can never reach the funnel as a silent ``openai``.
-    """
-    if value not in REASONING_DIALECTS:
-        raise create_error(
-            ErrorType.PROVIDER_CONFIG_ERROR,
-            error_details=(
-                f"Unknown reasoning_dialect: {value!r} "
-                f"(expected one of: {', '.join(REASONING_DIALECTS)})."
-            ),
-            provider_name=provider_name,
-        )
-
-
-def resolve_dialect(provider_config: Any) -> str:
-    """Defensive read of a provider entry's dialect; absent/unknown -> default.
-
-    Construction-time validation already rejected unknown values on the real
-    path; mocked configs in tests bypass it, so the funnel re-reads tolerantly
-    (same defensive pattern as parse_effort_policy on the request path).
-    """
-    dialect = (provider_config or {}).get("reasoning_dialect", DEFAULT_REASONING_DIALECT)
-    return dialect if dialect in REASONING_DIALECTS else DEFAULT_REASONING_DIALECT
 
 
 def _thinking_type(request_body: dict[str, Any]) -> str | None:
@@ -130,7 +96,7 @@ def _translate_openrouter(request_body: dict[str, Any]) -> dict[str, Any]:
 
 def translate_reasoning_fields(
     request_body: dict[str, Any],
-    provider_config: Any,
+    dialect: str,
 ) -> dict[str, Any]:
     """Re-shape ``thinking`` / ``reasoning_effort`` per the provider's dialect.
 
@@ -139,7 +105,6 @@ def translate_reasoning_fields(
     body; a body carrying none of the fields is returned unchanged for every
     dialect.
     """
-    dialect = resolve_dialect(provider_config)
     if dialect == "deepseek":
         # Native dialect: both fields stay exactly where the client put them.
         return request_body

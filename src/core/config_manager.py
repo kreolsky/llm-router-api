@@ -8,6 +8,7 @@ from typing import Any
 
 import yaml
 
+from .config_schema import ConfigError, RouterConfig, parse_config
 from .logging import logger
 
 # ---------------------------------------------------------------------------
@@ -96,23 +97,21 @@ class ConfigManager:
         self.models_path = os.path.join(config_dir, "models.yaml")
         self.user_keys_path = os.path.join(config_dir, "user_keys.yaml")
         self.model_info_path = os.path.join(config_dir, "model_info.yaml")
-        self.config = self._load_config(fail_on_error=True)
-        self._assert_config_complete(self.config)
+        raw = self._load_config(fail_on_error=True)
+        self._assert_config_complete(raw)
+        # A ConfigError here refuses to start — every hard problem listed at once.
+        self.config: RouterConfig = parse_config(raw)
         self.last_mtimes = {} # Initialize last_mtimes as instance variable
         self._initialize_mtimes()
         self._on_reload_callbacks = []
         self._post_swap_callbacks = []
         
-        self.debug = _env_bool("DEBUG", False)
-        self.log_level = os.getenv("LOG_LEVEL", "INFO")
         self.settings = self._read_env_settings()
 
         # Log configuration initialization
         logger.info("Configuration manager initialized", extra={
             "config": {
                 "config_dir": config_dir,
-                "debug_enabled": self.debug,
-                "log_level": self.log_level,
                 "providers_config_exists": os.path.exists(self.providers_path),
                 "models_config_exists": os.path.exists(self.models_path),
                 "user_keys_config_exists": os.path.exists(self.user_keys_path),
@@ -121,7 +120,7 @@ class ConfigManager:
         })
 
     def _load_config(self, fail_on_error: bool = False) -> dict[str, Any]:
-        """Load and merge all YAML config files."""
+        """Load all YAML config files into one raw dict of sections (parsed by parse_config)."""
         config = {}
         file_map = [
             (self.providers_path, 'providers', True),
@@ -151,92 +150,9 @@ class ConfigManager:
                 logger.error(f"Error parsing YAML file {path}: {e}", exc_info=True)
                 if fail_on_error and required:
                     raise RuntimeError(f"Failed to parse config: {path}") from e
-        self._validate_model_info(config)
-        self._validate_models(config)
         return config
 
-    # Allowed top-level keys per model_info entry (normalized schema; see
-    # config/model_info.yaml header). Used by the soft validation below.
-    _MODEL_INFO_KEYS = {
-        "name", "description", "context_length", "max_completion_tokens",
-        "is_moderated", "architecture", "supported_parameters", "reasoning", "pricing",
-    }
-    _MODEL_INFO_ARCH_KEYS = {
-        "input_modalities", "output_modalities", "tokenizer", "instruct_type",
-    }
-
-    @staticmethod
-    def _validate_model_info(config: dict[str, Any]) -> None:
-        """Soft-validate model_info: warn on unknown keys and orphan entries.
-
-        Non-fatal (model_info is required=False). Warns when an entry has no
-        matching model in models.yaml, or uses keys outside the normalized
-        schema — both indicate a stale or mistyped catalog.
-        """
-        model_info = config.get("model_info") or {}
-        if not isinstance(model_info, dict) or not model_info:
-            return
-        models = config.get("models") or {}
-        for model_id, entry in model_info.items():
-            if not isinstance(entry, dict):
-                logger.warning(
-                    f"model_info entry '{model_id}' is not a mapping, ignoring",
-                    extra={"config": {"model_info_key": model_id}},
-                )
-                continue
-            if model_id not in models:
-                logger.warning(
-                    f"model_info entry '{model_id}' has no matching model in models.yaml",
-                    extra={"config": {"model_info_key": model_id}},
-                )
-            unknown = set(entry) - ConfigManager._MODEL_INFO_KEYS
-            if unknown:
-                logger.warning(
-                    f"model_info entry '{model_id}' has unknown keys: {sorted(unknown)}",
-                    extra={"config": {"model_info_key": model_id, "unknown_keys": sorted(unknown)}},
-                )
-            arch = entry.get("architecture")
-            if isinstance(arch, dict):
-                arch_unknown = set(arch) - ConfigManager._MODEL_INFO_ARCH_KEYS
-                if arch_unknown:
-                    logger.warning(
-                        f"model_info entry '{model_id}'.architecture has unknown keys: {sorted(arch_unknown)}",
-                        extra={"config": {"model_info_key": model_id, "unknown_keys": sorted(arch_unknown)}},
-                    )
-
-    @staticmethod
-    def _validate_models(config: dict[str, Any]) -> None:
-        """Soft-validate models.yaml: warn and DROP an invalid reasoning_effort block.
-
-        Why soft: models.yaml is hot-reloaded every 5s; a hard raise there
-        kills a running router on a typo. Dropping (not just warning) makes
-        "ignore the whole block" real for every downstream consumer — the
-        funnel and /v1/models never see a malformed block. A model carrying
-        BOTH an options effort key and a reasoning_effort block gets the same
-        verdict: options wins at merge time (providers/base.py
-        _apply_model_config), so the block would advertise a policy the
-        upstream never sees. A typo'd key drops the block too — a misspelled
-        ``param`` would otherwise send the effort to the wrong wire location
-        while /v1/models still advertised the policy.
-        """
-        # WHY function-level import: core must not import services at module
-        # level (services import core); parse_effort_policy is the shared
-        # single source of validity with the request-path enforcement.
-        from ..services.reasoning_effort import parse_effort_policy
-
-        models = config.get("models") or {}
-        for model_id, model_cfg in models.items():
-            if not isinstance(model_cfg, dict) or "reasoning_effort" not in model_cfg:
-                continue
-            _, reason = parse_effort_policy(model_cfg)
-            if reason is not None:
-                logger.warning(
-                    f"models.yaml '{model_id}': ignoring reasoning_effort block — {reason}",
-                    extra={"config": {"model": model_id}},
-                )
-                del model_cfg["reasoning_effort"]
-
-    def get_config(self) -> dict[str, Any]:
+    def get_config(self) -> RouterConfig:
         return self.config
 
     @staticmethod
@@ -271,7 +187,7 @@ class ConfigManager:
     def add_reload_callback(self, callback, name: str = ""):
         """Register an async callback invoked BEFORE the new config is published (pre-swap phase).
 
-        callback signature: ``async def cb(new_config: dict) -> None``.
+        callback signature: ``async def cb(new_config: RouterConfig) -> None``.
         Pre-swap callbacks can VETO the reload: on callback failure the swap
         is aborted and self.config keeps the previous value. Callbacks run
         sequentially. Use add_post_swap_callback for work that must observe
@@ -282,7 +198,7 @@ class ConfigManager:
     def add_post_swap_callback(self, callback, name: str = ""):
         """Register an async callback invoked AFTER self.config is swapped (post-swap phase).
 
-        callback signature: ``async def cb(new_config: dict) -> None``.
+        callback signature: ``async def cb(new_config: RouterConfig) -> None``.
         Post-swap callbacks run once the new config is already published, so a
         failure can only be logged — there is nothing to roll back to. This is
         the phase that publishes derived caches (e.g. the provider cache) so
@@ -293,8 +209,9 @@ class ConfigManager:
     async def reload_config(self) -> bool:
         """Reload config from disk in two phases.
 
-        Phase 1 (pre-swap): every add_reload_callback runs with the freshly
-        loaded new_config while self.config still holds the previous value. A
+        Phase 1 (pre-swap): the freshly loaded files are parsed (a ConfigError
+        rejects the reload like a vetoing callback), then every
+        add_reload_callback runs with the new_config while self.config still holds the previous value. A
         raising callback ABORTS the reload: self.config is not swapped and
         False is returned — the previous config stays in place.
 
@@ -316,50 +233,14 @@ class ConfigManager:
                 "config_dir": self.config_dir
             }
         })
-        new_config = self._load_config(fail_on_error=False)
-        if not self._missing_sections(new_config):
-            for name, cb in self._on_reload_callbacks:
-                try:
-                    await cb(new_config)
-                except Exception:
-                    logger.error(
-                        f"Config reload callback failed: {name or '(unnamed)'}",
-                        extra={"config": {"operation": "reload_callback_error", "callback_name": name}},
-                        exc_info=True,
-                    )
-                    return False
+        raw = self._load_config(fail_on_error=False)
+        if not self._missing_sections(raw):
+            new_config = self._parse_for_reload(raw)
+            if new_config is None or not await self._run_pre_swap_callbacks(new_config):
+                return False
             self.config = new_config
-            post_swap_failed = False
-            for name, cb in self._post_swap_callbacks:
-                try:
-                    await cb(new_config)
-                except Exception:
-                    logger.error(
-                        f"Post-swap config reload callback failed: {name or '(unnamed)'}",
-                        extra={"config": {"operation": "reload_post_swap_error", "callback_name": name}},
-                        exc_info=True,
-                    )
-                    post_swap_failed = True
-            # INVARIANT: a reload whose post-swap callback failed never logs
-            # the plain success line.
-            # Why: the swap IS published but a derived cache (the provider
-            # registry) is not, and the retry below reprints this line every
-            # poll interval — an INFO "Configuration reloaded" repeating
-            # forever is what an operator reads as "all good" while the
-            # router serves a half-applied state.
-            log = logger.warning if post_swap_failed else logger.info
-            log(
-                "Configuration reloaded, but a post-swap callback failed - retrying"
-                if post_swap_failed else "Configuration reloaded",
-                extra={
-                    "config": {
-                        "operation": "reload_complete",
-                        "post_swap_failed": post_swap_failed,
-                        "providers_count": len(self.config.get('providers', {})),
-                        "models_count": len(self.config.get('models', {})),
-                        "user_keys_count": len(self.config.get('user_keys', {}))
-                    }
-                })
+            post_swap_failed = not await self._run_post_swap_callbacks(new_config)
+            self._log_reload_complete(post_swap_failed)
             # WHY: True here would let _poll_once commit last_mtimes, and a
             # half-applied reload (the config swapped, a derived cache like
             # the provider registry not) would never be retried until the
@@ -374,6 +255,71 @@ class ConfigManager:
 
         logger.warning("Partial config reload rejected, keeping previous config")
         return False
+
+    def _parse_for_reload(self, raw: dict) -> RouterConfig | None:
+        """Parse the reloaded files; None (logged) when a ConfigError rejects them."""
+        try:
+            return parse_config(raw)
+        except ConfigError as e:
+            # Same veto as a refusing pre-swap callback: the previous
+            # config keeps serving and the next poll retries.
+            logger.error(
+                f"Config reload rejected, keeping previous config: {e}",
+                extra={"config": {"operation": "reload_rejected"}},
+            )
+            return None
+
+    def _log_reload_complete(self, post_swap_failed: bool) -> None:
+        """Log the outcome of an applied reload."""
+        # INVARIANT: a reload whose post-swap callback failed never logs
+        # the plain success line.
+        # Why: the swap IS published but a derived cache (the provider
+        # registry) is not, and the retry below reprints this line every
+        # poll interval — an INFO "Configuration reloaded" repeating
+        # forever is what an operator reads as "all good" while the
+        # router serves a half-applied state.
+        log = logger.warning if post_swap_failed else logger.info
+        log(
+            "Configuration reloaded, but a post-swap callback failed - retrying"
+            if post_swap_failed else "Configuration reloaded",
+            extra={
+                "config": {
+                    "operation": "reload_complete",
+                    "post_swap_failed": post_swap_failed,
+                    "providers_count": len(self.config.providers),
+                    "models_count": len(self.config.models),
+                    "user_keys_count": len(self.config.user_keys)
+                }
+            })
+
+    async def _run_pre_swap_callbacks(self, new_config: RouterConfig) -> bool:
+        """Run every pre-swap callback; False on the first one that raises (a veto)."""
+        for name, cb in self._on_reload_callbacks:
+            try:
+                await cb(new_config)
+            except Exception:
+                logger.error(
+                    f"Config reload callback failed: {name or '(unnamed)'}",
+                    extra={"config": {"operation": "reload_callback_error", "callback_name": name}},
+                    exc_info=True,
+                )
+                return False
+        return True
+
+    async def _run_post_swap_callbacks(self, new_config: RouterConfig) -> bool:
+        """Run EVERY post-swap callback (a failure does not stop the rest); False if any raised."""
+        all_ok = True
+        for name, cb in self._post_swap_callbacks:
+            try:
+                await cb(new_config)
+            except Exception:
+                logger.error(
+                    f"Post-swap config reload callback failed: {name or '(unnamed)'}",
+                    extra={"config": {"operation": "reload_post_swap_error", "callback_name": name}},
+                    exc_info=True,
+                )
+                all_ok = False
+        return all_ok
 
     @property
     def _watched_files(self) -> list:

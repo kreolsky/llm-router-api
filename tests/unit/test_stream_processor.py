@@ -1,4 +1,4 @@
-"""Unit tests for StreamProcessor."""
+"""Unit tests for the SSE pass-through (process_stream and its helpers)."""
 
 import json
 import logging
@@ -6,7 +6,8 @@ import logging
 import pytest
 from fastapi import HTTPException
 
-from src.services.chat_service.stream_processor import StreamProcessor, duplicate_reasoning_field
+from src.core.usage_db import RequestStats
+from src.services.chat_service.stream_processor import duplicate_reasoning_field, process_stream
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -25,10 +26,6 @@ def sse(data_str, sep="\n\n"):
     return f"data: {data_str}{sep}".encode()
 
 
-def make_processor():
-    return StreamProcessor()
-
-
 # ---------------------------------------------------------------------------
 # 1. Transparent mode
 # ---------------------------------------------------------------------------
@@ -37,15 +34,13 @@ class TestTransparentMode:
 
     @pytest.mark.asyncio
     async def test_chunks_pass_through(self):
-        sp = StreamProcessor()
         chunks = [b"data: hello\n\n", b"data: world\n\n"]
-        result = await collect(sp.process_stream(async_gen(chunks), "m", "r", "u"))
+        result = await collect(process_stream(async_gen(chunks), "m", "r", "u", "p", RequestStats()))
         assert result == chunks
 
     @pytest.mark.asyncio
     async def test_empty_stream(self):
-        sp = StreamProcessor()
-        result = await collect(sp.process_stream(async_gen([]), "m", "r", "u"))
+        result = await collect(process_stream(async_gen([]), "m", "r", "u", "p", RequestStats()))
         assert result == []
 
 
@@ -72,48 +67,43 @@ class TestErrorFrame:
 
     @pytest.mark.asyncio
     async def test_generic_exception(self):
-        sp = StreamProcessor()
         result = b"".join(await collect(
-            sp.process_stream(raising_gen(ValueError("oops")), "m", "r", "u")))
+            process_stream(raising_gen(ValueError("oops")), "m", "r", "u", "p", RequestStats())))
         decoded = _parse_error_frame(result)
         assert decoded["error"]["code"] == 500
         assert "oops" in decoded["error"]["message"]
 
     @pytest.mark.asyncio
     async def test_http_exception_string_detail(self):
-        sp = StreamProcessor()
         exc = HTTPException(status_code=403, detail="forbidden")
         result = b"".join(await collect(
-            sp.process_stream(raising_gen(exc), "m", "r", "u")))
+            process_stream(raising_gen(exc), "m", "r", "u", "p", RequestStats())))
         decoded = _parse_error_frame(result)
         assert decoded["error"]["code"] == 403
         assert "forbidden" in decoded["error"]["message"]
 
     @pytest.mark.asyncio
     async def test_http_exception_dict_detail(self):
-        sp = StreamProcessor()
         detail = {"error": {"code": 429, "message": "rate limited"}}
         exc = HTTPException(status_code=429, detail=detail)
         result = b"".join(await collect(
-            sp.process_stream(raising_gen(exc), "m", "r", "u")))
+            process_stream(raising_gen(exc), "m", "r", "u", "p", RequestStats())))
         decoded = _parse_error_frame(result)
         assert decoded["error"]["code"] == 429
         assert decoded["error"]["message"] == "rate limited"
 
     @pytest.mark.asyncio
     async def test_returns_bytes_with_sse_framing(self):
-        sp = StreamProcessor()
         result = b"".join(await collect(
-            sp.process_stream(raising_gen(RuntimeError("x")), "m", "r", "u")))
+            process_stream(raising_gen(RuntimeError("x")), "m", "r", "u", "p", RequestStats())))
         assert isinstance(result, bytes)
         assert result.startswith(b"data: ")
         assert result.endswith(b"\n\n")
 
     @pytest.mark.asyncio
     async def test_ends_with_done_sentinel(self):
-        sp = StreamProcessor()
         result = b"".join(await collect(
-            sp.process_stream(raising_gen(RuntimeError("x")), "m", "r", "u")))
+            process_stream(raising_gen(RuntimeError("x")), "m", "r", "u", "p", RequestStats())))
         assert result.endswith(b"data: [DONE]\n\n")
 
 
@@ -125,8 +115,7 @@ class TestConcurrentStreamUsageIsolation:
 
     @pytest.mark.asyncio
     async def test_two_interleaved_streams_record_own_usage(self):
-        """Two concurrent streams over one processor each capture their own usage."""
-        sp = StreamProcessor()
+        """Two streams each capture their own usage."""
 
         usage_a = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
         usage_b = {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
@@ -144,7 +133,7 @@ class TestConcurrentStreamUsageIsolation:
                 yield c
 
         async def run_and_capture(gen, tag):
-            chunks = await collect(sp.process_stream(gen, tag, tag, tag))
+            chunks = await collect(process_stream(gen, tag, tag, tag, tag, RequestStats()))
             recorded.append((tag, chunks))
 
         await run_and_capture(gen_a(), "A")
@@ -190,28 +179,25 @@ class TestReasoningFieldDuplication:
 
     @pytest.mark.asyncio
     async def test_transparent_stream_remapped(self):
-        sp = StreamProcessor()
         chunk = sse(json.dumps({"choices": [{"delta": {"reasoning": "We"}}]}))
-        result = await collect(sp.process_stream(async_gen([chunk]), "m", "r", "u"))
+        result = await collect(process_stream(async_gen([chunk]), "m", "r", "u", "p", RequestStats()))
         parsed = json.loads(result[0].decode("utf-8").split("data: ", 1)[1].split("\n\n")[0])
         assert parsed["choices"][0]["delta"]["reasoning_content"] == "We"
 
     @pytest.mark.asyncio
     async def test_transparent_stream_without_reasoning_unchanged(self):
-        sp = StreamProcessor()
         chunk = sse(json.dumps({"choices": [{"delta": {"content": "hi"}}]}))
-        result = await collect(sp.process_stream(async_gen([chunk]), "m", "r", "u"))
+        result = await collect(process_stream(async_gen([chunk]), "m", "r", "u", "p", RequestStats()))
         assert result == [chunk]
 
     @pytest.mark.asyncio
     async def test_transparent_split_json_not_corrupted(self):
         """A JSON line split across chunks must pass through without corruption."""
-        sp = StreamProcessor()
         full = 'data: {"choices": [{"delta": {"reasoning": "hello"}}]}\n\n'
         encoded = full.encode("utf-8")
         mid = encoded.index(b'"hello') + 3
-        result = await collect(sp.process_stream(
-            async_gen([encoded[:mid], encoded[mid:]]), "m", "r", "u"))
+        result = await collect(process_stream(
+            async_gen([encoded[:mid], encoded[mid:]]), "m", "r", "u", "p", RequestStats()))
         combined = b"".join(result).decode("utf-8")
         parsed = json.loads(combined.split("data: ", 1)[1].split("\n\n")[0])
         assert parsed["choices"][0]["delta"]["reasoning"] == "hello"
@@ -221,15 +207,11 @@ class TestReasoningFieldDuplication:
 # 11. Stats-holder enrichment (frame and row cannot drift)
 # ---------------------------------------------------------------------------
 
-from src.core.usage_db import RequestStats  # noqa: E402
-
-
 class TestStatsEnrichment:
 
     @pytest.mark.asyncio
     async def test_mid_stream_error_writes_error_code_and_partial_usage(self):
         """A failure after the 200 must not read as a success."""
-        sp = StreamProcessor()
         stats = RequestStats(model_id="m", provider_name="p", stream=True)
         usage = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
         chunks = [sse(json.dumps({"usage": usage}))]
@@ -243,7 +225,7 @@ class TestStatsEnrichment:
                                   "metadata": {"error_code": "internal_server_error"}}},
             )
 
-        result = await collect(sp.process_stream(gen(), "m", "r", "u", "p", stats=stats))
+        result = await collect(process_stream(gen(), "m", "r", "u", "p", stats=stats))
         assert any(b"[DONE]" in r for r in result)
         assert stats.error_code == "internal_server_error"
         assert "upstream died" in stats.error_message
@@ -254,36 +236,33 @@ class TestStatsEnrichment:
 
     @pytest.mark.asyncio
     async def test_generic_exception_classified_internal_server_error(self):
-        sp = StreamProcessor()
         stats = RequestStats()
 
         async def gen():
             yield b"data: {}\n\n"
             raise ValueError("kaboom")
 
-        await collect(sp.process_stream(gen(), "m", "r", "u", "p", stats=stats))
+        await collect(process_stream(gen(), "m", "r", "u", "p", stats=stats))
         assert stats.error_code == "internal_server_error"
         assert "kaboom" in stats.error_message
 
     @pytest.mark.asyncio
     async def test_http_exception_without_metadata_is_coarse(self):
-        sp = StreamProcessor()
         stats = RequestStats()
 
         async def gen():
             yield b"data: {}\n\n"
             raise HTTPException(status_code=403, detail="forbidden")
 
-        await collect(sp.process_stream(gen(), "m", "r", "u", "p", stats=stats))
+        await collect(process_stream(gen(), "m", "r", "u", "p", stats=stats))
         assert stats.error_code == "internal_server_error"
         assert stats.error_message == "forbidden"
 
     @pytest.mark.asyncio
     async def test_successful_stream_keeps_usage_only(self):
-        sp = StreamProcessor()
         stats = RequestStats(model_id="m")
         usage = {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}
-        await collect(sp.process_stream(
+        await collect(process_stream(
             async_gen([sse(json.dumps({"usage": usage}))]), "m", "r", "u", "p", stats=stats))
         assert stats.has_usage is True
         assert stats.total_tokens == 10
@@ -292,9 +271,8 @@ class TestStatsEnrichment:
 
     @pytest.mark.asyncio
     async def test_usage_stays_empty_when_provider_sent_no_usage_chunk(self):
-        sp = StreamProcessor()
         stats = RequestStats()
-        await collect(sp.process_stream(
+        await collect(process_stream(
             async_gen([b"data: {}\n\n"]), "m", "r", "u", "p", stats=stats))
         assert stats.has_usage is False
         assert stats.total_tokens == 0
@@ -302,10 +280,9 @@ class TestStatsEnrichment:
     @pytest.mark.asyncio
     async def test_upstream_error_frame_is_forwarded_verbatim_and_recorded(self):
         """A llama-server late failure must not read as a clean success."""
-        sp = StreamProcessor()
         stats = RequestStats(model_id="m", provider_name="p", stream=True)
         chunks = [_DELTA_CHUNK, _LLAMA_ERROR_FRAME]
-        result = await collect(sp.process_stream(
+        result = await collect(process_stream(
             async_gen(chunks), "m", "r", "u", "p", stats=stats))
         assert b"".join(result) == b"".join(chunks)
         assert stats.error_code == "provider_stream_error"
@@ -314,9 +291,8 @@ class TestStatsEnrichment:
 
     @pytest.mark.asyncio
     async def test_upstream_error_frame_is_logged(self, caplog):
-        sp = StreamProcessor()
         with caplog.at_level(logging.ERROR, logger="nnp-llm-router"):
-            await collect(sp.process_stream(
+            await collect(process_stream(
                 async_gen([_DELTA_CHUNK, _LLAMA_ERROR_FRAME]), "m", "r", "u", "p",
                 stats=RequestStats()))
         errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
@@ -326,11 +302,10 @@ class TestStatsEnrichment:
 
     @pytest.mark.asyncio
     async def test_delta_containing_error_substring_is_not_an_error(self, caplog):
-        sp = StreamProcessor()
         stats = RequestStats()
         delta = sse(json.dumps({"choices": [{"delta": {"content": "error"}}]}))
         with caplog.at_level(logging.ERROR, logger="nnp-llm-router"):
-            result = await collect(sp.process_stream(
+            result = await collect(process_stream(
                 async_gen([delta]), "m", "r", "u", "p", stats=stats))
         assert b'"error"' in delta  # the byte gate fires; only the parse must reject it
         assert result == [delta]
@@ -339,10 +314,9 @@ class TestStatsEnrichment:
 
     @pytest.mark.asyncio
     async def test_error_frame_with_prior_usage_keeps_partial_usage(self):
-        sp = StreamProcessor()
         stats = RequestStats()
         usage = {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6}
-        await collect(sp.process_stream(
+        await collect(process_stream(
             async_gen([sse(json.dumps({"usage": usage})), _LLAMA_ERROR_FRAME]),
             "m", "r", "u", "p", stats=stats))
         assert stats.has_usage is True
@@ -398,8 +372,7 @@ class TestOpenProviderStream:
             raise HTTPException(status_code=500, detail="boom")
 
         primed = await open_provider_stream(fails_late())
-        sp = make_processor()
-        result = b"".join(await collect(sp.process_stream(primed, "m", "r", "u")))
+        result = b"".join(await collect(process_stream(primed, "m", "r", "u", "p", RequestStats())))
         assert result.startswith(b"first")
         assert b"[DONE]" in result
 
@@ -439,17 +412,3 @@ class TestOpenProviderStream:
         assert await primed.__anext__() == b"a"
         await primed.aclose()
         assert closed == [True]
-
-
-# ---------------------------------------------------------------------------
-# 12. Constructor: no dead config_manager parameter
-# ---------------------------------------------------------------------------
-
-class TestConstructor:
-    def test_no_config_manager_parameter(self):
-        """config_manager was dead: assigned, never read. It is gone."""
-        import inspect
-
-        params = inspect.signature(StreamProcessor.__init__).parameters
-        assert "config_manager" not in params
-        assert StreamProcessor() is not None

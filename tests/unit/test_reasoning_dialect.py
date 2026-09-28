@@ -1,19 +1,21 @@
 """Unit tests for src/services/reasoning_dialect.py — funnel translation."""
 
 import pytest
-from fastapi import HTTPException
 
-from src.services.reasoning_dialect import (
+from src.core.config_schema import (
     DEFAULT_REASONING_DIALECT,
     REASONING_DIALECTS,
-    resolve_dialect,
-    translate_reasoning_fields,
+    ConfigError,
+    parse_provider,
     validate_reasoning_dialect,
 )
+from src.services.reasoning_dialect import translate_reasoning_fields
 
 BASE_PROVIDER = {"type": "openai", "base_url": "https://x.example"}
-OPENROUTER = {**BASE_PROVIDER, "reasoning_dialect": "openrouter"}
-DEEPSEEK = {**BASE_PROVIDER, "reasoning_dialect": "deepseek"}
+# The funnel hands translate_reasoning_fields the parsed entry's dialect.
+OPENAI = parse_provider(BASE_PROVIDER).reasoning_dialect
+OPENROUTER = parse_provider({**BASE_PROVIDER, "reasoning_dialect": "openrouter"}).reasoning_dialect
+DEEPSEEK = parse_provider({**BASE_PROVIDER, "reasoning_dialect": "deepseek"}).reasoning_dialect
 
 
 def _body(**extra):
@@ -22,7 +24,7 @@ def _body(**extra):
 
 
 # ===================================================================
-# validate_reasoning_dialect / resolve_dialect
+# validate_reasoning_dialect / parse_provider
 # ===================================================================
 
 class TestDialectResolution:
@@ -33,24 +35,21 @@ class TestDialectResolution:
 
     @pytest.mark.parametrize("dialect", ["openai-compatible", "DeepSeek", "", 3, None])
     def test_unknown_dialect_raises_config_error(self, dialect):
-        with pytest.raises(HTTPException) as exc_info:
-            validate_reasoning_dialect(dialect, provider_name="p")
-        assert exc_info.value.status_code == 500
-        assert "reasoning_dialect" in str(exc_info.value.detail)
+        with pytest.raises(ConfigError) as exc_info:
+            validate_reasoning_dialect(dialect)
+        assert "reasoning_dialect" in str(exc_info.value)
 
     @pytest.mark.parametrize("dialect", REASONING_DIALECTS)
-    def test_resolve_returns_known_dialect(self, dialect):
-        assert resolve_dialect({"reasoning_dialect": dialect}) == dialect
+    def test_parse_keeps_known_dialect(self, dialect):
+        assert parse_provider({**BASE_PROVIDER, "reasoning_dialect": dialect}).reasoning_dialect == dialect
 
     def test_absent_key_resolves_to_default(self):
-        assert resolve_dialect(BASE_PROVIDER) == DEFAULT_REASONING_DIALECT == "openai"
+        assert OPENAI == DEFAULT_REASONING_DIALECT == "openai"
 
-    @pytest.mark.parametrize("provider_config", [None, {}, {"reasoning_dialect": "bogus"}])
-    def test_defensive_read_falls_back_to_default(self, provider_config):
-        """The funnel re-reads tolerantly: mocked configs bypass the
-        construction-time validation (same defensive pattern as the effort
-        policy's request-path re-check)."""
-        assert resolve_dialect(provider_config) == "openai"
+    def test_unknown_dialect_is_refused_at_parse(self):
+        """A typo never reaches the funnel as a silent `openai`."""
+        with pytest.raises(ConfigError):
+            parse_provider({**BASE_PROVIDER, "reasoning_dialect": "bogus"})
 
 
 # ===================================================================
@@ -61,7 +60,7 @@ class TestOpenAIDialect:
 
     def test_thinking_dropped_effort_kept(self):
         out = translate_reasoning_fields(
-            _body(thinking={"type": "enabled"}, reasoning_effort="high"), BASE_PROVIDER)
+            _body(thinking={"type": "enabled"}, reasoning_effort="high"), OPENAI)
         assert out["reasoning_effort"] == "high"
         assert "thinking" not in out
         assert "reasoning" not in out
@@ -69,12 +68,12 @@ class TestOpenAIDialect:
     def test_malformed_thinking_dropped_too(self):
         """The dialect has no `thinking` field: dropping it whatever its shape
         is the translation, not a mutation of client data."""
-        out = translate_reasoning_fields(_body(thinking="yes"), BASE_PROVIDER)
+        out = translate_reasoning_fields(_body(thinking="yes"), OPENAI)
         assert "thinking" not in out
 
     def test_body_without_fields_unchanged(self):
         body = _body(temperature=0.2)
-        assert translate_reasoning_fields(body, BASE_PROVIDER) == body
+        assert translate_reasoning_fields(body, OPENAI) == body
 
 
 # ===================================================================

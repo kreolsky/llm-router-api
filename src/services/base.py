@@ -1,4 +1,4 @@
-"""Base service with shared validation, provider instantiation, and logging."""
+"""Base service: model access resolution, provider lookup and the shared dispatch funnel."""
 # SYSTEM: service-layer — validate access, resolve provider, dispatch
 
 import contextlib
@@ -8,7 +8,8 @@ from typing import Any
 from fastapi import HTTPException, Request
 
 from ..core.config_manager import ConfigManager
-from ..core.context import AuthContext, RequestContext, request_context
+from ..core.config_schema import ModelEntry
+from ..core.context import AuthContext, request_context
 from ..core.error_handling import ErrorType, create_error
 from ..core.header_policy import (
     FORWARDED_HEADER_DENY_PREFIXES,
@@ -16,8 +17,8 @@ from ..core.header_policy import (
 )
 from ..core.logging import logger
 from ..core.usage_db import RequestStats, request_stats
-from ..providers import get_provider_instance
-from ..providers.base import BaseProvider
+from ..providers import ProviderRegistry
+from ..providers.base import Provider
 from .reasoning_dialect import translate_reasoning_fields
 from .reasoning_effort import apply_reasoning_effort
 
@@ -36,11 +37,10 @@ class ResolvedTarget:
     user_id: str
     stats: RequestStats
     error_ctx: dict[str, Any]
-    model_config: dict[str, Any]
+    model_config: ModelEntry
     provider_name: str
     provider_model_name: str
-    provider_config: dict[str, Any]
-    provider: BaseProvider
+    provider: Provider
     identity_headers: dict[str, str] | None
 
 
@@ -60,8 +60,9 @@ class PreparedDispatch(ResolvedTarget):
 class BaseService:
     """Common base for ChatService, EmbeddingService, ModelService, and TranscriptionService."""
 
-    def __init__(self, config_manager: ConfigManager):
+    def __init__(self, config_manager: ConfigManager, registry: ProviderRegistry):
         self.config_manager = config_manager
+        self.registry = registry
 
     @contextlib.asynccontextmanager
     async def _guard_service_errors(self, error_ctx: dict[str, Any]):
@@ -81,10 +82,6 @@ class BaseService:
                 error_details=str(e),
                 **error_ctx,
             ) from e
-
-    def _get_request_context(self, request: Request | None) -> RequestContext:
-        """Return the typed RequestContext carried by the request."""
-        return request_context(request)
 
     def _extract_passthrough_headers(self, request: Request | None) -> dict[str, str]:
         """Collect every client header minus the denylist (core/header_policy.py).
@@ -118,38 +115,34 @@ class BaseService:
             return None
         return self._extract_passthrough_headers(request) or None
 
-    def _validate_and_get_config(
+    def resolve_model(
         self,
-        requested_model: str,
+        model_id: str,
         auth_context: AuthContext,
-        **error_context
-    ) -> tuple[dict[str, Any], str, str, dict[str, Any]]:
-        """Validate model access and return (model_config, provider_name, provider_model_name, provider_config)."""
-        allowed_models = auth_context.allowed_models
+        /,
+        **error_ctx: Any,
+    ) -> ModelEntry:
+        """The one access resolver: allowed -> exists -> its provider exists.
 
-        if not requested_model:
-            raise create_error(ErrorType.MODEL_NOT_SPECIFIED, **error_context)
-
+        Shared by the dispatch funnel (_resolve_target) and the model-detail
+        endpoint (ModelService.retrieve_model). Returns the model's entry; the
+        caller decides how to name the upstream model. model_id is
+        positional-only because error_ctx carries a model_id of its own.
+        """
         # INVARIANT: check allowed_models BEFORE checking existence to prevent
         # information leakage about configured models
-        if allowed_models and requested_model not in allowed_models:
-            raise create_error(ErrorType.MODEL_NOT_ALLOWED, **error_context)
+        allowed_models = auth_context.allowed_models
+        if allowed_models and model_id not in allowed_models:
+            raise create_error(ErrorType.MODEL_NOT_ALLOWED, **error_ctx)
 
         current_config = self.config_manager.get_config()
-        models = current_config.get("models", {})
-        model_config = models.get(requested_model)
-
+        model_config = current_config.models.get(model_id)
         if not model_config:
-            raise create_error(ErrorType.MODEL_NOT_FOUND, **error_context)
+            raise create_error(ErrorType.MODEL_NOT_FOUND, **error_ctx)
 
-        provider_name = model_config.get("provider")
-        provider_model_name = model_config.get("provider_model_name", requested_model)
-        provider_config = current_config.get("providers", {}).get(provider_name)
-
-        if not provider_config:
-            raise create_error(ErrorType.PROVIDER_NOT_FOUND, provider_name=provider_name, **error_context)
-
-        return model_config, provider_name, provider_model_name, provider_config
+        if model_config.provider not in current_config.providers:
+            raise create_error(ErrorType.PROVIDER_NOT_FOUND, provider_name=model_config.provider, **error_ctx)
+        return model_config
 
     async def _parse_json_request(self, request: Request) -> dict[str, Any]:
         """Parse the JSON request body, answering 400 on malformed input."""
@@ -158,7 +151,7 @@ class BaseService:
         # WHY: ValueError, not json.JSONDecodeError — invalid UTF-8 bodies raise
         # UnicodeDecodeError (also a ValueError) and must answer 400, not 500
         except ValueError:
-            ctx = self._get_request_context(request)
+            ctx = request_context(request)
             # from None: the client's own malformed body is the whole story
             raise create_error(ErrorType.MISSING_REQUIRED_FIELD, field_name="valid JSON body",
                              request_id=ctx.request_id, user_id=ctx.user_id) from None
@@ -182,7 +175,7 @@ class BaseService:
         (providers/base.py _merge_request_headers ARCH), and a per-branch
         recompute would hold that by luck, not by construction.
         """
-        ctx = self._get_request_context(request)
+        ctx = request_context(request)
         request_id = ctx.request_id
         user_id = ctx.user_id
 
@@ -191,17 +184,19 @@ class BaseService:
 
         error_ctx = {"request_id": request_id, "user_id": user_id, "model_id": model_id}
 
-        model_config, provider_name, provider_model_name, provider_config = \
-            self._validate_and_get_config(model_id, auth_context, **error_ctx)
+        if not model_id:
+            raise create_error(ErrorType.MODEL_NOT_SPECIFIED, **error_ctx)
+        model_config = self.resolve_model(model_id, auth_context, **error_ctx)
+        provider_name = model_config.provider
         stats.provider_name = provider_name
 
-        provider_instance = await get_provider_instance(provider_name)
+        provider_instance = self.registry.get(provider_name)
         identity_headers = self._build_identity_headers(provider_instance, request)
 
         return ResolvedTarget(
             request_id=request_id, user_id=user_id, stats=stats, error_ctx=error_ctx,
             model_config=model_config, provider_name=provider_name,
-            provider_model_name=provider_model_name, provider_config=provider_config,
+            provider_model_name=model_config.provider_model_name or model_id,
             provider=provider_instance, identity_headers=identity_headers,
         )
 
@@ -223,40 +218,29 @@ class BaseService:
         request_body = await self._parse_json_request(request)
         requested_model = request_body.get("model")
 
-        self._log_service_data(title=log_title, data=request_body,
-                               request_id=self._get_request_context(request).request_id,
-                               component=component, data_flow="incoming")
+        logger.debug_data(title=log_title, data=request_body,
+                          request_id=request_context(request).request_id,
+                          component=component, data_flow="incoming")
 
         target = await self._resolve_target(request, auth_context, requested_model)
 
         # ARCH: the effort policy rides the one dispatch funnel (services/reasoning_effort.py).
-        request_body = apply_reasoning_effort(request_body, target.model_config, **target.error_ctx)
+        request_body = apply_reasoning_effort(request_body, target.model_config.effort_policy,
+                                              **target.error_ctx)
 
         # ARCH: the dialect translation rides the same funnel
         # (services/reasoning_dialect.py), AFTER the policy — the value the
         # gate ruled legal is what gets re-nested for the upstream's dialect.
-        request_body = translate_reasoning_fields(request_body, target.provider_config)
+        # INVARIANT: the dialect is read from the provider INSTANCE's own entry,
+        # never from the config dict.
+        # Why: the config and the registry are swapped separately on a reload,
+        # so a config-side entry can belong to a different generation than the
+        # backend actually called; the instance's entry is the one it was built from.
+        request_body = translate_reasoning_fields(request_body, target.provider.entry.reasoning_dialect)
 
         # Fields are DERIVED from ResolvedTarget, not re-listed: a field added
         # to the resolver reaches the JSON wrapper without a second edit.
         return PreparedDispatch(
             request_body=request_body, requested_model=requested_model,
             **{f.name: getattr(target, f.name) for f in fields(ResolvedTarget)},
-        )
-
-    def _log_service_data(
-        self,
-        title: str,
-        data: Any,
-        request_id: str,
-        component: str,
-        data_flow: str = "incoming"
-    ) -> None:
-        """Log request/response data via debug_data."""
-        logger.debug_data(
-            title=title,
-            data=data,
-            request_id=request_id,
-            component=component,
-            data_flow=data_flow
         )

@@ -2,12 +2,13 @@
 
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from src.core.config_schema import parse_config, parse_provider
 from src.core.context import AuthContext, RequestContext
 from src.core.usage_db import RequestStats
 from src.services.chat_service.chat_service import ChatService
@@ -65,6 +66,7 @@ class _StubProvider:
     """Provider double: records dispatch, returns canned bodies."""
 
     identity = None  # no identity profile → identity_headers stay None
+    entry = parse_provider({"type": "openai", "base_url": "http://upstream.invalid"})
 
     def __init__(self, stream_frames=None):
         self.chat_calls: list[tuple[dict, str]] = []
@@ -94,13 +96,15 @@ class _StubProvider:
 
 
 def _happy_service(provider: _StubProvider) -> ChatService:
+    registry = MagicMock()
+    registry.get.return_value = provider
     cm = MagicMock()
-    cm.get_config.return_value = {
+    cm.get_config.return_value = parse_config({
         "models": {"chat/model-a": {"provider": "prov-a",
                                     "provider_model_name": "upstream-a"}},
-        "providers": {"prov-a": {"base_url": "http://upstream.invalid"}},
-    }
-    return ChatService(cm, MagicMock())
+        "providers": {"prov-a": {"type": "openai", "base_url": "http://upstream.invalid"}},
+    })
+    return ChatService(cm, registry)
 
 
 def _happy_request(body: dict):
@@ -114,12 +118,6 @@ def _happy_request(body: dict):
     return request
 
 
-def _patch_provider(provider):
-    async def _get_instance(name):
-        return provider
-    return patch("src.services.base.get_provider_instance", side_effect=_get_instance)
-
-
 class TestChatHappyPaths:
 
     @pytest.mark.asyncio
@@ -128,9 +126,8 @@ class TestChatHappyPaths:
         request = _happy_request({"model": "chat/model-a",
                                   "messages": [{"role": "user", "content": "ping"}]})
 
-        with _patch_provider(provider):
-            response = await _happy_service(provider).chat_completions(
-                request, _make_auth_context())
+        response = await _happy_service(provider).chat_completions(
+            request, _make_auth_context())
 
         assert isinstance(response, JSONResponse)
         body = json.loads(response.body)
@@ -159,9 +156,8 @@ class TestChatHappyPaths:
                                   "messages": [{"role": "user", "content": "ping"}],
                                   "stream": True})
 
-        with _patch_provider(provider):
-            response = await _happy_service(provider).chat_completions(
-                request, _make_auth_context())
+        response = await _happy_service(provider).chat_completions(
+            request, _make_auth_context())
 
         assert isinstance(response, StreamingResponse)
         assert response.media_type == "text/event-stream"

@@ -3,7 +3,8 @@
 Entry file: `src/providers/base.py` (`SYSTEM: provider`), registry in
 `src/providers/__init__.py` (`SYSTEM: provider-registry`). Read them before changing either.
 
-* Every provider inherits from `BaseProvider` and implements the required interface.
+* There is one provider class, `Provider`; `type: openai` stays a required, validated key so a
+  second type can come back without a config change.
 * Instances are cached by **provider name** (the dict key in `providers.yaml`) and are built
   only by the reload's prepare phase — a cache miss is a 404, not a lazy build. Never store
   request-specific state on an instance — one instance serves every concurrent request.
@@ -11,10 +12,11 @@ Entry file: `src/providers/base.py` (`SYSTEM: provider`), registry in
   (`aclose()`) first drains that provider's in-flight requests, so a config reload cannot
   abort a live stream. Any change to the reload/close path is driven live against an open
   SSE stream, not asserted in isolation.
-* Format translation happens in the provider, never in the service layer.
-* Retry lives in the base class. A provider must not implement its own.
-* A new provider type needs: the class in `src/providers/`, registration in
-  `src/providers/__init__.py`, and config entries in `providers.yaml` + `models.yaml`.
+* Reasoning-field translation happens in the service funnel, keyed on the provider entry —
+  see the `ARCH:` in `src/services/reasoning_dialect.py`.
+* Retry lives in `Provider`. A provider must not implement its own.
+* A new provider type needs: the class in `src/providers/`, construction in
+  `ProviderRegistry` (`src/providers/__init__.py`), its name accepted by `parse_config`, and config entries in `providers.yaml` + `models.yaml`.
 * Header merging is one path for streaming and non-streaming (`_merge_request_headers`).
   `Authorization` is never overwritten. Config `headers:` and real client headers win over a
   synthetic identity profile.

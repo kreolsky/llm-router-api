@@ -33,7 +33,7 @@ curl http://localhost:8777/v1/chat/completions \
 2. **Auth** extracts the Bearer token, looks it up in `user_keys.yaml` (constant-time comparison), sets `project_name` on request state.
 3. **Service layer** validates the model: checks `allowed_models` *before* checking existence (prevents information leakage about configured models). Resolves `provider_name` and `provider_model_name` from `models.yaml`.
 4. **Provider layer** gets a cached provider instance (keyed by provider name). The provider translates the request to the backend's format and sends it via its own `httpx.AsyncClient` connection pool, optionally through a per-provider proxy.
-5. **Streaming**: `_stream_request` yields raw bytes → `StreamProcessor` forwards them byte-for-byte (no re-framing or re-encoding).
+5. **Streaming**: `_stream_request` yields raw bytes → `process_stream` forwards them byte-for-byte (no re-framing or re-encoding).
 6. **Errors**: Provider HTTP errors are extracted from the JSON response body, logged, and returned in OpenRouter-compatible format `{"error": {"code", "message", "metadata": {"provider_name", "raw"}}}`.
 7. **Rate limits**: 429 responses trigger exponential backoff retry (`min(base * 2^attempt, max)`), configurable via env vars.
 8. **Concurrency limits**: Providers can have a `max_concurrent` cap (e.g. `3`). Requests beyond the cap wait for a slot (up to `QUEUE_WAIT_TIMEOUT` seconds); on timeout they receive an immediate 503.

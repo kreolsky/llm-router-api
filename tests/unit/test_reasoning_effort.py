@@ -1,4 +1,5 @@
-"""Unit tests for src/services/reasoning_effort.py and its load-time validation."""
+"""Unit tests for src/services/reasoning_effort.py and its load-time validation
+(core/config_schema.py)."""
 
 from io import StringIO
 from unittest.mock import patch
@@ -7,14 +8,24 @@ import pytest
 from fastapi import HTTPException
 
 from src.core.config_manager import ConfigManager
-from src.services.reasoning_effort import (
+from src.core.config_schema import (
     EFFORT_BLOCK_KEYS,
     EFFORT_PARAMS,
-    apply_reasoning_effort,
+    EffortPolicy,
+    ModelEntry,
+    parse_config,
     parse_effort_policy,
+    parse_model,
 )
+from src.services.reasoning_effort import apply_reasoning_effort
 
 ERROR_CTX = {"request_id": "req-test", "user_id": "user-test", "model_id": "model/x"}
+
+
+def _policy(model_config):
+    """The EffortPolicy the loader would hand the funnel for a models.yaml entry."""
+    with patch("src.core.config_schema.logger"):
+        return parse_model("model/x", model_config).effort_policy
 
 
 def _model_config(allowed=("low", "medium", "high"), default="high",
@@ -102,7 +113,7 @@ class TestDefaultInjection:
 
     def test_default_injected_at_top_level_param_only(self):
         body = {"messages": [{"role": "user", "content": "hi"}]}
-        out = apply_reasoning_effort(dict(body), _model_config(), **ERROR_CTX)
+        out = apply_reasoning_effort(dict(body), _policy(_model_config()), **ERROR_CTX)
         assert out["reasoning_effort"] == "high"
         assert "reasoning" not in out  # only at param's location, never both
         assert out["messages"] == body["messages"]
@@ -111,26 +122,26 @@ class TestDefaultInjection:
         body = {"messages": []}
         cfg = _model_config(allowed=("minimal", "full"), default="full",
                             param="reasoning.effort")
-        out = apply_reasoning_effort(dict(body), cfg, **ERROR_CTX)
+        out = apply_reasoning_effort(dict(body), _policy(cfg), **ERROR_CTX)
         assert out["reasoning"]["effort"] == "full"
         assert "reasoning_effort" not in out
 
     def test_nested_param_preserves_existing_reasoning_dict(self):
         body = {"messages": [], "reasoning": {"keep": True}}
         cfg = _model_config(param="reasoning.effort")
-        out = apply_reasoning_effort(dict(body), cfg, **ERROR_CTX)
+        out = apply_reasoning_effort(dict(body), _policy(cfg), **ERROR_CTX)
         assert out["reasoning"] == {"keep": True, "effort": "high"}
 
     def test_no_default_no_injection(self):
         body = {"messages": []}
-        out = apply_reasoning_effort(dict(body), _model_config(default=None), **ERROR_CTX)
+        out = apply_reasoning_effort(dict(body), _policy(_model_config(default=None)), **ERROR_CTX)
         assert out == body
 
     def test_non_dict_reasoning_skips_injection(self):
         """A non-dict `reasoning` value leaves nowhere safe to write."""
         body = {"messages": [], "reasoning": "garbage"}
         cfg = _model_config(param="reasoning.effort")
-        out = apply_reasoning_effort(dict(body), cfg, **ERROR_CTX)
+        out = apply_reasoning_effort(dict(body), _policy(cfg), **ERROR_CTX)
         assert out == body
 
 
@@ -142,24 +153,24 @@ class TestAllowedClientValues:
 
     def test_allowed_top_level_value_untouched(self):
         body = {"messages": [], "reasoning_effort": "low"}
-        out = apply_reasoning_effort(dict(body), _model_config(), **ERROR_CTX)
+        out = apply_reasoning_effort(dict(body), _policy(_model_config()), **ERROR_CTX)
         assert out == body
         assert "reasoning" not in out  # no second field in the other dialect
 
     def test_allowed_nested_dialect_untouched(self):
         body = {"messages": [], "reasoning": {"effort": "medium"}}
-        out = apply_reasoning_effort(dict(body), _model_config(), **ERROR_CTX)
+        out = apply_reasoning_effort(dict(body), _policy(_model_config()), **ERROR_CTX)
         assert out == body
         assert "reasoning_effort" not in out  # never relocated to param's location
 
     def test_allowed_value_wins_over_default(self):
         body = {"messages": [], "reasoning_effort": "low"}
-        out = apply_reasoning_effort(dict(body), _model_config(), **ERROR_CTX)
+        out = apply_reasoning_effort(dict(body), _policy(_model_config()), **ERROR_CTX)
         assert out["reasoning_effort"] == "low"  # default NOT injected over it
 
     def test_null_counts_as_absent(self):
         body = {"messages": [], "reasoning_effort": None}
-        out = apply_reasoning_effort(dict(body), _model_config(), **ERROR_CTX)
+        out = apply_reasoning_effort(dict(body), _policy(_model_config()), **ERROR_CTX)
         assert out["reasoning_effort"] == "high"
 
 
@@ -172,7 +183,7 @@ class TestRefusedValues:
     def test_value_outside_allowed_is_400(self):
         body = {"messages": [], "reasoning_effort": "max"}
         with pytest.raises(HTTPException) as exc_info:
-            apply_reasoning_effort(body, _model_config(), **ERROR_CTX)
+            apply_reasoning_effort(body, _policy(_model_config()), **ERROR_CTX)
         assert exc_info.value.status_code == 400
         detail = exc_info.value.detail["error"]
         assert detail["code"] == 400
@@ -184,7 +195,7 @@ class TestRefusedValues:
     def test_disallowed_nested_dialect_is_400(self):
         body = {"messages": [], "reasoning": {"effort": "max"}}
         with pytest.raises(HTTPException) as exc_info:
-            apply_reasoning_effort(body, _model_config(), **ERROR_CTX)
+            apply_reasoning_effort(body, _policy(_model_config()), **ERROR_CTX)
         assert exc_info.value.status_code == 400
 
     @pytest.mark.parametrize("body, named", [
@@ -195,7 +206,7 @@ class TestRefusedValues:
         """The envelope must not point a client at a parameter absent from
         their request — the location travels with the refused value."""
         with pytest.raises(HTTPException) as exc_info:
-            apply_reasoning_effort(body, _model_config(), **ERROR_CTX)
+            apply_reasoning_effort(body, _policy(_model_config()), **ERROR_CTX)
         message = exc_info.value.detail["error"]["message"]
         assert named in message
         other = "reasoning.effort" if named == "reasoning_effort" else "reasoning_effort"
@@ -206,19 +217,19 @@ class TestRefusedValues:
         smuggle a disallowed value in the other one past the gate."""
         body = {"messages": [], "reasoning_effort": "low", "reasoning": {"effort": "max"}}
         with pytest.raises(HTTPException) as exc_info:
-            apply_reasoning_effort(body, _model_config(), **ERROR_CTX)
+            apply_reasoning_effort(body, _policy(_model_config()), **ERROR_CTX)
         assert exc_info.value.status_code == 400
         assert "max" in exc_info.value.detail["error"]["message"]
 
     def test_disallowed_top_level_refused_next_to_an_allowed_nested(self):
         body = {"messages": [], "reasoning_effort": "max", "reasoning": {"effort": "low"}}
         with pytest.raises(HTTPException) as exc_info:
-            apply_reasoning_effort(body, _model_config(), **ERROR_CTX)
+            apply_reasoning_effort(body, _policy(_model_config()), **ERROR_CTX)
         assert exc_info.value.status_code == 400
 
     def test_both_dialects_allowed_passes_through_untouched(self):
         body = {"messages": [], "reasoning_effort": "low", "reasoning": {"effort": "high"}}
-        out = apply_reasoning_effort(dict(body), _model_config(), **ERROR_CTX)
+        out = apply_reasoning_effort(dict(body), _policy(_model_config()), **ERROR_CTX)
         assert out == body
 
     def test_oversized_value_is_truncated_in_the_message(self):
@@ -226,7 +237,7 @@ class TestRefusedValues:
         envelope and the WARNING log."""
         body = {"messages": [], "reasoning_effort": {"nested": "x" * 500}}
         with pytest.raises(HTTPException) as exc_info:
-            apply_reasoning_effort(body, _model_config(), **ERROR_CTX)
+            apply_reasoning_effort(body, _policy(_model_config()), **ERROR_CTX)
         message = exc_info.value.detail["error"]["message"]
         assert "x" * 500 not in message
         assert "..." in message
@@ -235,7 +246,7 @@ class TestRefusedValues:
     def test_non_string_value_is_400(self):
         body = {"messages": [], "reasoning_effort": 3}
         with pytest.raises(HTTPException) as exc_info:
-            apply_reasoning_effort(body, _model_config(), **ERROR_CTX)
+            apply_reasoning_effort(body, _policy(_model_config()), **ERROR_CTX)
         assert exc_info.value.status_code == 400
 
 
@@ -248,12 +259,12 @@ class TestNoPolicy:
     def test_model_without_key_body_identical(self):
         body = {"messages": [], "reasoning_effort": "whatever", "reasoning": {"effort": "x"}}
         cfg = {"provider": "p", "options": {"stream": True}}
-        out = apply_reasoning_effort(dict(body), cfg, **ERROR_CTX)
+        out = apply_reasoning_effort(dict(body), _policy(cfg), **ERROR_CTX)
         assert out == body
 
     def test_empty_model_config_body_identical(self):
         body = {"messages": []}
-        assert apply_reasoning_effort(dict(body), {}, **ERROR_CTX) == body
+        assert apply_reasoning_effort(dict(body), _policy({}), **ERROR_CTX) == body
 
     @pytest.mark.parametrize("cfg_builder", [
         lambda: _model_config(default="max"),          # default not in allowed
@@ -264,19 +275,19 @@ class TestNoPolicy:
     def test_malformed_block_means_passthrough(self, cfg_builder):
         """Defensive mirror of the loader: what it drops, the funnel ignores."""
         body = {"messages": [], "reasoning_effort": "max"}
-        out = apply_reasoning_effort(dict(body), cfg_builder(), **ERROR_CTX)
+        out = apply_reasoning_effort(dict(body), _policy(cfg_builder()), **ERROR_CTX)
         assert out == body  # no 400, no injection
 
 
 # ===================================================================
-# ConfigManager._validate_models — load-time soft validation
+# parse_model — load-time soft validation
 # ===================================================================
 
 def _validated_models(models):
-    """Run _validate_models over a config dict with the logger captured."""
-    with patch("src.core.config_manager.logger") as mock_logger:
-        ConfigManager._validate_models({"models": models})
-    return models, mock_logger
+    """Parse models.yaml entries with the loader's logger captured."""
+    with patch("src.core.config_schema.logger") as mock_logger:
+        parsed = {model_id: parse_model(model_id, cfg) for model_id, cfg in models.items()}
+    return parsed, mock_logger
 
 
 class TestLoadTimeValidation:
@@ -284,13 +295,13 @@ class TestLoadTimeValidation:
     def test_valid_block_kept(self):
         cfg = _model_config()
         models, mock_logger = _validated_models({"m": cfg})
-        assert "reasoning_effort" in models["m"]
+        assert models["m"].effort_policy is not None
         mock_logger.warning.assert_not_called()
 
     def test_default_not_in_allowed_warned_and_dropped(self):
         cfg = _model_config(default="max")
         models, mock_logger = _validated_models({"m": cfg})
-        assert "reasoning_effort" not in models["m"]
+        assert models["m"].effort_policy is None
         warning = str(mock_logger.warning.call_args)
         assert "ignoring reasoning_effort block" in warning
         assert "must be one of" in warning
@@ -298,9 +309,9 @@ class TestLoadTimeValidation:
     def test_options_conflict_warned_and_dropped(self):
         cfg = _model_config(with_options=True)
         models, mock_logger = _validated_models({"m": cfg})
-        assert "reasoning_effort" not in models["m"]
+        assert models["m"].effort_policy is None
         assert "options.reasoning_effort" in str(mock_logger.warning.call_args)
-        assert "options" in models["m"]  # options themselves are untouched
+        assert models["m"].options == {"reasoning_effort": "low"}  # options themselves are untouched
 
     @pytest.mark.parametrize("block", [
         {"allowed": []},
@@ -311,7 +322,7 @@ class TestLoadTimeValidation:
     def test_malformed_blocks_dropped(self, block):
         cfg = {"provider": "p", "reasoning_effort": block}
         models, mock_logger = _validated_models({"m": cfg})
-        assert "reasoning_effort" not in models["m"]
+        assert models["m"].effort_policy is None
         assert mock_logger.warning.called
 
     def test_unknown_block_key_is_dropped_not_merely_warned(self):
@@ -321,7 +332,7 @@ class TestLoadTimeValidation:
         cfg = {"provider": "p", "reasoning_effort": {
             "allowed": ["low"], "default": "low", "parm": "reasoning.effort"}}
         models, mock_logger = _validated_models({"m": cfg})
-        assert "reasoning_effort" not in models["m"]
+        assert models["m"].effort_policy is None
         warning = str(mock_logger.warning.call_args)
         assert "ignoring reasoning_effort block" in warning
         assert "parm" in warning
@@ -333,17 +344,18 @@ class TestLoadTimeValidation:
         assert set(block) == set(EFFORT_BLOCK_KEYS)
         models, mock_logger = _validated_models({"m": {"provider": "p",
                                                        "reasoning_effort": block}})
-        assert models["m"]["reasoning_effort"] == block
+        assert models["m"].effort_policy == EffortPolicy(
+            allowed=("low",), default="low", param="reasoning.effort")
         mock_logger.warning.assert_not_called()
 
     def test_model_without_block_untouched(self):
         cfg = {"provider": "p", "options": {"stream": True}}
         models, mock_logger = _validated_models({"m": cfg})
-        assert models["m"] == cfg
+        assert models["m"] == ModelEntry(provider="p", options={"stream": True})
         mock_logger.warning.assert_not_called()
 
     def test_wired_into_load_config(self):
-        """_load_config runs _validate_models: a bad block never reaches consumers."""
+        """The loaded files go through parse_config: a bad block never reaches consumers."""
         file_map = {
             "providers.yaml": "providers:\n  p:\n    type: openai\n    base_url: https://x\n",
             "models.yaml": (
@@ -368,13 +380,14 @@ class TestLoadTimeValidation:
 
         with patch("builtins.open", side_effect=_multi_open), \
              patch("os.path.exists", return_value=True), \
-             patch("src.core.config_manager.logger"):
+             patch("src.core.config_manager.logger"), \
+             patch("src.core.config_schema.logger"):
             cm = ConfigManager.__new__(ConfigManager)
             cm.config_dir = "/fake/config"
             cm.providers_path = "/fake/providers.yaml"
             cm.models_path = "/fake/models.yaml"
             cm.user_keys_path = "/fake/user_keys.yaml"
             cm.model_info_path = "/fake/model_info.yaml"
-            config = ConfigManager._load_config(cm, fail_on_error=False)
+            config = parse_config(ConfigManager._load_config(cm, fail_on_error=False))
 
-        assert "reasoning_effort" not in config["models"]["m"]
+        assert config.models["m"].effort_policy is None

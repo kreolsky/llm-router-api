@@ -1,6 +1,7 @@
-"""Unit tests for src/providers/base.py — BaseProvider and the inline retry loop."""
+"""Unit tests for src/providers/base.py — Provider and the inline retry loop."""
 
 import asyncio
+import functools
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -10,30 +11,32 @@ import pytest
 from fastapi import HTTPException
 
 from src.core.config_manager import Settings
-from src.providers.base import BaseProvider
-from src.providers.openai import OpenAICompatibleProvider
-from src.services.reasoning_dialect import DEFAULT_REASONING_DIALECT, resolve_dialect
+from src.core.config_schema import (
+    DEFAULT_REASONING_DIALECT,
+    ConfigError,
+    ModelEntry,
+    parse_provider,
+)
+from src.providers.base import Provider
 
 # ---------------------------------------------------------------------------
-# Concrete subclass so we can instantiate the (otherwise abstract-ish) base
+# The provider under its test name ("stub" shows up in error metadata)
 # ---------------------------------------------------------------------------
 
-class ProviderStub(BaseProvider):
-    """Minimal concrete provider for testing."""
-
-    async def chat_completions(self, request_body, provider_model_name, model_config):
-        raise NotImplementedError
-
-    async def embeddings(self, request_body, provider_model_name, model_config):
-        raise NotImplementedError
-
-    async def transcriptions(self, audio_file, request_params, model_config):
-        raise NotImplementedError
+ProviderStub = functools.partial(Provider, provider_name="stub")
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+NO_OPTIONS = ModelEntry(provider=None)
+
+
+def _entry(config):
+    """Parse a providers.yaml-shaped dict (type defaulted) into a ProviderEntry."""
+    return parse_provider({"type": "openai", **config})
+
 
 def _make_config(base_url="https://api.example.com", api_key_env="TEST_API_KEY", **extra):
     cfg = {"base_url": base_url, "api_key_env": api_key_env, **extra}
@@ -60,7 +63,7 @@ def _build_provider(base_url="https://api.example.com", api_key_env="TEST_API_KE
         env.update(env_vars)
 
     with patch.dict("os.environ", env, clear=False):
-        provider = ProviderStub(config, settings=settings or Settings())
+        provider = ProviderStub(_entry(config), settings=settings or Settings())
     return provider
 
 
@@ -74,11 +77,11 @@ def _build_limited_provider(max_concurrent, settings=None):
     config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
               "max_concurrent": max_concurrent}
     with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-        return ProviderStub(config, settings=settings or Settings())
+        return ProviderStub(_entry(config), settings=settings or Settings())
 
 
 def _mock_response(json_body=None):
-    """Build a mock httpx Response usable by _make_request_inner."""
+    """Build a mock httpx Response usable by _request."""
     resp = MagicMock()
     resp.status_code = 200
     resp.raise_for_status = MagicMock(return_value=None)
@@ -88,11 +91,11 @@ def _mock_response(json_body=None):
 
 
 # ===================================================================
-# Inline 429 retry loop (_make_request_inner)
+# Inline 429 retry loop (_request)
 # ===================================================================
 
 class TestRetryLoop:
-    """429 backoff loop inlined in _make_request_inner, bounds from settings."""
+    """429 backoff loop inlined in _request, bounds from settings."""
 
     def _provider(self, **settings_overrides):
         provider = _build_provider(settings=_make_settings(**settings_overrides))
@@ -110,7 +113,7 @@ class TestRetryLoop:
         provider = self._provider()
         provider.pool.client.post = AsyncMock(return_value=_mock_response())
         with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            result = await provider._make_request("POST", "/x", request_id="r1")
+            result = await provider._request("POST", "/x", request_id="r1")
         assert result == {"ok": True}
         provider.pool.client.post.assert_awaited_once()
         mock_sleep.assert_not_awaited()
@@ -130,7 +133,7 @@ class TestRetryLoop:
         provider.pool.client.post = post
         with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock):
             with pytest.raises(HTTPException) as exc_info:
-                await provider._make_request("POST", "/x", request_id="r1")
+                await provider._request("POST", "/x", request_id="r1")
         assert exc_info.value.status_code == 429
         # initial attempt + 2 retries = 3 calls
         assert len(calls) == 3
@@ -148,7 +151,7 @@ class TestRetryLoop:
         provider.pool.client.post = post
         with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             with pytest.raises(HTTPException) as exc_info:
-                await provider._make_request("POST", "/x", request_id="r1")
+                await provider._request("POST", "/x", request_id="r1")
         assert exc_info.value.status_code == 500
         assert len(calls) == 1
         mock_sleep.assert_not_awaited()
@@ -166,7 +169,7 @@ class TestRetryLoop:
         provider.pool.client.post = self._rate_limited_post()
         with patch("src.providers.base.asyncio.sleep", side_effect=mock_sleep), \
              pytest.raises(HTTPException):
-            await provider._make_request("POST", "/x", request_id="r1")
+            await provider._request("POST", "/x", request_id="r1")
 
         # attempts 0..3 → delays: min(1*2^0,10)=1, min(1*2^1,10)=2, min(1*2^2,10)=4, min(1*2^3,10)=8
         assert recorded_delays == [1.0, 2.0, 4.0, 8.0]
@@ -186,7 +189,7 @@ class TestRetryLoop:
         provider.pool.client.post = post
         with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock):
             with pytest.raises(HTTPException):
-                await provider._make_request("POST", "/x", request_id="r1")
+                await provider._request("POST", "/x", request_id="r1")
         assert len(calls) == 2
 
     @pytest.mark.asyncio
@@ -202,7 +205,7 @@ class TestRetryLoop:
         provider.pool.client.post = post
         with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock):
             with pytest.raises(HTTPException):
-                await provider._make_request("POST", "/x", request_id="r1")
+                await provider._request("POST", "/x", request_id="r1")
         # default max_retries=3 → 1 initial + 3 retries = 4
         assert len(calls) == 4
 
@@ -213,30 +216,30 @@ class TestRetryLoop:
 
 
 # ===================================================================
-# BaseProvider.__init__
+# Provider.__init__
 # ===================================================================
 
-class TestBaseProviderInit:
+class TestProviderInit:
 
     def test_missing_base_url_raises(self):
         """Missing base_url raises HTTPException."""
         config = {"api_key_env": "TEST_API_KEY"}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False):
             with pytest.raises(HTTPException) as exc_info:
-                ProviderStub(config, Settings())
+                ProviderStub(_entry(config), Settings())
         assert exc_info.value.status_code == 500
 
     def test_missing_api_key_env_var_raises(self):
         """Missing API key env var raises HTTPException."""
         config = {"base_url": "https://api.example.com", "api_key_env": "MISSING_KEY"}
         with patch.dict("os.environ", {}, clear=True), pytest.raises(HTTPException) as exc_info:
-            ProviderStub(config, Settings())
+            ProviderStub(_entry(config), Settings())
         assert exc_info.value.status_code == 500
 
     def test_no_api_key_env_no_error(self):
         """No api_key_env in config means no Authorization header, no error."""
         config = {"base_url": "https://api.example.com"}
-        provider = ProviderStub(config, Settings())
+        provider = ProviderStub(_entry(config), Settings())
         assert "Authorization" not in provider.headers
         assert provider.api_key is None
 
@@ -247,6 +250,11 @@ class TestBaseProviderInit:
         assert provider.headers["Authorization"] == "Bearer sk-test-123"
         assert provider.headers["Content-Type"] == "application/json"
         assert provider.provider_name == "stub"
+
+    def test_provider_name_is_required(self):
+        """No class-name fallback: omitting provider_name is a TypeError."""
+        with pytest.raises(TypeError):
+            Provider(_entry(_make_config()), Settings())
 
 
 # ===================================================================
@@ -296,7 +304,7 @@ class TestApplyModelConfig:
         """Sets model name in request body."""
         provider = _build_provider()
         body = {"messages": []}
-        model_config = {}
+        model_config = NO_OPTIONS
         result = provider._apply_model_config(body, "gpt-4", model_config)
         assert result["model"] == "gpt-4"
 
@@ -304,7 +312,7 @@ class TestApplyModelConfig:
         """Merges options via deep_merge when present."""
         provider = _build_provider()
         body = {"messages": [], "temperature": 0.5}
-        model_config = {"options": {"temperature": 0.9, "top_p": 0.8}}
+        model_config = ModelEntry(provider=None, options={"temperature": 0.9, "top_p": 0.8})
         result = provider._apply_model_config(body, "gpt-4", model_config)
         assert result["model"] == "gpt-4"
         # deep_merge: options override existing keys
@@ -315,7 +323,7 @@ class TestApplyModelConfig:
         """`stream` in options is dropped: the service already branched on the client's value."""
         provider = _build_provider()
         body = {"messages": [], "stream": False}
-        model_config = {"options": {"stream": True, "temperature": 0.9}}
+        model_config = ModelEntry(provider=None, options={"stream": True, "temperature": 0.9})
         result = provider._apply_model_config(body, "gpt-4", model_config)
         assert result["stream"] is False
         assert result["temperature"] == 0.9
@@ -324,7 +332,7 @@ class TestApplyModelConfig:
         """Options may not INTRODUCE stream either — an absent key means non-stream."""
         provider = _build_provider()
         body = {"messages": []}
-        model_config = {"options": {"stream": True}}
+        model_config = ModelEntry(provider=None, options={"stream": True})
         result = provider._apply_model_config(body, "gpt-4", model_config)
         assert "stream" not in result
 
@@ -332,7 +340,7 @@ class TestApplyModelConfig:
         """The guard copies: dropping stream must not edit the live config dict."""
         provider = _build_provider()
         options = {"stream": True, "top_p": 0.8}
-        model_config = {"options": options}
+        model_config = ModelEntry(provider=None, options=options)
         provider._apply_model_config({"messages": []}, "gpt-4", model_config)
         assert options == {"stream": True, "top_p": 0.8}
 
@@ -340,7 +348,7 @@ class TestApplyModelConfig:
         """No options in model_config means no merge, body unchanged except model."""
         provider = _build_provider()
         body = {"messages": [], "temperature": 0.5}
-        model_config = {}
+        model_config = NO_OPTIONS
         result = provider._apply_model_config(body, "gpt-4", model_config)
         assert result == {"messages": [], "temperature": 0.5, "model": "gpt-4"}
 
@@ -488,7 +496,7 @@ class TestProxySupport:
 def _build_openai_provider(settings=None):
     config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY"}
     with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-        return OpenAICompatibleProvider(config, settings=settings or Settings())
+        return ProviderStub(_entry(config), settings=settings or Settings())
 
 
 class TestListModels:
@@ -497,18 +505,18 @@ class TestListModels:
     async def test_list_models_happy_path(self):
         """list_models calls GET /models and returns the JSON body."""
         provider = _build_openai_provider()
-        provider._make_request = AsyncMock(return_value={"data": [{"id": "gpt-4"}]})
+        provider._request = AsyncMock(return_value={"data": [{"id": "gpt-4"}]})
         result = await provider.list_models(request_id="req-1")
-        provider._make_request.assert_called_once_with(
+        provider._request.assert_called_once_with(
             method="GET", path="/models", request_id="req-1"
         )
         assert result == {"data": [{"id": "gpt-4"}]}
 
     @pytest.mark.asyncio
     async def test_list_maps_provider_error(self):
-        """list_models propagates provider errors via _make_request."""
+        """list_models propagates provider errors via _request."""
         provider = _build_openai_provider()
-        provider._make_request = AsyncMock(side_effect=HTTPException(status_code=502, detail="bad"))
+        provider._request = AsyncMock(side_effect=HTTPException(status_code=502, detail="bad"))
         with pytest.raises(HTTPException) as exc_info:
             await provider.list_models(request_id="req-1")
         assert exc_info.value.status_code == 502
@@ -555,8 +563,8 @@ class TestConcurrencyLimit:
             return _mock_response()
 
         provider.pool.client.post = post
-        t1 = asyncio.create_task(provider._make_request("POST", "/x", request_id="r1"))
-        t2 = asyncio.create_task(provider._make_request("POST", "/x", request_id="r2"))
+        t1 = asyncio.create_task(provider._request("POST", "/x", request_id="r1"))
+        t2 = asyncio.create_task(provider._request("POST", "/x", request_id="r2"))
         await asyncio.wait_for(asyncio.gather(started[0].wait(), started[1].wait()), timeout=2)
         release.set()
         r1, r2 = await asyncio.gather(t1, t2)
@@ -579,10 +587,10 @@ class TestConcurrencyLimit:
             return _mock_response()
 
         provider.pool.client.post = post
-        t1 = asyncio.create_task(provider._make_request("POST", "/x", request_id="r1"))
+        t1 = asyncio.create_task(provider._request("POST", "/x", request_id="r1"))
         await asyncio.wait_for(started[0].wait(), timeout=2)
 
-        t2 = asyncio.create_task(provider._make_request("POST", "/x", request_id="r2"))
+        t2 = asyncio.create_task(provider._request("POST", "/x", request_id="r2"))
         await asyncio.sleep(0.05)
         assert not started[1].is_set()  # queued, not running
 
@@ -608,10 +616,10 @@ class TestConcurrencyLimit:
             return _mock_response()
 
         provider.pool.client.post = post
-        t1 = asyncio.create_task(provider._make_request("POST", "/x", request_id="r1"))
+        t1 = asyncio.create_task(provider._request("POST", "/x", request_id="r1"))
         await asyncio.wait_for(started[0].wait(), timeout=2)
 
-        t2 = asyncio.create_task(provider._make_request("POST", "/x", request_id="r2"))
+        t2 = asyncio.create_task(provider._request("POST", "/x", request_id="r2"))
         with pytest.raises(HTTPException) as exc_info:
             await t2
         assert exc_info.value.status_code == 503
@@ -632,11 +640,11 @@ class TestConcurrencyLimit:
             return _mock_response()
 
         provider.pool.client.post = post
-        t1 = asyncio.create_task(provider._make_request("POST", "/x", request_id="r1"))
+        t1 = asyncio.create_task(provider._request("POST", "/x", request_id="r1"))
         await asyncio.wait_for(running.wait(), timeout=2)
 
         with pytest.raises(HTTPException):
-            await provider._make_request("POST", "/x", request_id="r2")
+            await provider._request("POST", "/x", request_id="r2")
 
         # Semaphore value must still be 0 (first call holds it; the timed-out one never acquired).
         assert provider.pool._semaphore._value == 0
@@ -649,13 +657,13 @@ class TestConcurrencyLimit:
         """After a stream finishes, the slot is released; a second stream starts at once."""
         provider = _build_limited_provider(1, settings=_make_settings())
 
-        async def inner(client, url, body, rid, extra_headers=None):
+        async def inner(url, body, rid, extra_headers=None):
             yield b"a"
             yield b"b"
 
         provider._stream_request_inner = inner
         chunks = []
-        async for c in provider._stream_request(provider.pool.client, "/x", {}, "r1"):
+        async for c in provider._stream_request("/x", {}, "r1"):
             chunks.append(c)
         assert chunks == [b"a", b"b"]
         assert provider.pool._semaphore._value == 1
@@ -663,13 +671,13 @@ class TestConcurrencyLimit:
         # second stream must start immediately (slot was released)
         second_started = asyncio.Event()
 
-        async def inner2(client, url, body, rid, extra_headers=None):
+        async def inner2(url, body, rid, extra_headers=None):
             second_started.set()
             yield b"c"
 
         provider._stream_request_inner = inner2
         out = []
-        async for c in provider._stream_request(provider.pool.client, "/x", {}, "r2"):
+        async for c in provider._stream_request("/x", {}, "r2"):
             out.append(c)
         assert second_started.is_set()
         assert out == [b"c"]
@@ -680,13 +688,13 @@ class TestConcurrencyLimit:
         provider = _build_limited_provider(1, settings=_make_settings())
         gate = asyncio.Event()
 
-        async def inner(client, url, body, rid, extra_headers=None):
+        async def inner(url, body, rid, extra_headers=None):
             yield b"a"
             await gate.wait()
             yield b"b"
 
         provider._stream_request_inner = inner
-        gen = provider._stream_request(provider.pool.client, "/x", {}, "r1")
+        gen = provider._stream_request("/x", {}, "r1")
         first = await gen.__anext__()
         assert first == b"a"
         await gen.aclose()
@@ -697,12 +705,12 @@ class TestConcurrencyLimit:
         """An exception inside the stream releases the slot."""
         provider = _build_limited_provider(1, settings=_make_settings())
 
-        async def inner(client, url, body, rid, extra_headers=None):
+        async def inner(url, body, rid, extra_headers=None):
             yield b"a"
             raise RuntimeError("boom")
 
         provider._stream_request_inner = inner
-        gen = provider._stream_request(provider.pool.client, "/x", {}, "r1")
+        gen = provider._stream_request("/x", {}, "r1")
         first = await gen.__anext__()
         assert first == b"a"
         with pytest.raises(RuntimeError):
@@ -729,7 +737,7 @@ class TestConcurrencyLimit:
 
         provider.pool.client.post = post
         with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock):
-            result = await provider._make_request("POST", "/x", request_id="r1")
+            result = await provider._request("POST", "/x", request_id="r1")
 
         assert result == {"ok": True}
         assert calls[0] == 2
@@ -783,9 +791,9 @@ class TestHeaderMergeParity:
         stream_response = _FakeStreamResponse()
         provider.pool.client.stream = MagicMock(return_value=_FakeStreamCtx(stream_response))
 
-        await provider._make_request("POST", "/chat", request_body={}, request_id="r1",
+        await provider._request("POST", "/chat", request_body={}, request_id="r1",
                                      extra_headers=self.EXTRA)
-        chunks = [c async for c in provider._stream_request(provider.pool.client, "/chat", {},
+        chunks = [c async for c in provider._stream_request("/chat", {},
                                                             "r2", extra_headers=self.EXTRA)]
         assert chunks == [b"data: chunk\n\n"]
 
@@ -799,7 +807,7 @@ class TestHeaderMergeParity:
         provider = _build_provider()
         provider.pool.client.stream = MagicMock(return_value=_FakeStreamCtx(_FakeStreamResponse()))
 
-        async for _ in provider._stream_request(provider.pool.client, "/chat", {}, "r1"):
+        async for _ in provider._stream_request("/chat", {}, "r1"):
             pass
 
         assert provider.pool.client.stream.call_args.kwargs["headers"] == provider.headers
@@ -828,13 +836,13 @@ class TestHeaderMergeParity:
 
 
 class TestIdentityProfileInit:
-    """identity config key in BaseProvider.__init__."""
+    """identity config key — validated by parse_provider before construction."""
 
     def test_identity_passthrough_sets_no_user_agent(self):
         config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
                   "identity": "passthrough"}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            provider = ProviderStub(config, Settings())
+            provider = ProviderStub(_entry(config), Settings())
         assert provider.identity == "passthrough"
         assert "User-Agent" not in provider.headers
 
@@ -842,10 +850,9 @@ class TestIdentityProfileInit:
         config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
                   "identity": "opencode"}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            with pytest.raises(HTTPException) as exc_info:
-                ProviderStub(config, Settings())
-        assert exc_info.value.status_code == 500
-        assert "expected 'passthrough'" in str(exc_info.value.detail)
+            with pytest.raises(ConfigError) as exc_info:
+                ProviderStub(_entry(config), Settings())
+        assert "expected 'passthrough'" in str(exc_info.value)
 
     def test_no_identity_keeps_current_behavior(self):
         provider = _build_provider()
@@ -854,63 +861,61 @@ class TestIdentityProfileInit:
 
 
 class TestReasoningDialectInit:
-    """reasoning_dialect config key in BaseProvider.__init__ — fail at
-    construction so a typo never reaches the funnel as a silent `openai`."""
+    """reasoning_dialect config key — parse_provider fails before construction
+    so a typo never reaches the funnel as a silent `openai`."""
 
     @pytest.mark.parametrize("dialect", ["openai", "deepseek", "openrouter"])
     def test_known_dialects_construct(self, dialect):
         config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
                   "reasoning_dialect": dialect}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            provider = ProviderStub(config, Settings())
+            provider = ProviderStub(_entry(config), Settings())
         assert provider.base_url == config["base_url"]
 
     def test_unknown_dialect_fails_fast(self):
         config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
                   "reasoning_dialect": "openrouter-compatible"}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            with pytest.raises(HTTPException) as exc_info:
-                ProviderStub(config, Settings())
-        assert exc_info.value.status_code == 500
-        assert "reasoning_dialect" in str(exc_info.value.detail)
+            with pytest.raises(ConfigError) as exc_info:
+                ProviderStub(_entry(config), Settings())
+        assert "reasoning_dialect" in str(exc_info.value)
 
     def test_absent_key_keeps_current_behavior(self):
-        """No key: no validation fires, and the funnel's defensive read
-        resolves the same config to the default dialect."""
+        """No key: no validation fires, and the entry carries the default dialect."""
         config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY"}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            provider = ProviderStub(config, Settings())
+            provider = ProviderStub(_entry(config), Settings())
         assert provider.base_url == config["base_url"]
-        assert resolve_dialect(config) == DEFAULT_REASONING_DIALECT
+        assert provider.entry.reasoning_dialect == DEFAULT_REASONING_DIALECT
 
 
 class TestStaticHeadersValidation:
-    """Static `headers:` from providers.yaml fails fast at construction."""
+    """Static `headers:` from providers.yaml fails fast in parse_provider."""
 
     def test_non_string_value_fails_fast(self):
         """X-Title: 12345 (YAML int) is rejected at startup, not on first request."""
         config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
                   "headers": {"X-Title": 12345}}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            with pytest.raises(HTTPException) as exc_info:
-                ProviderStub(config, Settings())
-        assert exc_info.value.status_code == 500
+            with pytest.raises(ConfigError) as exc_info:
+                ProviderStub(_entry(config), Settings())
+        assert "headers" in str(exc_info.value)
 
     def test_non_string_key_fails_fast(self):
         config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
                   "headers": {123: "value"}}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            with pytest.raises(HTTPException) as exc_info:
-                ProviderStub(config, Settings())
-        assert exc_info.value.status_code == 500
+            with pytest.raises(ConfigError) as exc_info:
+                ProviderStub(_entry(config), Settings())
+        assert "headers" in str(exc_info.value)
 
     def test_authorization_in_headers_fails_fast(self):
         config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
                   "headers": {"Authorization": "Bearer literal-key"}}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            with pytest.raises(HTTPException) as exc_info:
-                ProviderStub(config, Settings())
-        assert exc_info.value.status_code == 500
+            with pytest.raises(ConfigError) as exc_info:
+                ProviderStub(_entry(config), Settings())
+        assert "headers" in str(exc_info.value)
 
     @pytest.mark.parametrize("name", ["Content-Length", "host", "Transfer-Encoding",
                                       "Connection", "Accept-Encoding"])
@@ -918,9 +923,9 @@ class TestStaticHeadersValidation:
         config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
                   "headers": {name: "x"}}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            with pytest.raises(HTTPException) as exc_info:
-                ProviderStub(config, Settings())
-        assert exc_info.value.status_code == 500
+            with pytest.raises(ConfigError) as exc_info:
+                ProviderStub(_entry(config), Settings())
+        assert "headers" in str(exc_info.value)
 
     def test_valid_static_headers_accepted(self):
         """Attribution headers pass validation; Content-Type default still applied."""
@@ -931,27 +936,27 @@ class TestStaticHeadersValidation:
 
 
 class TestChatExtraHeadersForwarding:
-    """OpenAICompatibleProvider chat methods forward extra_headers."""
+    """Provider endpoint methods forward extra_headers."""
 
     @pytest.mark.asyncio
     async def test_chat_completions_forwards_extra_headers(self):
         provider = _build_openai_provider()
-        provider._make_request = AsyncMock(return_value={"ok": True})
+        provider._request = AsyncMock(return_value={"ok": True})
         extra = {"X-Session-Id": "ses_x", "x-session-affinity": "ses_x"}
-        await provider.chat_completions({"messages": []}, "gpt-4", {}, request_id="r1",
+        await provider.chat_completions({"messages": []}, "gpt-4", NO_OPTIONS, request_id="r1",
                                         extra_headers=extra)
-        assert provider._make_request.call_args.kwargs["extra_headers"] == extra
+        assert provider._request.call_args.kwargs["extra_headers"] == extra
 
     @pytest.mark.asyncio
     async def test_chat_completions_stream_forwards_extra_headers(self):
         provider = _build_openai_provider()
 
-        async def fake_stream(client, path, body, request_id="unknown", extra_headers=None):
+        async def fake_stream(path, body, request_id="unknown", extra_headers=None):
             assert extra_headers == {"X-Session-Id": "ses_x"}
             yield b""
 
         provider._stream_request = fake_stream
-        gen = provider.chat_completions_stream({"messages": []}, "gpt-4", {}, request_id="r1",
+        gen = provider.chat_completions_stream({"messages": []}, "gpt-4", NO_OPTIONS, request_id="r1",
                                                extra_headers={"X-Session-Id": "ses_x"})
         async for _ in gen:
             pass
@@ -959,21 +964,21 @@ class TestChatExtraHeadersForwarding:
     @pytest.mark.asyncio
     async def test_embeddings_forwards_extra_headers(self):
         provider = _build_openai_provider()
-        provider._make_request = AsyncMock(return_value={"data": []})
+        provider._request = AsyncMock(return_value={"data": []})
         extra = {"user-agent": "Kilo-Code/7.5.5"}
-        await provider.embeddings({"input": "hi"}, "emb", {}, request_id="r1",
+        await provider.embeddings({"input": "hi"}, "emb", NO_OPTIONS, request_id="r1",
                                   extra_headers=extra)
-        assert provider._make_request.call_args.kwargs["extra_headers"] == extra
+        assert provider._request.call_args.kwargs["extra_headers"] == extra
 
     @pytest.mark.asyncio
     async def test_transcriptions_forwards_extra_headers(self):
         provider = _build_openai_provider()
-        provider._make_request = AsyncMock(return_value={"text": "ok"})
+        provider._request = AsyncMock(return_value={"text": "ok"})
         extra = {"user-agent": "Kilo-Code/7.5.5"}
         body = {"audio": {"filename": "a.wav", "content_type": "audio/wav", "data": b"x"},
                 "params": {}}
-        await provider.transcriptions(body, "stt", {}, request_id="r1", extra_headers=extra)
-        assert provider._make_request.call_args.kwargs["extra_headers"] == extra
+        await provider.transcriptions(body, "stt", NO_OPTIONS, request_id="r1", extra_headers=extra)
+        assert provider._request.call_args.kwargs["extra_headers"] == extra
 
 
 # ===================================================================
@@ -1008,14 +1013,14 @@ class TestCallSiteTimeouts:
     def _openai_provider(self, settings):
         config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY"}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            provider = OpenAICompatibleProvider(config, settings=settings)
+            provider = ProviderStub(_entry(config), settings=settings)
         captured = {}
 
-        async def fake_make_request(**kwargs):
+        async def fake_request(**kwargs):
             captured.update(kwargs)
             return {"ok": True}
 
-        provider._make_request = fake_make_request
+        provider._request = fake_request
         return provider, captured
 
     @pytest.mark.asyncio
@@ -1026,7 +1031,7 @@ class TestCallSiteTimeouts:
                       httpx_pool_timeout=5.0, stream_read_timeout=300.0)
         provider, captured = self._openai_provider(settings)
 
-        await provider.chat_completions({"messages": []}, "m", {})
+        await provider.chat_completions({"messages": []}, "m", NO_OPTIONS)
 
         t = captured["timeout"]
         assert t.read == 300.0
@@ -1043,7 +1048,7 @@ class TestCallSiteTimeouts:
         await provider.transcriptions(
             {"audio": {"filename": "a.ogg", "content_type": "audio/ogg", "data": b"x"},
              "params": {}},
-            "m", {})
+            "m", NO_OPTIONS)
 
         t = captured["timeout"]
         assert t.read == 3600.0
@@ -1057,7 +1062,7 @@ class TestCallSiteTimeouts:
                       httpx_pool_timeout=5.0, openai_embeddings_read_timeout=30.0)
         provider, captured = self._openai_provider(settings)
 
-        await provider.embeddings({"input": "hi"}, "m", {})
+        await provider.embeddings({"input": "hi"}, "m", NO_OPTIONS)
 
         t = captured["timeout"]
         assert t.read == 30.0
@@ -1104,7 +1109,7 @@ class TestCallSiteTimeouts:
         fake_client.stream = stream
         provider.pool.client = fake_client
 
-        chunks = [c async for c in provider._stream_request(fake_client, "/chat/completions", {})]
+        chunks = [c async for c in provider._stream_request("/chat/completions", {})]
         assert chunks == []
 
         t = captured["timeout"]
@@ -1126,7 +1131,7 @@ class TestRetryUploadSafety:
     def _provider_with_mock_transport(self, handler, cm=None):
         config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY"}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            provider = OpenAICompatibleProvider(config, settings=cm or _make_settings(
+            provider = ProviderStub(_entry(config), settings=cm or _make_settings(
                 provider_retry_base_delay=0.001, provider_retry_max_delay=0.01))
         provider.pool.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         return provider
@@ -1146,7 +1151,7 @@ class TestRetryUploadSafety:
         provider = self._provider_with_mock_transport(handler)
         body = {"audio": {"filename": "a.ogg", "content_type": "audio/ogg", "data": audio},
                 "params": {}}
-        result = await provider.transcriptions(body, "stt/dummy", {}, request_id="r1")
+        result = await provider.transcriptions(body, "stt/dummy", NO_OPTIONS, request_id="r1")
 
         assert result == {"text": "transcribed"}
         assert len(seen_bodies) == 2, "the 429 must have been retried exactly once"
@@ -1163,7 +1168,7 @@ class TestRetryUploadSafety:
         body = {"audio": {"filename": "a.ogg", "content_type": "audio/ogg", "data": b"x"},
                 "params": {}}
         with pytest.raises(HTTPException) as exc_info:
-            await provider.transcriptions(body, "stt/dummy", {}, request_id="r1")
+            await provider.transcriptions(body, "stt/dummy", NO_OPTIONS, request_id="r1")
         assert exc_info.value.status_code == 429
 
 
@@ -1174,7 +1179,7 @@ class TestRetryUploadSafety:
 class TestRetryRateLimitDetection:
     """429 detection must survive a wrapped exception whose .response is None.
 
-    Driven through _make_request with client.post raising the wrapped error —
+    Driven through _request with client.post raising the wrapped error —
     the same shape create_error produces when it re-raises an httpx error.
     """
 
@@ -1198,7 +1203,7 @@ class TestRetryRateLimitDetection:
         provider.pool.client.post = post
         with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             with pytest.raises(HTTPException):
-                await provider._make_request("POST", "/x", request_id="r1")
+                await provider._request("POST", "/x", request_id="r1")
         assert len(calls) == 1
         mock_sleep.assert_not_awaited()
 
@@ -1218,6 +1223,6 @@ class TestRetryRateLimitDetection:
 
         provider.pool.client.post = post
         with patch("src.providers.base.asyncio.sleep", new_callable=AsyncMock):
-            result = await provider._make_request("POST", "/x", request_id="r1")
+            result = await provider._request("POST", "/x", request_id="r1")
         assert result == {"ok": True}
         assert len(calls) == 3

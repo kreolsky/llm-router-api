@@ -1,6 +1,6 @@
 """Provider-owned httpx pool: client construction, concurrency gate, graceful drain.
 
-Extracted from BaseProvider (composition, not a base-class role) so the pool
+Composed into Provider (not a base-class role) so the pool
 lifecycle — drain-on-close, semaphore, late-acquirer refusal — is directly
 testable without a whole provider around it.
 """

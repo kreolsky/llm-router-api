@@ -12,16 +12,14 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ..core.auth import check_endpoint_access
 from ..core.config_manager import ConfigManager
+from ..core.config_schema import RouterConfig
 from ..core.context import AuthContext, request_context
 from ..core.error_handling import enrich_stats_from_envelope
 from ..core.logging import logger
-from ..core.model_capabilities import CapabilitiesCache, capabilities_refresh_loop
+from ..core.model_capabilities import CapabilitiesCache
 from ..core.usage_db import close_db, drain_pending_flushes, init_db, request_stats
-from ..providers import (
-    clear_provider_cache_async,
-    prepare_provider_cache,
-    publish_provider_cache,
-)
+from ..providers import ProviderRegistry
+from ..services.capabilities_refresh import capabilities_refresh_loop
 from ..services.chat_service.chat_service import ChatService
 from ..services.embedding_service import EmbeddingService
 from ..services.model_service import ModelService
@@ -45,15 +43,15 @@ def read_app_version(path: Path) -> str:
 APP_VERSION = read_app_version(_VERSION_FILE)
 
 
-async def _validate_providers(config_manager: ConfigManager) -> None:
+async def _validate_providers(config_manager: ConfigManager, registry: ProviderRegistry) -> None:
     """Eager validation: build & cache every configured provider (fail-fast).
 
     prepare + publish back to back — the same pair a config reload drives in
-    its two phases. All failures are collected by prepare_provider_cache into
+    its two phases. All failures are collected by ProviderRegistry.prepare into
     one RuntimeError so operators can fix multiple issues at once.
     """
-    await prepare_provider_cache(config_manager.get_config(), config_manager.settings)
-    await publish_provider_cache()
+    await registry.prepare(config_manager.get_config(), config_manager.settings)
+    await registry.publish()
 
 
 @asynccontextmanager
@@ -61,25 +59,27 @@ async def lifespan(app: FastAPI):
     """Initialize ConfigManager, validate providers, and all services; tear down on shutdown."""
     config_manager = ConfigManager()
     app.state.config_manager = config_manager
+    registry = ProviderRegistry()
+    app.state.provider_registry = registry
 
     # ARCH: eager validation — fail fast on bad provider config / missing env keys.
-    await _validate_providers(config_manager)
+    await _validate_providers(config_manager, registry)
 
     # ARCH: two-phase provider-cache reload. prepare runs pre-swap (it can
     # veto a broken providers.yaml by raising); publish runs post-swap, after
     # self.config is already the new one, so a provider removed by the reload
     # cannot be re-populated from the stale config (see the INVARIANT on
-    # publish_provider_cache).
-    async def _prepare_on_reload(new_config: dict) -> None:
+    # ProviderRegistry.publish).
+    async def _prepare_on_reload(new_config: RouterConfig) -> None:
         """Pre-swap callback: stage the provider cache for the freshly loaded config."""
-        await prepare_provider_cache(new_config, config_manager.settings)
+        await registry.prepare(new_config, config_manager.settings)
 
-    async def _publish_on_reload(new_config: dict) -> None:
+    async def _publish_on_reload(new_config: RouterConfig) -> None:
         """Post-swap callback: publish the staged cache, drain superseded pools."""
-        await publish_provider_cache()
+        await registry.publish()
 
-    config_manager.add_reload_callback(_prepare_on_reload, name="prepare_provider_cache")
-    config_manager.add_post_swap_callback(_publish_on_reload, name="publish_provider_cache")
+    config_manager.add_reload_callback(_prepare_on_reload, name="provider_registry.prepare")
+    config_manager.add_post_swap_callback(_publish_on_reload, name="provider_registry.publish")
     reload_task = config_manager.start_reloader_task()
 
     # ARCH: capabilities auto-cache. Loaded from disk so data is available even
@@ -88,14 +88,14 @@ async def lifespan(app: FastAPI):
     capabilities_cache = CapabilitiesCache(config_manager.settings.model_cache_path)
     capabilities_cache.load()
 
-    app.state.model_service = ModelService(config_manager, capabilities_cache)
-    app.state.chat_service = ChatService(config_manager, app.state.model_service)
-    app.state.embedding_service = EmbeddingService(config_manager)
-    app.state.transcription_service = TranscriptionService(config_manager, app.state.model_service)
+    app.state.model_service = ModelService(config_manager, registry, capabilities_cache)
+    app.state.chat_service = ChatService(config_manager, registry)
+    app.state.embedding_service = EmbeddingService(config_manager, registry)
+    app.state.transcription_service = TranscriptionService(config_manager, registry)
 
-    await init_db(config_manager.settings.usage_db_path)
+    await init_db(config_manager.settings.usage_db_path, app.state.model_service.get_pricing)
 
-    capabilities_task = asyncio.create_task(capabilities_refresh_loop(config_manager, capabilities_cache))
+    capabilities_task = asyncio.create_task(capabilities_refresh_loop(config_manager, registry, capabilities_cache))
 
     yield
 
@@ -108,7 +108,7 @@ async def lifespan(app: FastAPI):
     # Close every provider-owned pool on shutdown (awaited so pools drain),
     # then drain pending usage flushes BEFORE the DB connection closes — an
     # in-flight _flush_row would otherwise race close_db() and silently no-op.
-    await clear_provider_cache_async()
+    await registry.aclose_all()
     await drain_pending_flushes()
     await close_db()
 

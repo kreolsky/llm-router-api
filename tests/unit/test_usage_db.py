@@ -21,6 +21,7 @@ from pytest_asyncio import fixture as asyncio_fixture
 
 from src.api.stat_routes import verify_stat_key
 from src.core import usage_db
+from src.core.config_schema import parse_config
 from src.core.usage_db import RequestStats, writer
 
 
@@ -36,9 +37,16 @@ def db_path(tmp_path):
     return str(tmp_path / "usage.db")
 
 
+# Pricing the writer resolves at flush time (per token, like stored pricing).
+_PRICES = {
+    "m": {"prompt": 1e-6, "completion": 2e-6},
+    "m1": {"prompt": 1e-6, "completion": 2e-6},
+}
+
+
 @asyncio_fixture
 async def db(db_path):
-    await usage_db.init_db(db_path)
+    await usage_db.init_db(db_path, _PRICES.get)
     yield usage_db.get_connection()
     await usage_db.close_db()
 
@@ -56,17 +64,16 @@ async def drain_tasks():
 
 
 async def flush(stats, *, request_id="r", project_name="p", duration_ms=1.0,
-                status_code=200, app_state=None):
+                status_code=200):
     await writer._flush_row(
         stats, request_id=request_id, project_name=project_name,
-        duration_ms=duration_ms, status_code=status_code, app_state=app_state,
+        duration_ms=duration_ms, status_code=status_code,
     )
 
 
-def pricing_state(pricing):
-    model_service = MagicMock()
-    model_service.get_pricing = MagicMock(return_value=pricing)
-    return SimpleNamespace(model_service=model_service)
+def pricing_lookup(pricing):
+    """A pricing source that answers `pricing` for every model."""
+    return lambda model_id: pricing
 
 
 # ---------------------------------------------------------------------------
@@ -79,10 +86,10 @@ class TestConnectionSetter:
 
     @pytest.mark.asyncio
     async def test_reinit_closes_prior_connection(self, db_path):
-        await usage_db.init_db(db_path)
+        await usage_db.init_db(db_path, _PRICES.get)
         first = usage_db.get_connection()
         with patch.object(first, "close", wraps=first.close) as close_spy:
-            await usage_db.init_db(db_path)
+            await usage_db.init_db(db_path, _PRICES.get)
             close_spy.assert_called_once()
         second = usage_db.get_connection()
         assert second is not first
@@ -94,15 +101,15 @@ class TestConnectionSetter:
         """A prior close that raises must not abort the swap: bailing would
         leave the dead handle installed AND orphan the fresh one the caller
         already opened — the exact leak set_connection exists to prevent."""
-        await usage_db.init_db(db_path)
+        await usage_db.init_db(db_path, _PRICES.get)
         first = usage_db.get_connection()
         with patch.object(first, "close", side_effect=RuntimeError("close failed")):
-            await usage_db.init_db(db_path)
+            await usage_db.init_db(db_path, _PRICES.get)
         second = usage_db.get_connection()
         assert second is not first
         # The fresh handle is live, not a corpse left behind by the failed close.
         cursor = await second.execute("SELECT 1")
-        assert await cursor.fetchone() == (1,)
+        assert tuple(await cursor.fetchone()) == (1,)
         await usage_db.close_db()
 
 
@@ -149,7 +156,7 @@ class TestMigration:
         await conn.commit()
         await conn.close()
 
-        await usage_db.init_db(db_path)
+        await usage_db.init_db(db_path, _PRICES.get)
         conn = usage_db.get_connection()
         cursor = await conn.execute("PRAGMA table_info(usage_events)")
         columns = {row[1] for row in await cursor.fetchall()}
@@ -168,7 +175,7 @@ class TestMigration:
         await conn.commit()
         await conn.close()
 
-        await usage_db.init_db(db_path)
+        await usage_db.init_db(db_path, _PRICES.get)
         rows = await fetch_rows(usage_db.get_connection())
         assert len(rows) == 1
         row = rows[0]
@@ -193,7 +200,7 @@ class TestMigration:
         await conn.commit()
         await conn.close()
 
-        await usage_db.init_db(db_path)
+        await usage_db.init_db(db_path, _PRICES.get)
         cursor = await usage_db.get_connection().execute(
             "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_usage_ts'"
         )
@@ -278,54 +285,52 @@ class TestComputeCost:
 
     def test_priced_event(self):
         stats = RequestStats(prompt_tokens=1000, completion_tokens=200, cached_tokens=0)
-        state = pricing_state({"prompt": 1e-6, "completion": 2e-6, "input_cache_read": 0.1e-6})
+        state = pricing_lookup({"prompt": 1e-6, "completion": 2e-6, "input_cache_read": 0.1e-6})
         cost = writer._compute_cost_usd(stats, state)
         assert cost == pytest.approx(1000 * 1e-6 + 200 * 2e-6)
 
     def test_cached_tokens_use_cache_rate(self):
         stats = RequestStats(prompt_tokens=1000, completion_tokens=0, cached_tokens=400)
-        state = pricing_state({"prompt": 1e-6, "completion": 2e-6, "input_cache_read": 0.1e-6})
+        state = pricing_lookup({"prompt": 1e-6, "completion": 2e-6, "input_cache_read": 0.1e-6})
         cost = writer._compute_cost_usd(stats, state)
         assert cost == pytest.approx(600 * 1e-6 + 400 * 0.1e-6)
 
     def test_missing_input_cache_read_falls_back_to_prompt_rate(self):
         """An absent cache rate must NOT be treated as free."""
         stats = RequestStats(prompt_tokens=1000, completion_tokens=0, cached_tokens=400)
-        state = pricing_state({"prompt": 1e-6, "completion": 2e-6})
+        state = pricing_lookup({"prompt": 1e-6, "completion": 2e-6})
         cost = writer._compute_cost_usd(stats, state)
         assert cost == pytest.approx(1000 * 1e-6)
 
     def test_unpriced_model_returns_none(self):
         stats = RequestStats(prompt_tokens=10, completion_tokens=5)
-        assert writer._compute_cost_usd(stats, pricing_state(None)) is None
+        assert writer._compute_cost_usd(stats, pricing_lookup(None)) is None
 
     def test_zero_token_event_returns_none(self):
         stats = RequestStats(prompt_tokens=0, completion_tokens=0)
-        state = pricing_state({"prompt": 1e-6, "completion": 2e-6})
+        state = pricing_lookup({"prompt": 1e-6, "completion": 2e-6})
         assert writer._compute_cost_usd(stats, state) is None
 
-    def test_no_model_service_returns_none(self):
+    def test_no_pricing_lookup_returns_none(self):
+        """Before init_db / after close_db nothing is priced."""
         stats = RequestStats(prompt_tokens=10, completion_tokens=5)
-        assert writer._compute_cost_usd(stats, SimpleNamespace()) is None
         assert writer._compute_cost_usd(stats, None) is None
 
     def test_get_pricing_failure_degrades_to_none(self):
         stats = RequestStats(prompt_tokens=10, completion_tokens=5)
-        model_service = MagicMock()
-        model_service.get_pricing = MagicMock(side_effect=RuntimeError("boom"))
-        cost = writer._compute_cost_usd(stats, SimpleNamespace(model_service=model_service))
+        cost = writer._compute_cost_usd(stats, MagicMock(side_effect=RuntimeError("boom")))
         assert cost is None
 
     def test_missing_prompt_or_completion_rate_returns_none(self):
         stats = RequestStats(prompt_tokens=10, completion_tokens=5)
-        assert writer._compute_cost_usd(stats, pricing_state({"prompt": 1e-6})) is None
-        assert writer._compute_cost_usd(stats, pricing_state({"completion": 1e-6})) is None
+        assert writer._compute_cost_usd(stats, pricing_lookup({"prompt": 1e-6})) is None
+        assert writer._compute_cost_usd(stats, pricing_lookup({"completion": 1e-6})) is None
 
     def test_pricing_is_per_token_not_per_million(self):
         # INVARIANT: stored pricing is USD per token. 1M tokens at $3/M must
         # cost $3 — a "per 1M" stored value would inflate this by 10^6.
         stats = RequestStats(prompt_tokens=1_000_000, completion_tokens=0)
-        state = pricing_state({"prompt": 3e-6, "completion": 15e-6})
+        state = pricing_lookup({"prompt": 3e-6, "completion": 15e-6})
         assert writer._compute_cost_usd(stats, state) == pytest.approx(3.0)
 
 
@@ -370,8 +375,7 @@ class TestFlushRow:
             "prompt_tokens_details": {"cached_tokens": 60},
             "completion_tokens_details": {"reasoning_tokens": 25},
         })
-        state = pricing_state({"prompt": 1e-6, "completion": 2e-6})
-        await flush(stats, request_id="r2", project_name="proj", status_code=200, app_state=state)
+        await flush(stats, request_id="r2", project_name="proj", status_code=200)
 
         row = (await fetch_rows(db))[0]
         assert row["prompt_tokens"] == 100
@@ -418,7 +422,6 @@ class TestScheduleFlush:
             task = writer.schedule_flush(
                 RequestStats(endpoint="chat"), request_id="r",
                 project_name="p", duration_ms=1.0, status_code=200,
-                app_state=None,
             )
             assert task is not None
             assert task in writer._usage_tasks
@@ -433,7 +436,6 @@ class TestScheduleFlush:
             task = writer.schedule_flush(
                 RequestStats(endpoint="chat"), request_id="r",
                 project_name="p", duration_ms=1.0, status_code=200,
-                app_state=None,
             )
             try:
                 await task
@@ -447,7 +449,6 @@ class TestScheduleFlush:
         task = writer.schedule_flush(
             RequestStats(endpoint="chat"), request_id="r",
             project_name="p", duration_ms=1.0, status_code=200,
-            app_state=None,
         )
         assert task is None
 
@@ -477,14 +478,12 @@ class TestDrainPendingFlushes:
             gated = writer.schedule_flush(
                 RequestStats(endpoint="chat"), request_id="r-gated",
                 project_name="p", duration_ms=1.0, status_code=200,
-                app_state=None,
             )
             await asyncio.wait_for(entered.wait(), timeout=1.0)
         with patch("src.core.usage_db.writer._flush_row", new=fast_flush):
             writer.schedule_flush(
                 RequestStats(endpoint="chat"), request_id="r-fast",
                 project_name="p", duration_ms=1.0, status_code=200,
-                app_state=None,
             )
             await asyncio.sleep(0)  # let the fast task finish (done callback fires)
 
@@ -514,7 +513,6 @@ class TestDrainPendingFlushes:
             stuck = writer.schedule_flush(
                 RequestStats(endpoint="chat"), request_id="r",
                 project_name="p", duration_ms=1.0, status_code=200,
-                app_state=None,
             )
             await asyncio.wait_for(entered.wait(), timeout=1.0)
 
@@ -537,9 +535,8 @@ async def seed_summary_rows(db):
     ok2 = RequestStats(endpoint="chat", model_id="m2", provider_name="p2")
     ok2.set_usage({"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110})
     err_no_usage = RequestStats(endpoint="chat", error_code="invalid_api_key")
-    await flush(ok1, request_id="r1", project_name="alice", status_code=200,
-                app_state=pricing_state({"prompt": 1e-6, "completion": 2e-6}))
-    await flush(ok2, request_id="r2", project_name="bob", status_code=200, app_state=None)
+    await flush(ok1, request_id="r1", project_name="alice", status_code=200)  # m1: priced
+    await flush(ok2, request_id="r2", project_name="bob", status_code=200)  # m2: unpriced
     await flush(err_no_usage, request_id="r3", project_name="unknown", status_code=401)
 
 
@@ -858,7 +855,7 @@ def build_stats_app() -> FastAPI:
 
     @app.get("/stream")
     async def stream(request: Request):
-        from src.services.chat_service.stream_processor import StreamProcessor
+        from src.services.chat_service.stream_processor import process_stream
 
         async def provider_stream():
             yield b'data: {"usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}\n\n'
@@ -872,10 +869,9 @@ def build_stats_app() -> FastAPI:
         stats.model_id = "m"
         stats.provider_name = "p"
         stats.stream = True
-        processor = StreamProcessor()
 
         async def body():
-            async for chunk in processor.process_stream(
+            async for chunk in process_stream(
                     provider_stream(), "m", "r", "u", "p", stats=stats):
                 yield chunk
 
@@ -990,9 +986,9 @@ class TestAuthKeyHashEnrichment:
 
         app = FastAPI()
         app.state.config_manager = MagicMock()
-        app.state.config_manager.get_config.return_value = {
+        app.state.config_manager.get_config.return_value = parse_config({
             "user_keys": {"proj": {"api_key": "nnp-v1-real"}}
-        }
+        })
         scope = {"type": "http", "method": "GET", "path": "/",
                  "headers": [], "app": app, "state": {}}
         request = StarletteRequest(scope)
