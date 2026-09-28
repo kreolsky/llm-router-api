@@ -165,14 +165,3 @@ def performance_thresholds() -> dict[str, float]:
         "max_memory_usage": 512.0
     }
 
-
-@pytest.fixture
-def streaming_test_config() -> dict[str, Any]:
-    """Configuration for streaming tests."""
-    return {
-        "max_tokens": 50,
-        "chunk_timeout": 10.0,
-        "min_chunks": 1,
-        "max_empty_chunks": 5
-    }
-

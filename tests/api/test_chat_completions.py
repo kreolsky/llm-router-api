@@ -19,6 +19,11 @@ from tests.test_utils import (
 
 logger = logging.getLogger(__name__)
 
+# WHY: deepseek/flash (DeepSeek V4 Flash) is a thinking model that spends its
+# whole small token budget on reasoning before any visible content, so a
+# test asserting non-empty content needs a budget with room past the reasoning.
+CONTENT_BUDGET = {"local_chat": 50, "gemini_mini": 50, "deepseek_flash": 300}
+
 
 class TestChatCompletions:
     """Test chat completion functionality."""
@@ -43,7 +48,7 @@ class TestChatCompletions:
             "model": model["id"],
             "messages": sample_messages,
             "stream": False,
-            "max_tokens": 50
+            "max_tokens": CONTENT_BUDGET[model_key]
         }
         
         with TestTimer() as timer:
@@ -102,7 +107,6 @@ class TestChatCompletions:
         test_models: dict, 
         model_key: str,
         sample_messages: list,
-        streaming_test_config: dict,
         performance_thresholds: dict,
         http_client: httpx.AsyncClient
     ):
@@ -113,9 +117,9 @@ class TestChatCompletions:
             "model": model["id"],
             "messages": sample_messages,
             "stream": True,
-            "max_tokens": streaming_test_config["max_tokens"]
+            "max_tokens": CONTENT_BUDGET[model_key]
         }
-        
+
         async with httpx.AsyncClient(timeout=30.0) as client, client.stream(
             "POST",
             f"{base_url}/v1/chat/completions",
@@ -606,7 +610,7 @@ class TestChatCompletions:
             "model": model_id,
             "messages": sample_messages,
             "stream": False,
-            "max_tokens": 30,
+            "max_tokens": CONTENT_BUDGET["deepseek_flash"],
             "temperature": 0.0  # Low temperature for consistent responses
         }
         
