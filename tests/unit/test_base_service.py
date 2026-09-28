@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from src.core.config_schema import ModelEntry, ProviderEntry, parse_config, parse_model, parse_provider
-from src.core.context import AuthContext, RequestContext
+from src.core.config_schema import ModelEntry, parse_config, parse_model, parse_provider
+from src.core.context import AuthContext, RequestContext, request_context
 from src.core.usage_db import RequestStats
 from src.providers import ProviderRegistry
 from src.services.base import BaseService
@@ -41,6 +41,14 @@ def _make_request(request_id="req-abc", project_name=None):
     return request
 
 
+def _provider(identity=None, dialect=None):
+    """A stand-in provider instance carrying the entry it was built from."""
+    raw = {"type": "openai", "base_url": "https://x.example.com"}
+    if dialect is not None:
+        raw["reasoning_dialect"] = dialect
+    return SimpleNamespace(identity=identity, entry=parse_provider(raw))
+
+
 def _registry():
     """A stand-in registry: services only ever call get(name)."""
     return MagicMock(spec=ProviderRegistry)
@@ -62,76 +70,72 @@ def _build_service(models=None, providers=None, registry=None):
 
 
 # ===================================================================
-# _get_request_context
+# request_context — the accessor services read the context through
 # ===================================================================
 
-class TestGetRequestContext:
+class TestRequestContextAccessor:
 
     def test_with_request_id(self):
         """Request with request_id returns it in context."""
-        svc = _build_service()
         request = _make_request("req-42", project_name="my-project")
-        ctx = svc._get_request_context(request)
+        ctx = request_context(request)
         assert ctx.request_id == "req-42"
         assert ctx.user_id == "my-project"
 
     def test_without_request_returns_unknown(self):
         """Without request, request_id is 'unknown'."""
-        svc = _build_service()
-        ctx = svc._get_request_context(None)
+        ctx = request_context(None)
         assert ctx.request_id == "unknown"
         assert ctx.user_id == "unknown"
 
     def test_extracts_user_id_from_project_name(self):
         """user_id matches the project_name from the typed context."""
-        svc = _build_service()
         request = _make_request("req-1", project_name="acme-corp")
-        ctx = svc._get_request_context(request)
+        ctx = request_context(request)
         assert ctx.user_id == "acme-corp"
 
     def test_user_id_unknown_when_project_name_none(self):
         """user_id is 'unknown' when project_name is not yet set."""
-        svc = _build_service()
         request = _make_request("req-1", project_name=None)
-        ctx = svc._get_request_context(request)
+        ctx = request_context(request)
         assert ctx.user_id == "unknown"
 
     def test_returns_typed_context(self):
         """The accessor returns the dataclass, not a stringly-typed dict."""
-        svc = _build_service()
-        ctx = svc._get_request_context(_make_request("req-9", project_name="p"))
+        ctx = request_context(_make_request("req-9", project_name="p"))
         assert isinstance(ctx, RequestContext)
 
     def test_request_without_middleware_context(self):
         """A request that never passed through the middleware degrades to 'unknown'."""
-        svc = _build_service()
         request = MagicMock()
         request.state = SimpleNamespace()
-        ctx = svc._get_request_context(request)
+        ctx = request_context(request)
         assert ctx.request_id == "unknown"
         assert ctx.user_id == "unknown"
 
 
 # ===================================================================
-# _validate_and_get_config
+# resolve_model — the one access resolver
 # ===================================================================
 
-class TestValidateAndGetConfig:
+class TestResolveModel:
 
-    def test_empty_model_raises_400(self):
-        """Empty model string raises handle_model_not_specified (400)."""
+    @pytest.mark.asyncio
+    async def test_empty_model_raises_400(self):
+        """Empty model string raises model_not_specified (400) in the dispatch funnel."""
         svc = _build_service()
         auth_ctx = _make_auth_context()
         with pytest.raises(HTTPException) as exc_info:
-            svc._validate_and_get_config("", auth_ctx, model_id="")
+            await svc._resolve_target(_make_identity_request(), auth_ctx, "")
         assert exc_info.value.status_code == 400
 
-    def test_none_model_raises_400(self):
-        """None model raises handle_model_not_specified (400)."""
+    @pytest.mark.asyncio
+    async def test_none_model_raises_400(self):
+        """None model raises model_not_specified (400) in the dispatch funnel."""
         svc = _build_service()
         auth_ctx = _make_auth_context()
         with pytest.raises(HTTPException) as exc_info:
-            svc._validate_and_get_config(None, auth_ctx, model_id=None)
+            await svc._resolve_target(_make_identity_request(), auth_ctx, None)
         assert exc_info.value.status_code == 400
 
     def test_model_not_in_allowed_raises_403(self):
@@ -142,7 +146,7 @@ class TestValidateAndGetConfig:
         )
         auth_ctx = _make_auth_context(allowed_models=["gpt-3.5-turbo"])
         with pytest.raises(HTTPException) as exc_info:
-            svc._validate_and_get_config("gpt-4", auth_ctx, model_id="gpt-4")
+            svc.resolve_model("gpt-4", auth_ctx, model_id="gpt-4")
         assert exc_info.value.status_code == 403
 
     def test_model_not_in_config_raises_404(self):
@@ -150,7 +154,7 @@ class TestValidateAndGetConfig:
         svc = _build_service(models={})
         auth_ctx = _make_auth_context()  # empty allowed_models = unrestricted
         with pytest.raises(HTTPException) as exc_info:
-            svc._validate_and_get_config("nonexistent-model", auth_ctx, model_id="nonexistent-model")
+            svc.resolve_model("nonexistent-model", auth_ctx, model_id="nonexistent-model")
         assert exc_info.value.status_code == 404
 
     def test_provider_not_in_config_raises_404(self):
@@ -161,11 +165,11 @@ class TestValidateAndGetConfig:
         )
         auth_ctx = _make_auth_context()
         with pytest.raises(HTTPException) as exc_info:
-            svc._validate_and_get_config("gpt-4", auth_ctx, model_id="gpt-4")
+            svc.resolve_model("gpt-4", auth_ctx, model_id="gpt-4")
         assert exc_info.value.status_code == 404
 
-    def test_happy_path_returns_tuple(self):
-        """Happy path returns (model_config, provider_name, provider_model_name, provider_config)."""
+    def test_happy_path_returns_model_entry(self):
+        """Happy path returns the model's entry (its provider and upstream name ride on it)."""
         models = {
             "my-model": {
                 "provider": "openai",
@@ -179,23 +183,22 @@ class TestValidateAndGetConfig:
         svc = _build_service(models=models, providers=providers)
         auth_ctx = _make_auth_context()
 
-        model_config, provider_name, provider_model_name, provider_config = \
-            svc._validate_and_get_config("my-model", auth_ctx, model_id="my-model")
+        model_config = svc.resolve_model("my-model", auth_ctx, model_id="my-model")
 
         assert model_config == parse_model("my-model", models["my-model"])
-        assert provider_name == "openai"
-        assert provider_model_name == "gpt-4-turbo"
-        assert provider_config == parse_provider(providers["openai"])
+        assert model_config.provider == "openai"
+        assert model_config.provider_model_name == "gpt-4-turbo"
 
-    def test_happy_path_defaults_provider_model_name(self):
-        """When provider_model_name is absent, defaults to the requested model name."""
+    @pytest.mark.asyncio
+    async def test_dispatch_defaults_provider_model_name(self):
+        """When provider_model_name is absent, the dispatch funnel sends the requested model name."""
         models = {"gpt-4": {"provider": "openai"}}
         providers = {"openai": {"type": "openai"}}
         svc = _build_service(models=models, providers=providers)
         auth_ctx = _make_auth_context()
 
-        _, _, provider_model_name, _ = svc._validate_and_get_config("gpt-4", auth_ctx, model_id="gpt-4")
-        assert provider_model_name == "gpt-4"
+        target = await svc._resolve_target(_make_identity_request(), auth_ctx, "gpt-4")
+        assert target.provider_model_name == "gpt-4"
 
     def test_empty_allowed_models_unrestricted(self):
         """Empty allowed_models list means unrestricted access -- no 403."""
@@ -204,7 +207,7 @@ class TestValidateAndGetConfig:
         svc = _build_service(models=models, providers=providers)
         auth_ctx = _make_auth_context(allowed_models=[])
 
-        model_config, *_ = svc._validate_and_get_config("gpt-4", auth_ctx, model_id="gpt-4")
+        model_config = svc.resolve_model("gpt-4", auth_ctx, model_id="gpt-4")
         assert model_config is not None
 
     def test_model_in_allowed_models_succeeds(self):
@@ -214,12 +217,11 @@ class TestValidateAndGetConfig:
         svc = _build_service(models=models, providers=providers)
         auth_ctx = _make_auth_context(allowed_models=["gpt-4"])
 
-        model_config, provider_name, provider_model_name, provider_config = \
-            svc._validate_and_get_config("gpt-4", auth_ctx, model_id="gpt-4")
+        model_config = svc.resolve_model("gpt-4", auth_ctx, model_id="gpt-4")
 
         assert model_config == parse_model("gpt-4", models["gpt-4"])
-        assert provider_name == "openai"
-        assert provider_model_name == "gpt-4-turbo"
+        assert model_config.provider == "openai"
+        assert model_config.provider_model_name == "gpt-4-turbo"
 
     def test_invariant_access_check_before_existence(self):
         """INVARIANT: access check runs before existence check.
@@ -231,7 +233,7 @@ class TestValidateAndGetConfig:
         auth_ctx = _make_auth_context(allowed_models=["only-this-model"])
 
         with pytest.raises(HTTPException) as exc_info:
-            svc._validate_and_get_config("secret-model", auth_ctx, model_id="secret-model")
+            svc.resolve_model("secret-model", auth_ctx, model_id="secret-model")
         # Must be 403 (access denied), not 404 (not found)
         assert exc_info.value.status_code == 403
 
@@ -250,7 +252,7 @@ class TestPrepareDispatchProviders:
     @pytest.mark.asyncio
     async def test_resolves_provider_from_registry(self, registry, mock_get):
         """A valid config yields the registry's instance on PreparedDispatch."""
-        mock_provider = MagicMock()
+        mock_provider = _provider()
         mock_get.return_value = mock_provider
 
         svc = _build_service(
@@ -323,7 +325,7 @@ class TestPrepareDispatchPreamble:
 
     @pytest.mark.asyncio
     async def test_stats_enriched_and_identity_headers_built(self, registry, mock_get):
-        mock_get.return_value = SimpleNamespace(identity="passthrough")
+        mock_get.return_value = _provider(identity="passthrough")
         svc = self._svc(registry)
         request = self._request({"model": "m"})
         request.headers = {"user-agent": "oc/1.0"}
@@ -347,7 +349,7 @@ class TestPrepareDispatchPreamble:
         the call raises. A truthy non-string (123) is used deliberately: None
         would short-circuit at MODEL_NOT_SPECIFIED without exercising it.
         """
-        mock_get.return_value = SimpleNamespace(identity=None)
+        mock_get.return_value = _provider()
         svc = self._svc(registry)
         request = self._request({"model": 123})
         request.headers = {}
@@ -381,7 +383,7 @@ class TestPrepareDispatchDialectTranslation:
 
     @pytest.mark.asyncio
     async def test_openrouter_body_translated_on_the_funnel(self, registry, mock_get):
-        mock_get.return_value = SimpleNamespace(identity=None)
+        mock_get.return_value = _provider(dialect="openrouter")
         svc = self._svc(registry, {"p": {"type": "openai", "base_url": "https://x",
                                "reasoning_dialect": "openrouter"}})
         request = self._request({"model": "m", "messages": [],
@@ -397,7 +399,7 @@ class TestPrepareDispatchDialectTranslation:
 
     @pytest.mark.asyncio
     async def test_default_dialect_drops_thinking_keeps_effort(self, registry, mock_get):
-        mock_get.return_value = SimpleNamespace(identity=None)
+        mock_get.return_value = _provider()
         svc = self._svc(registry, {"p": {"type": "openai", "base_url": "https://x"}})
         request = self._request({"model": "m", "messages": [],
                                  "thinking": {"type": "enabled"},
@@ -413,7 +415,7 @@ class TestPrepareDispatchDialectTranslation:
     async def test_deepseek_body_untouched_on_the_funnel(self, registry, mock_get):
         """The native dialect: both fields reach the provider verbatim,
         title-shaped requests included."""
-        mock_get.return_value = SimpleNamespace(identity=None)
+        mock_get.return_value = _provider(dialect="deepseek")
         svc = self._svc(registry, {"p": {"type": "openai", "base_url": "https://x",
                                "reasoning_dialect": "deepseek"}})
         body = {"model": "m", "messages": [], "thinking": {"type": "disabled"}}
@@ -425,10 +427,24 @@ class TestPrepareDispatchDialectTranslation:
         assert prepared.request_body == body
 
     @pytest.mark.asyncio
+    async def test_dialect_follows_the_called_instance_not_the_config(self, registry, mock_get):
+        """Across a reload the config dict and the registry can hold two
+        generations: the body is shaped for the backend actually called."""
+        mock_get.return_value = _provider(dialect="openrouter")
+        svc = self._svc(registry, {"p": {"type": "openai", "base_url": "https://x"}})
+        request = self._request({"model": "m", "messages": [], "reasoning_effort": "high"})
+
+        prepared = await svc._prepare_dispatch(
+            request, _make_auth_context(), component="c", log_title="t")
+
+        assert prepared.request_body["reasoning"] == {"effort": "high"}
+        assert "reasoning_effort" not in prepared.request_body
+
+    @pytest.mark.asyncio
     async def test_policy_gate_fires_before_the_translation(self, registry, mock_get):
         """A value outside the model's allowed list is a 400 from the policy —
         the openrouter re-nest never runs for refused principals."""
-        mock_get.return_value = SimpleNamespace(identity=None)
+        mock_get.return_value = _provider(dialect="openrouter")
         svc = _build_service(
             registry=registry,
             models={"m": {"provider": "p",
@@ -468,7 +484,7 @@ class TestResolveTarget:
     @pytest.mark.asyncio
     async def test_resolves_target_without_parsing_a_body(self, registry, mock_get):
         """A body-agnostic call resolves everything the dispatch needs."""
-        mock_get.return_value = SimpleNamespace(identity="passthrough")
+        mock_get.return_value = _provider(identity="passthrough")
         svc = self._svc(registry)
         request = _make_identity_request({"user-agent": "oc/1.0"})
 
@@ -502,7 +518,7 @@ class TestResolveTarget:
     @pytest.mark.asyncio
     async def test_prepare_dispatch_delegates_to_the_resolver(self, registry, mock_get):
         """The JSON wrapper is thin: parse, delegate, apply the effort policy."""
-        mock_get.return_value = SimpleNamespace(identity=None)
+        mock_get.return_value = _provider()
         svc = self._svc(registry)
         request = _make_request("req-1")
         request.json = AsyncMock(return_value={"model": "m"})
@@ -513,7 +529,7 @@ class TestResolveTarget:
             mock_resolve.return_value = SimpleNamespace(
                 request_id="req-1", user_id="unknown", stats=RequestStats(),
                 error_ctx={}, model_config=ModelEntry(provider="openai"), provider_name="openai",
-                provider_model_name="m", provider_config=ProviderEntry(type="openai"),
+                provider_model_name="m",
                 provider=mock_get.return_value, identity_headers=None,
             )
             prepared = await svc._prepare_dispatch(
@@ -530,7 +546,7 @@ class TestResolveTarget:
     async def test_reasoning_effort_policy_stays_in_the_json_wrapper(self, registry, mock_get):
         """The effort policy is body-shaped, so it is applied by the JSON
         wrapper — a multipart endpoint riding the resolver must never get it."""
-        mock_get.return_value = SimpleNamespace(identity=None)
+        mock_get.return_value = _provider()
         models = {"m": {
             "provider": "openai",
             "reasoning_effort": {"allowed": ["low", "medium", "high"], "default": "high"},

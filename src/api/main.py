@@ -89,9 +89,9 @@ async def lifespan(app: FastAPI):
     capabilities_cache.load()
 
     app.state.model_service = ModelService(config_manager, registry, capabilities_cache)
-    app.state.chat_service = ChatService(config_manager, registry, app.state.model_service)
+    app.state.chat_service = ChatService(config_manager, registry)
     app.state.embedding_service = EmbeddingService(config_manager, registry)
-    app.state.transcription_service = TranscriptionService(config_manager, registry, app.state.model_service)
+    app.state.transcription_service = TranscriptionService(config_manager, registry)
 
     await init_db(config_manager.settings.usage_db_path)
 

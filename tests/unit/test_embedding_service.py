@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from src.core.config_schema import parse_config
+from src.core.config_schema import parse_config, parse_provider
 from src.core.context import AuthContext, RequestContext
 from src.providers import ProviderRegistry
 from src.services.embedding_service import EmbeddingService
@@ -80,7 +80,7 @@ class TestIdentityHeadersForwarded:
         request = _make_request(json.dumps({"model": "emb/model", "input": "hi"}).encode())
         request.headers = {"user-agent": "Kilo-Code/7.5.5", "authorization": "Bearer nnp-v1-x"}
 
-        provider_instance = SimpleNamespace(identity="passthrough")
+        provider_instance = SimpleNamespace(identity="passthrough", entry=parse_provider(providers["embed"]))
         provider_instance.embeddings = AsyncMock(return_value={"data": [], "usage": {}})
         with patch.object(service.registry, "get", return_value=provider_instance):
             await service.create_embeddings(request, _make_auth_context())

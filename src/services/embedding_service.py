@@ -24,7 +24,7 @@ class EmbeddingService(BaseService):
                 request_id=prepared.request_id, extra_headers=prepared.identity_headers
             )
 
-            self._log_service_data(
+            logger.debug_data(
                 title="Embedding Response JSON",
                 data=response_data,
                 request_id=prepared.request_id,

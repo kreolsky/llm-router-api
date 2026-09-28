@@ -1,5 +1,6 @@
 """Unit tests for src/services/model_service.py — ModelService class."""
 
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -33,10 +34,12 @@ def _make_config(models=None, providers=None, model_info=None):
 
 
 def _build_service(models=None, providers=None, model_info=None, cache=None, registry=None):
-    """Build a ModelService with a mocked ConfigManager, registry and optional cache."""
+    """Build a ModelService with a mocked ConfigManager and registry; the
+    cache defaults to an empty, never-loaded one (the service requires a cache)."""
     cm = MagicMock()
     cm.get_config.return_value = _make_config(models, providers, model_info)
-    return ModelService(cm, registry or MagicMock(spec=ProviderRegistry), cache)
+    return ModelService(cm, registry or MagicMock(spec=ProviderRegistry),
+                        cache if cache is not None else CapabilitiesCache(os.devnull))
 
 
 def _make_cache(entries=None):

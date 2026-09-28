@@ -8,7 +8,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from src.core.config_schema import parse_config
+from src.core.config_schema import parse_config, parse_provider
 from src.core.context import AuthContext, RequestContext
 from src.core.usage_db import RequestStats
 from src.services.chat_service.chat_service import ChatService
@@ -20,7 +20,7 @@ def _make_auth_context():
 
 
 def _service() -> ChatService:
-    return ChatService(MagicMock(), MagicMock(), MagicMock())
+    return ChatService(MagicMock(), MagicMock())
 
 
 def _request_raising(exc: Exception):
@@ -66,6 +66,7 @@ class _StubProvider:
     """Provider double: records dispatch, returns canned bodies."""
 
     identity = None  # no identity profile → identity_headers stay None
+    entry = parse_provider({"type": "openai", "base_url": "http://upstream.invalid"})
 
     def __init__(self, stream_frames=None):
         self.chat_calls: list[tuple[dict, str]] = []
@@ -103,7 +104,7 @@ def _happy_service(provider: _StubProvider) -> ChatService:
                                     "provider_model_name": "upstream-a"}},
         "providers": {"prov-a": {"type": "openai", "base_url": "http://upstream.invalid"}},
     })
-    return ChatService(cm, registry, MagicMock())
+    return ChatService(cm, registry)
 
 
 def _happy_request(body: dict):

@@ -859,7 +859,7 @@ def build_stats_app() -> FastAPI:
 
     @app.get("/stream")
     async def stream(request: Request):
-        from src.services.chat_service.stream_processor import StreamProcessor
+        from src.services.chat_service.stream_processor import process_stream
 
         async def provider_stream():
             yield b'data: {"usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}\n\n'
@@ -873,10 +873,9 @@ def build_stats_app() -> FastAPI:
         stats.model_id = "m"
         stats.provider_name = "p"
         stats.stream = True
-        processor = StreamProcessor()
 
         async def body():
-            async for chunk in processor.process_stream(
+            async for chunk in process_stream(
                     provider_stream(), "m", "r", "u", "p", stats=stats):
                 yield chunk
 

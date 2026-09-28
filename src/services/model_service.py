@@ -13,7 +13,6 @@ import time
 from typing import Any
 
 from ..core.context import AuthContext
-from ..core.error_handling import ErrorType, create_error
 from ..core.logging import logger
 from ..core.model_capabilities import (
     CapabilitiesCache,
@@ -29,7 +28,7 @@ class ModelService(BaseService):
     """Lists models and retrieves single-model details from merged capabilities."""
 
     def __init__(self, config_manager, registry: ProviderRegistry,
-                 capabilities_cache: CapabilitiesCache | None = None):
+                 capabilities_cache: CapabilitiesCache):
         super().__init__(config_manager, registry)
         self.capabilities_cache = capabilities_cache
 
@@ -73,9 +72,7 @@ class ModelService(BaseService):
         from the SAME key the dispatch funnel enforces, never re-typed, so
         list_models and retrieve_model cannot diverge from the wire behaviour.
         """
-        cache_data: dict[str, Any] = {}
-        if self.capabilities_cache is not None:
-            cache_data = self.capabilities_cache.get(model_id) or {}
+        cache_data = self.capabilities_cache.get(model_id) or {}
         config = self.config_manager.get_config()
         model_info = config.model_info.get(model_id) or {}
         derived: dict[str, Any] = {}
@@ -105,8 +102,6 @@ class ModelService(BaseService):
 
     def _capability_meta(self, model_id: str) -> dict[str, Any]:
         """Provenance fields (source, fetched_at) for diagnostics, when available."""
-        if self.capabilities_cache is None:
-            return {}
         meta = self.capabilities_cache.get_meta(model_id)
         if meta is None:
             return {}
@@ -175,39 +170,9 @@ class ModelService(BaseService):
         (debug) triggers a best-effort background refresh of the model's
         provider before reading; failures are non-fatal (stale-if-error).
         """
-        allowed_models = auth_context.allowed_models
-        # INVARIANT: access check BEFORE existence to prevent information leakage.
-        if allowed_models and model_id not in allowed_models:
-            raise create_error(ErrorType.MODEL_NOT_ALLOWED, model_id=model_id)
-
-        current_config = self.config_manager.get_config()
-
-        model_data = current_config.models.get(model_id)
-        if not model_data:
-            raise create_error(ErrorType.MODEL_NOT_FOUND, model_id=model_id)
-
-        provider_name = model_data.provider
-        provider_model_name = model_data.provider_model_name
-
-        provider_config = current_config.providers.get(provider_name)
-        if not provider_config:
-            raise create_error(ErrorType.PROVIDER_NOT_FOUND, model_id=model_id, provider_name=provider_name)
-
-        # ARCH: optional debug refresh — NOT the default path. Best effort,
-        # errors swallowed (stale-if-error). The result is still read from cache.
-        if (
-            refresh
-            and self.capabilities_cache is not None
-            and self.config_manager.settings.model_cache_enabled
-        ):
-            try:
-                await refresh_provider_capabilities(self.config_manager, self.registry,
-                                                    self.capabilities_cache, provider_name)
-            except Exception as e:
-                logger.warning(
-                    f"Debug capabilities refresh failed for {model_id}: {e}",
-                    error_type="capabilities_refresh_error",
-                )
+        model_data = self.resolve_model(model_id, auth_context, model_id=model_id)
+        if refresh:
+            await self._debug_refresh(model_id, model_data.provider)
 
         stored = self._resolve_stored_capabilities(model_id)
         rendered = render_capabilities(stored)
@@ -215,10 +180,25 @@ class ModelService(BaseService):
 
         return self._build_model_response(
             model_id,
-            provider=provider_name,
-            provider_model_name=provider_model_name,
+            provider=model_data.provider,
+            provider_model_name=model_data.provider_model_name,
             params=model_data.params,
             options=model_data.options,
             **rendered,
             **meta,
         )
+
+    async def _debug_refresh(self, model_id: str, provider_name: str) -> None:
+        """The ``?refresh=true`` path: refresh one provider's capabilities in place."""
+        # ARCH: optional debug refresh — NOT the default path. Best effort,
+        # errors swallowed (stale-if-error). The result is still read from cache.
+        if not self.config_manager.settings.model_cache_enabled:
+            return
+        try:
+            await refresh_provider_capabilities(self.config_manager, self.registry,
+                                                self.capabilities_cache, provider_name)
+        except Exception as e:
+            logger.warning(
+                f"Debug capabilities refresh failed for {model_id}: {e}",
+                error_type="capabilities_refresh_error",
+            )

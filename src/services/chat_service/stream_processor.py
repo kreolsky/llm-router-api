@@ -84,123 +84,112 @@ async def _prepend(first_chunk: bytes,
         await rest.aclose()
 
 
-class StreamProcessor:
-    """Forwards provider SSE streams.
+async def process_stream(provider_stream: AsyncGenerator[bytes, None],
+                         model_id: str,
+                         request_id: str,
+                         user_id: str,
+                         provider_name: str,
+                         stats: RequestStats) -> AsyncGenerator[bytes, None]:
+    """Forward a provider SSE stream byte-for-byte (logging, usage capture,
+    error framing).
 
-    Holds no per-stream mutable state: every stream runs with its own local
-    captured-usage holder so concurrent streams never overwrite each other.
+    Holds no state across calls: captured usage lives in a per-stream holder,
+    so concurrent streams never affect each other.
+
+    The per-request RequestStats holder is enriched in place: mid-stream
+    failures write error_code/error_message from the same payload as the
+    SSE error frame (so the frame and the row cannot drift), and set_usage
+    runs in a ``finally`` so the error path and a client disconnect keep
+    partial usage.
     """
+    captured_usage: dict[str, Any] = {}
+    chunk_stats = _StreamStats()
+    ctx = _StreamContext(request_id, user_id, model_id, provider_name, stats)
+    start_time = time.time()
 
-    def __init__(self):
-        logger.info("StreamProcessor initialized", extra={
-            "stream_processor": {}
-        })
+    logger.info("Starting stream processing", extra={
+        "request_id": request_id,
+        "user_id": user_id,
+        "model": model_id
+    })
 
-    async def process_stream(self,
-                           provider_stream: AsyncGenerator[bytes, None],
-                           model_id: str,
-                           request_id: str,
-                           user_id: str,
-                           provider_name: str = "",
-                           stats: RequestStats | None = None) -> AsyncGenerator[bytes, None]:
-        """Forward a provider SSE stream byte-for-byte (logging, usage capture,
-        error framing).
-
-        Captured usage lives in a per-stream holder, so concurrent streams
-        never affect each other.
-
-        The per-request RequestStats holder is enriched in place: mid-stream
-        failures write error_code/error_message from the same payload as the
-        SSE error frame (so the frame and the row cannot drift), and set_usage
-        runs in a ``finally`` so the error path and a client disconnect keep
-        partial usage.
-        """
-        captured_usage: dict[str, Any] = {}
-        # Throwaway holder when the caller passed none (unit tests): the
-        # enrichment below stays identical, it just goes nowhere.
-        req_stats = stats if stats is not None else RequestStats()
-        chunk_stats = _StreamStats()
-        start_time = time.time()
-
-        logger.info("Starting stream processing", extra={
-            "request_id": request_id,
-            "user_id": user_id,
-            "model": model_id
-        })
-
-        try:
-            async for chunk in self._passthrough(
-                    provider_stream, captured_usage, chunk_stats,
-                    _StreamContext(request_id, user_id, model_id, provider_name, req_stats)):
-                yield chunk
-        except Exception as e:
-            logger.error("Stream processing failed", extra={
-                "request_id": request_id,
-                "user_id": user_id,
-                "model": model_id,
-                "stream_processing": {
-                    "duration_seconds": time.time() - start_time,
-                    "chunks_processed": chunk_stats.chunks,
-                    "error": str(e),
-                    "error_type": type(e).__name__
-                }
-            }, exc_info=True)
-            error_payload = _error_payload(e)
-            # The ONE envelope extractor (core/error_handling/envelope.py),
-            # shared with the HTTP exception handler: the frame the client
-            # sees and the row the dashboard sees cannot drift.
-            # overwrite=True: this payload is the terminal error for the
-            # request, so it owns error_code/error_message outright.
-            enrich_stats_from_envelope(
-                req_stats, error_payload,
-                default_error_code="internal_server_error", overwrite=True,
-            )
-            yield _frame_error(error_payload)
-            return
-        finally:
-            if captured_usage.get("usage"):
-                req_stats.set_usage(captured_usage["usage"])
-
-        logger.info("Stream completed", extra={
-                "request_id": request_id,
-                "duration": round(time.time() - start_time, 3),
-                "total_bytes": chunk_stats.bytes
-            })
-
-    async def _passthrough(self,
-                           provider_stream: AsyncGenerator[bytes, None],
-                           captured_usage: dict[str, Any],
-                           stats: "_StreamStats",
-                           ctx: "_StreamContext") -> AsyncGenerator[bytes, None]:
-        """Forward chunks unchanged, only peeking for reasoning fields, usage
-        and upstream error frames.
-
-        Every peek is gated on a raw byte substring test, so a chunk that
-        carries none of them costs one scan and no parsing.
-        """
-        is_debug = logger.is_debug_enabled()
-        async for chunk in provider_stream:
-            stats.chunks += 1
-            stats.bytes += len(chunk)
-
-            if is_debug:
-                preview = chunk.decode('utf-8', errors='replace')[:200].replace('\n', '\\n')
-                logger.debug(f"Chunk {stats.chunks} ({len(chunk)}B): {preview}", request_id=ctx.request_id)
-
-            if b'"reasoning"' in chunk:
-                chunk = _remap_reasoning_in_chunk(chunk)
-
-            # INVARIANT: the chunk is yielded before the usage and error peeks and
-            # is never rewritten by them.
-            # Why: the router is transparent — the client must see the upstream's
-            # own error text and framing; these peeks only log and record.
+    try:
+        async for chunk in _passthrough(provider_stream, captured_usage, chunk_stats, ctx):
             yield chunk
+    except Exception as e:
+        yield _stream_failure(e, ctx, chunk_stats, start_time)
+        return
+    finally:
+        if captured_usage.get("usage"):
+            stats.set_usage(captured_usage["usage"])
 
-            if b'"usage"' in chunk and b'"prompt_tokens"' in chunk:
-                _capture_usage_from_chunk(chunk, captured_usage)
+    logger.info("Stream completed", extra={
+            "request_id": request_id,
+            "duration": round(time.time() - start_time, 3),
+            "total_bytes": chunk_stats.bytes
+        })
 
-            if b'"error"' in chunk:
-                _note_upstream_error(chunk, ctx)
+
+def _stream_failure(e: Exception, ctx: "_StreamContext", chunk_stats: "_StreamStats",
+                    start_time: float) -> bytes:
+    """Log a mid-stream failure, record it on the stats row, return its SSE frame."""
+    logger.error("Stream processing failed", extra={
+        "request_id": ctx.request_id,
+        "user_id": ctx.user_id,
+        "model": ctx.model_id,
+        "stream_processing": {
+            "duration_seconds": time.time() - start_time,
+            "chunks_processed": chunk_stats.chunks,
+            "error": str(e),
+            "error_type": type(e).__name__
+        }
+    }, exc_info=True)
+    error_payload = _error_payload(e)
+    # The ONE envelope extractor (core/error_handling/envelope.py),
+    # shared with the HTTP exception handler: the frame the client
+    # sees and the row the dashboard sees cannot drift.
+    # overwrite=True: this payload is the terminal error for the
+    # request, so it owns error_code/error_message outright.
+    enrich_stats_from_envelope(
+        ctx.req_stats, error_payload,
+        default_error_code="internal_server_error", overwrite=True,
+    )
+    return _frame_error(error_payload)
+
+
+async def _passthrough(provider_stream: AsyncGenerator[bytes, None],
+                       captured_usage: dict[str, Any],
+                       stats: "_StreamStats",
+                       ctx: "_StreamContext") -> AsyncGenerator[bytes, None]:
+    """Forward chunks unchanged, only peeking for reasoning fields, usage
+    and upstream error frames.
+
+    Every peek is gated on a raw byte substring test, so a chunk that
+    carries none of them costs one scan and no parsing.
+    """
+    is_debug = logger.is_debug_enabled()
+    async for chunk in provider_stream:
+        stats.chunks += 1
+        stats.bytes += len(chunk)
+
+        if is_debug:
+            preview = chunk.decode('utf-8', errors='replace')[:200].replace('\n', '\\n')
+            logger.debug(f"Chunk {stats.chunks} ({len(chunk)}B): {preview}", request_id=ctx.request_id)
+
+        if b'"reasoning"' in chunk:
+            chunk = _remap_reasoning_in_chunk(chunk)
+
+        # INVARIANT: the chunk is yielded before the usage and error peeks and
+        # is never rewritten by them.
+        # Why: the router is transparent — the client must see the upstream's
+        # own error text and framing; these peeks only log and record.
+        yield chunk
+
+        if b'"usage"' in chunk and b'"prompt_tokens"' in chunk:
+            _capture_usage_from_chunk(chunk, captured_usage)
+
+        if b'"error"' in chunk:
+            _note_upstream_error(chunk, ctx)
 
 
 @dataclass
