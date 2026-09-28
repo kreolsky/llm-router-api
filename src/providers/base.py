@@ -8,6 +8,7 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 import httpx
+from fastapi import HTTPException
 
 from ..core.config_manager import Settings
 from ..core.config_schema import ModelEntry, ProviderEntry
@@ -288,23 +289,12 @@ class Provider:
         """One HTTP attempt: send, raise_for_status, parse the JSON response.
 
         HTTPStatusError: extracts error message from provider JSON response.
+        PoolTimeout: maps to 503 (connection pool exhausted), like the stream path.
         RequestError: maps to a network error.
         """
         url = f"{self.base_url}{path}"
         merged_headers = self._merge_request_headers(extra_headers)
-
-        self._log_provider_data(
-            title="Provider Request",
-            data={
-                "url": url,
-                "headers": mask_headers(merged_headers),
-                "request_body": request_body,
-                "has_files": files is not None,
-                "has_data": data is not None
-            },
-            request_id=request_id,
-            data_flow="to_provider"
-        )
+        self._log_request_start(url, merged_headers, request_body, files, data, request_id)
 
         try:
             response = await self._send(method, url, merged_headers, request_body, files, data, timeout)
@@ -316,6 +306,12 @@ class Provider:
                              request_id=request_id, provider_name=self.provider_name) from e
         except httpx.HTTPStatusError as e:
             self._raise_provider_http_error(e, request_id)
+        except httpx.PoolTimeout as e:
+            # Same condition as the stream path: the pool is exhausted, not
+            # the network broken — 503, not a 500 network error.
+            raise create_error(ErrorType.SERVICE_UNAVAILABLE, original_exception=e,
+                             error_details="Connection pool exhausted. Please retry later.",
+                             request_id=request_id, provider_name=self.provider_name) from e
         except httpx.RequestError as e:
             raise create_error(ErrorType.PROVIDER_NETWORK_ERROR, original_exception=e,
                              error_details=str(e), request_id=request_id, provider_name=self.provider_name) from e
@@ -323,6 +319,22 @@ class Provider:
         self._log_provider_data(title="Provider Response", data=response_json,
                                 request_id=request_id, data_flow="from_provider")
         return response_json
+
+    def _log_request_start(self, url: str, headers: dict[str, str], request_body: dict[str, Any],
+                           files: dict[str, Any], data: dict[str, Any], request_id: str) -> None:
+        """Log the outgoing request (masked headers) before it is sent."""
+        self._log_provider_data(
+            title="Provider Request",
+            data={
+                "url": url,
+                "headers": mask_headers(headers),
+                "request_body": request_body,
+                "has_files": files is not None,
+                "has_data": data is not None
+            },
+            request_id=request_id,
+            data_flow="to_provider"
+        )
 
     async def _send(self, method: str, url: str, headers: dict[str, str],
                     request_body: dict[str, Any] | None, files: dict[str, Any] | None,
@@ -408,6 +420,9 @@ class Provider:
                              error_details=str(e),
                              request_id=request_id,
                              provider_name=self.provider_name) from e
+        except HTTPException:
+            # already logged via log_provider_error in _raise_provider_http_error
+            raise
         except Exception as e:
             logger.error(f"Stream request failed after {time.time() - start_time:.2f}s: {str(e)}", extra={
                 "error_type": type(e).__name__,

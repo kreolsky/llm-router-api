@@ -1181,6 +1181,61 @@ class TestRetryUploadSafety:
 
 
 # ===================================================================
+# Error parity between the stream and non-stream paths
+# ===================================================================
+
+class TestErrorPathParity:
+    """PoolTimeout answers 503 service_unavailable on BOTH paths — the
+    non-stream path used to let it fall into RequestError's 500
+    provider_network_error — and an upstream 4xx/5xx in a stream is logged
+    once, by the provider-error channel, never again as "Stream request
+    failed" with a traceback."""
+
+    def _provider_with_mock_transport(self, handler):
+        config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY"}
+        with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
+            provider = ProviderStub(_entry(config), settings=_make_settings(
+                provider_retry_base_delay=0.001, provider_retry_max_delay=0.01))
+        provider.pool.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        return provider
+
+    @pytest.mark.asyncio
+    async def test_non_stream_pool_timeout_is_503_service_unavailable(self):
+        """A pool timeout on a non-stream call answers 503
+        service_unavailable — the same status the stream path gives."""
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.PoolTimeout("pool exhausted")
+
+        provider = self._provider_with_mock_transport(handler)
+        with pytest.raises(HTTPException) as exc_info:
+            await provider.chat_completions(
+                {"messages": [{"role": "user", "content": "hi"}]},
+                "gpt-x", NO_OPTIONS, request_id="r1")
+        assert exc_info.value.status_code == 503
+        assert exc_info.value.detail["error"]["metadata"]["error_code"] == "service_unavailable"
+
+    @pytest.mark.asyncio
+    async def test_stream_429_raises_without_the_generic_error_log(self):
+        """An upstream 429 in a stream raises its HTTPException (already
+        logged by log_provider_error via _raise_provider_http_error) and
+        never logs "Stream request failed" — the old except Exception arm
+        doubled the same error at ERROR with a full traceback."""
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(429, json={"error": {"message": "rate limited"}})
+
+        provider = self._provider_with_mock_transport(handler)
+        with patch("src.providers.base.logger") as mock_logger:
+            with pytest.raises(HTTPException) as exc_info:
+                async for _ in provider.chat_completions_stream(
+                        {"messages": [{"role": "user", "content": "hi"}]},
+                        "gpt-x", NO_OPTIONS, request_id="r1"):
+                    pass
+        assert exc_info.value.status_code == 429
+        assert not [c for c in mock_logger.error.call_args_list
+                    if "Stream request failed" in str(c)]
+
+
+# ===================================================================
 # Retry 429-detection robustness
 # ===================================================================
 
