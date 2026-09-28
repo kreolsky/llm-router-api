@@ -1,7 +1,7 @@
 {
   "limit": 50,
   "scan_dir": "src",
-  "total": 4,
+  "total": 3,
   "violations": {
     "src/api/main.py::lifespan": {
       "label": "src/api/main.py::lifespan",
@@ -14,10 +14,6 @@
     "src/providers/pool.py::ProviderPool.__init__": {
       "label": "src/providers/pool.py::ProviderPool.__init__",
       "span": 51
-    },
-    "src/services/chat_service/chat_service.py::ChatService.chat_completions": {
-      "label": "src/services/chat_service/chat_service.py::ChatService.chat_completions",
-      "span": 58
     }
   }
 }
