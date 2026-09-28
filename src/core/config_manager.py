@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import os
 from dataclasses import dataclass, fields
+from enum import Enum
 from typing import Any
 
 import yaml
@@ -88,6 +89,26 @@ def _env_number(name: str, default, cast):
             extra={"config": {"setting": name, "raw_value": raw}},
         )
         return default
+
+
+class ReloadOutcome(Enum):
+    """Verdict of one reload_config attempt, and what _poll_once does with it.
+
+    APPLIED — the new config is published and every callback ran cleanly;
+        the new mtimes are committed, nothing is retried.
+    REJECTED — the on-disk config was refused (incomplete, a ConfigError, or
+        a vetoing pre-swap callback); the previous config keeps serving. A
+        rejection is final for those file bytes: parsing is deterministic and
+        the env is frozen per process, so the mtimes are committed anyway and
+        only the next file change re-triggers a reload.
+    POST_SWAP_FAILED — the swap is published but a post-swap callback failed;
+        nothing is rolled back. The mtimes stay uncommitted so the next poll
+        retries until the derived caches catch up (see _log_reload_complete).
+    """
+
+    APPLIED = "applied"
+    REJECTED = "rejected"
+    POST_SWAP_FAILED = "post_swap_failed"
 
 
 class ConfigManager:
@@ -206,26 +227,29 @@ class ConfigManager:
         """
         self._post_swap_callbacks.append((name, callback))
 
-    async def reload_config(self) -> bool:
+    async def reload_config(self) -> ReloadOutcome:
         """Reload config from disk in two phases.
 
         Phase 1 (pre-swap): the freshly loaded files are parsed (a ConfigError
         rejects the reload like a vetoing callback), then every
-        add_reload_callback runs with the new_config while self.config still holds the previous value. A
-        raising callback ABORTS the reload: self.config is not swapped and
-        False is returned — the previous config stays in place.
+        add_reload_callback runs with the new_config while self.config still
+        holds the previous value. A raising callback ABORTS the reload:
+        self.config is not swapped and REJECTED is returned — the previous
+        config stays in place.
 
         Phase 2 (post-swap): self.config = new_config, then every
         add_post_swap_callback runs. A raising callback is logged and the
         swap STAYS published (there is nothing to roll back to), but the
-        reload reports False — see Returns.
+        reload reports POST_SWAP_FAILED — see Returns.
 
-        Returns True only when the new config was applied AND every post-swap
-        callback ran cleanly. False when it was rejected (incomplete on disk,
-        or refused by a pre-swap callback) or a post-swap callback failed:
-        the config stays published either way, but the on-disk state must not
-        be treated as consumed — the caller leaves last_mtimes uncommitted so
-        the next poll retries (see _poll_once).
+        Returns:
+            APPLIED — applied cleanly; every post-swap callback ran.
+            REJECTED — refused (incomplete on disk, a ConfigError, or a
+                vetoing pre-swap callback); the previous config keeps
+                serving. Final for those file bytes — the next file change
+                is the retry (see ReloadOutcome).
+            POST_SWAP_FAILED — the swap is published but a post-swap
+                callback failed; _poll_once retries (see _log_reload_complete).
         """
         logger.info("Reloading configuration", extra={
             "config": {
@@ -237,24 +261,21 @@ class ConfigManager:
         if not self._missing_sections(raw):
             new_config = self._parse_for_reload(raw)
             if new_config is None or not await self._run_pre_swap_callbacks(new_config):
-                return False
+                return ReloadOutcome.REJECTED
             self.config = new_config
             post_swap_failed = not await self._run_post_swap_callbacks(new_config)
             self._log_reload_complete(post_swap_failed)
-            # WHY: True here would let _poll_once commit last_mtimes, and a
-            # half-applied reload (the config swapped, a derived cache like
-            # the provider registry not) would never be retried until the
-            # file changed again — e.g. a provider added by this reload
-            # would 404 in silence. False keeps the on-disk state
-            # unconsumed so the next tick retries; with provider instance
-            # reuse the retry re-stages cheaply. The retry repeats every
-            # config_reload_interval until the callback succeeds or the
-            # files change again — deliberate: a half-applied reload must
-            # not go quiet, and the reuse path keeps each attempt cheap.
-            return not post_swap_failed
+            # WHY: APPLIED here would let _poll_once commit last_mtimes, and a
+            # half-applied reload (the config swapped, a derived cache like the
+            # provider registry not) would never be retried — e.g. a provider
+            # added by this reload would 404 in silence. POST_SWAP_FAILED keeps
+            # the on-disk state unconsumed so the next tick retries (cheap with
+            # provider instance reuse) until the callback succeeds or the files
+            # change again — a half-applied reload must not go quiet.
+            return ReloadOutcome.POST_SWAP_FAILED if post_swap_failed else ReloadOutcome.APPLIED
 
         logger.warning("Partial config reload rejected, keeping previous config")
-        return False
+        return ReloadOutcome.REJECTED
 
     def _parse_for_reload(self, raw: dict) -> RouterConfig | None:
         """Parse the reloaded files; None (logged) when a ConfigError rejects them."""
@@ -262,7 +283,7 @@ class ConfigManager:
             return parse_config(raw)
         except ConfigError as e:
             # Same veto as a refusing pre-swap callback: the previous
-            # config keeps serving and the next poll retries.
+            # config keeps serving and the next file change retries.
             logger.error(
                 f"Config reload rejected, keeping previous config: {e}",
                 extra={"config": {"operation": "reload_rejected"}},
@@ -348,12 +369,13 @@ class ConfigManager:
         accepted), so callers/tests can distinguish "nothing to do" from "work
         attempted".
 
-        # WHY: last_mtimes is committed only after reload_config() reports
-        # success — and success means APPLIED CLEANLY, post-swap callbacks
-        # included. Recording it up front means a config rejected by a
-        # callback (a typo in providers.yaml) or half-applied by a failed
-        # post-swap step is never retried until the file changes again, and
-        # the router keeps serving the stale or half-new state in silence.
+        # WHY: last_mtimes is committed for APPLIED and REJECTED alike, and
+        # left uncommitted only for POST_SWAP_FAILED. A rejected reload is
+        # not retried because the same bytes and the same frozen env always
+        # give the same verdict, so a retry only repeats the rejection; its
+        # one log line per file change is the signal. A post-swap failure is
+        # the exception: the config is already swapped and the derived cache
+        # must catch up, so the next poll retries until it does.
         """
         mtimes = self._current_mtimes()
         changed_files = [
@@ -369,7 +391,7 @@ class ConfigManager:
                 "changed_files": changed_files,
             }
         })
-        if await self.reload_config():
+        if await self.reload_config() is not ReloadOutcome.POST_SWAP_FAILED:
             self.last_mtimes = mtimes
         return True
 
