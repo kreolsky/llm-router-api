@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from src.core.config_schema import ModelEntry, ProviderEntry, parse_config, parse_model, parse_provider
 from src.core.context import AuthContext, RequestContext
 from src.core.usage_db import RequestStats
+from src.providers import ProviderRegistry
 from src.services.base import BaseService
 
 # ---------------------------------------------------------------------------
@@ -40,9 +41,24 @@ def _make_request(request_id="req-abc", project_name=None):
     return request
 
 
-def _build_service(models=None, providers=None):
+def _registry():
+    """A stand-in registry: services only ever call get(name)."""
+    return MagicMock(spec=ProviderRegistry)
+
+
+@pytest.fixture
+def registry():
+    return _registry()
+
+
+@pytest.fixture
+def mock_get(registry):
+    return registry.get
+
+
+def _build_service(models=None, providers=None, registry=None):
     cm = _make_config_manager(models, providers)
-    return BaseService(cm)
+    return BaseService(cm, registry or _registry())
 
 
 # ===================================================================
@@ -232,13 +248,13 @@ class TestPrepareDispatchProviders:
     """
 
     @pytest.mark.asyncio
-    @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
-    async def test_resolves_provider_from_registry(self, mock_get):
+    async def test_resolves_provider_from_registry(self, registry, mock_get):
         """A valid config yields the registry's instance on PreparedDispatch."""
         mock_provider = MagicMock()
         mock_get.return_value = mock_provider
 
         svc = _build_service(
+            registry=registry,
             models={"gpt-4": {"provider": "openai"}},
             providers={"openai": {"type": "openai", "base_url": "https://api.example.com"}}
         )
@@ -254,13 +270,13 @@ class TestPrepareDispatchProviders:
         mock_get.assert_called_once_with("openai")
 
     @pytest.mark.asyncio
-    @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
-    async def test_registry_error_propagates(self, mock_get):
+    async def test_registry_error_propagates(self, registry, mock_get):
         """A registry lookup error propagates unchanged (an unknown provider
         type never gets this far — parse_config refuses it)."""
         mock_get.side_effect = HTTPException(status_code=404, detail="not found")
 
         svc = _build_service(
+            registry=registry,
             models={"gpt-4": {"provider": "bad"}},
             providers={"bad": {"type": "openai"}}
         )
@@ -281,10 +297,11 @@ class TestPrepareDispatchProviders:
 
 class TestPrepareDispatchPreamble:
 
-    def _svc(self):
+    def _svc(self, registry=None):
         return _build_service(
             models={"m": {"provider": "openai"}},
-            providers={"openai": {"type": "openai", "base_url": "https://x.example.com"}}
+            providers={"openai": {"type": "openai", "base_url": "https://x.example.com"}},
+            registry=registry,
         )
 
     def _request(self, body):
@@ -305,10 +322,9 @@ class TestPrepareDispatchPreamble:
         assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
-    @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
-    async def test_stats_enriched_and_identity_headers_built(self, mock_get):
+    async def test_stats_enriched_and_identity_headers_built(self, registry, mock_get):
         mock_get.return_value = SimpleNamespace(identity="passthrough")
-        svc = self._svc()
+        svc = self._svc(registry)
         request = self._request({"model": "m"})
         request.headers = {"user-agent": "oc/1.0"}
 
@@ -323,8 +339,7 @@ class TestPrepareDispatchPreamble:
         assert prepared.error_ctx == {"request_id": "req-1", "user_id": "proj", "model_id": "m"}
 
     @pytest.mark.asyncio
-    @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
-    async def test_non_string_model_blanks_stats_model_id(self, mock_get):
+    async def test_non_string_model_blanks_stats_model_id(self, registry, mock_get):
         """A non-string "model" reaches the usage row as "", never as the raw value.
 
         The stats holder is enriched BEFORE validation rejects the request, so
@@ -333,7 +348,7 @@ class TestPrepareDispatchPreamble:
         would short-circuit at MODEL_NOT_SPECIFIED without exercising it.
         """
         mock_get.return_value = SimpleNamespace(identity=None)
-        svc = self._svc()
+        svc = self._svc(registry)
         request = self._request({"model": 123})
         request.headers = {}
         stats = RequestStats()
@@ -355,8 +370,8 @@ class TestPrepareDispatchDialectTranslation:
     """_prepare_dispatch applies the per-provider dialect translation AFTER
     the effort policy — the gated-legal value is what gets re-nested."""
 
-    def _svc(self, providers):
-        return _build_service(models={"m": {"provider": "p"}}, providers=providers)
+    def _svc(self, registry, providers):
+        return _build_service(models={"m": {"provider": "p"}}, providers=providers, registry=registry)
 
     def _request(self, body):
         request = _make_request("req-1", project_name="proj")
@@ -365,10 +380,9 @@ class TestPrepareDispatchDialectTranslation:
         return request
 
     @pytest.mark.asyncio
-    @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
-    async def test_openrouter_body_translated_on_the_funnel(self, mock_get):
+    async def test_openrouter_body_translated_on_the_funnel(self, registry, mock_get):
         mock_get.return_value = SimpleNamespace(identity=None)
-        svc = self._svc({"p": {"type": "openai", "base_url": "https://x",
+        svc = self._svc(registry, {"p": {"type": "openai", "base_url": "https://x",
                                "reasoning_dialect": "openrouter"}})
         request = self._request({"model": "m", "messages": [],
                                  "thinking": {"type": "enabled"},
@@ -382,10 +396,9 @@ class TestPrepareDispatchDialectTranslation:
         assert "reasoning_effort" not in prepared.request_body
 
     @pytest.mark.asyncio
-    @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
-    async def test_default_dialect_drops_thinking_keeps_effort(self, mock_get):
+    async def test_default_dialect_drops_thinking_keeps_effort(self, registry, mock_get):
         mock_get.return_value = SimpleNamespace(identity=None)
-        svc = self._svc({"p": {"type": "openai", "base_url": "https://x"}})
+        svc = self._svc(registry, {"p": {"type": "openai", "base_url": "https://x"}})
         request = self._request({"model": "m", "messages": [],
                                  "thinking": {"type": "enabled"},
                                  "reasoning_effort": "low"})
@@ -397,12 +410,11 @@ class TestPrepareDispatchDialectTranslation:
         assert "thinking" not in prepared.request_body
 
     @pytest.mark.asyncio
-    @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
-    async def test_deepseek_body_untouched_on_the_funnel(self, mock_get):
+    async def test_deepseek_body_untouched_on_the_funnel(self, registry, mock_get):
         """The native dialect: both fields reach the provider verbatim,
         title-shaped requests included."""
         mock_get.return_value = SimpleNamespace(identity=None)
-        svc = self._svc({"p": {"type": "openai", "base_url": "https://x",
+        svc = self._svc(registry, {"p": {"type": "openai", "base_url": "https://x",
                                "reasoning_dialect": "deepseek"}})
         body = {"model": "m", "messages": [], "thinking": {"type": "disabled"}}
         request = self._request(dict(body))
@@ -413,12 +425,12 @@ class TestPrepareDispatchDialectTranslation:
         assert prepared.request_body == body
 
     @pytest.mark.asyncio
-    @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
-    async def test_policy_gate_fires_before_the_translation(self, mock_get):
+    async def test_policy_gate_fires_before_the_translation(self, registry, mock_get):
         """A value outside the model's allowed list is a 400 from the policy —
         the openrouter re-nest never runs for refused principals."""
         mock_get.return_value = SimpleNamespace(identity=None)
         svc = _build_service(
+            registry=registry,
             models={"m": {"provider": "p",
                           "reasoning_effort": {"allowed": ["low", "high"],
                                                "param": "reasoning_effort"}}},
@@ -446,18 +458,18 @@ class TestResolveTarget:
     is what makes the dispatch funnel true by construction.
     """
 
-    def _svc(self, models=None, providers=None):
+    def _svc(self, registry=None, models=None, providers=None):
         return _build_service(
             models=models or {"m": {"provider": "openai"}},
             providers=providers or {"openai": {"type": "openai", "base_url": "https://x.example.com"}},
+            registry=registry,
         )
 
     @pytest.mark.asyncio
-    @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
-    async def test_resolves_target_without_parsing_a_body(self, mock_get):
+    async def test_resolves_target_without_parsing_a_body(self, registry, mock_get):
         """A body-agnostic call resolves everything the dispatch needs."""
         mock_get.return_value = SimpleNamespace(identity="passthrough")
-        svc = self._svc()
+        svc = self._svc(registry)
         request = _make_identity_request({"user-agent": "oc/1.0"})
 
         target = await svc._resolve_target(request, _make_auth_context(), "m")
@@ -475,10 +487,9 @@ class TestResolveTarget:
         assert target.stats.provider_name == "openai"
 
     @pytest.mark.asyncio
-    @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
-    async def test_access_denied_raises_before_provider_resolution(self, mock_get):
+    async def test_access_denied_raises_before_provider_resolution(self, registry, mock_get):
         """The resolver keeps the INVARIANT: access check before existence."""
-        svc = self._svc()
+        svc = self._svc(registry)
         request = _make_identity_request({})
 
         with pytest.raises(HTTPException) as exc_info:
@@ -486,14 +497,13 @@ class TestResolveTarget:
                 request, _make_auth_context(allowed_models=["other"]), "m"
             )
         assert exc_info.value.status_code == 403
-        mock_get.assert_not_awaited()
+        mock_get.assert_not_called()
 
     @pytest.mark.asyncio
-    @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
-    async def test_prepare_dispatch_delegates_to_the_resolver(self, mock_get):
+    async def test_prepare_dispatch_delegates_to_the_resolver(self, registry, mock_get):
         """The JSON wrapper is thin: parse, delegate, apply the effort policy."""
         mock_get.return_value = SimpleNamespace(identity=None)
-        svc = self._svc()
+        svc = self._svc(registry)
         request = _make_request("req-1")
         request.json = AsyncMock(return_value={"model": "m"})
         request.headers = {}
@@ -517,8 +527,7 @@ class TestResolveTarget:
         assert prepared.requested_model == "m"
 
     @pytest.mark.asyncio
-    @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
-    async def test_reasoning_effort_policy_stays_in_the_json_wrapper(self, mock_get):
+    async def test_reasoning_effort_policy_stays_in_the_json_wrapper(self, registry, mock_get):
         """The effort policy is body-shaped, so it is applied by the JSON
         wrapper — a multipart endpoint riding the resolver must never get it."""
         mock_get.return_value = SimpleNamespace(identity=None)
@@ -526,7 +535,7 @@ class TestResolveTarget:
             "provider": "openai",
             "reasoning_effort": {"allowed": ["low", "medium", "high"], "default": "high"},
         }}
-        svc = self._svc(models=models)
+        svc = self._svc(registry, models=models)
         request = _make_request("req-1")
         request.json = AsyncMock(return_value={"model": "m"})
         request.headers = {}
@@ -557,7 +566,7 @@ def _make_identity_provider(identity=None, provider_name="glm"):
 
 
 def _build_identity_service():
-    return BaseService(_make_config_manager())
+    return BaseService(_make_config_manager(), _registry())
 
 
 class TestExtractPassthroughHeaders:

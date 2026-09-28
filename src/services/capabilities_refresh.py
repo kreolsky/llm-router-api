@@ -3,17 +3,19 @@
 ARCH: refreshes run in the background and never block startup, and the hot
 path never touches the network — only this module (and the optional
 ``?refresh=true`` debug flag) goes upstream. Upstream shape knowledge stays in
-normalizers.py; this file only schedules and distributes.
+core/model_capabilities/normalizers.py; this file only schedules and
+distributes. It orchestrates providers, so it lives in the service layer
+(core never imports providers).
 """
 import asyncio
 from collections.abc import Mapping
 from typing import Any
 
-from ...providers import get_provider_instance
-from ..config_schema import ModelEntry, RouterConfig
-from ..logging import logger
-from .cache import CapabilitiesCache
-from .normalizers import normalize_provider_model
+from ..core.config_manager import ConfigManager
+from ..core.config_schema import ModelEntry, RouterConfig
+from ..core.logging import logger
+from ..core.model_capabilities import CapabilitiesCache, normalize_provider_model
+from ..providers import ProviderRegistry
 
 
 def _index_upstream_models(models_list: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -52,14 +54,14 @@ def _resolve_raw_entry(
     return raw
 
 
-async def _fetch_upstream_models(provider_name: str) -> dict[str, Any] | None:
+async def _fetch_upstream_models(registry: ProviderRegistry, provider_name: str) -> dict[str, Any] | None:
     """One list_models() through the registry; None on failure.
 
     Failure is logged by the caller-facing warning here and answered with
     stale-if-error: existing cache entries are kept.
     """
     try:
-        provider = await get_provider_instance(provider_name)
+        provider = registry.get(provider_name)
         return await provider.list_models(request_id="capabilities-cache")
     except Exception as e:
         logger.warning(
@@ -94,7 +96,8 @@ def _persist_cache(cache: CapabilitiesCache) -> None:
 
 
 async def refresh_provider_capabilities(
-    config_manager,
+    config_manager: ConfigManager,
+    registry: ProviderRegistry,
     cache: CapabilitiesCache,
     provider_name: str,
     models_config: Mapping[str, ModelEntry] | None = None,
@@ -118,7 +121,7 @@ async def refresh_provider_capabilities(
     if not entries:
         return
 
-    models_data = await _fetch_upstream_models(provider_name)
+    models_data = await _fetch_upstream_models(registry, provider_name)
     if models_data is None:
         return  # stale-if-error
 
@@ -143,7 +146,8 @@ async def refresh_provider_capabilities(
         _persist_cache(cache)
 
 
-async def refresh_all_capabilities(config_manager, cache: CapabilitiesCache) -> None:
+async def refresh_all_capabilities(config_manager: ConfigManager, registry: ProviderRegistry,
+                                   cache: CapabilitiesCache) -> None:
     """Refresh capabilities for every provider referenced by models.yaml."""
     models_config = config_manager.get_config().models
     seen: set = set()
@@ -152,7 +156,7 @@ async def refresh_all_capabilities(config_manager, cache: CapabilitiesCache) -> 
         if provider_name and provider_name not in seen:
             seen.add(provider_name)
             await refresh_provider_capabilities(
-                config_manager, cache, provider_name,
+                config_manager, registry, cache, provider_name,
                 models_config=models_config, persist=False,
             )
     # ARCH: ONE cache.persist() per refresh cycle, after every provider's
@@ -164,7 +168,8 @@ async def refresh_all_capabilities(config_manager, cache: CapabilitiesCache) -> 
         _persist_cache(cache)
 
 
-async def capabilities_refresh_loop(config_manager, cache: CapabilitiesCache) -> None:
+async def capabilities_refresh_loop(config_manager: ConfigManager, registry: ProviderRegistry,
+                                    cache: CapabilitiesCache) -> None:
     """Periodically refresh all provider capabilities until cancelled.
 
     ARCH: refreshes run in the background and never block startup. The first
@@ -175,7 +180,7 @@ async def capabilities_refresh_loop(config_manager, cache: CapabilitiesCache) ->
         while True:
             if config_manager.settings.model_cache_enabled:
                 try:
-                    await refresh_all_capabilities(config_manager, cache)
+                    await refresh_all_capabilities(config_manager, registry, cache)
                 except Exception as e:
                     logger.error(f"Capabilities refresh error: {e}", exc_info=True)
             await asyncio.sleep(config_manager.settings.model_cache_refresh_interval)

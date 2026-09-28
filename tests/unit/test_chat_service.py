@@ -2,7 +2,7 @@
 
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -20,7 +20,7 @@ def _make_auth_context():
 
 
 def _service() -> ChatService:
-    return ChatService(MagicMock(), MagicMock())
+    return ChatService(MagicMock(), MagicMock(), MagicMock())
 
 
 def _request_raising(exc: Exception):
@@ -95,13 +95,15 @@ class _StubProvider:
 
 
 def _happy_service(provider: _StubProvider) -> ChatService:
+    registry = MagicMock()
+    registry.get.return_value = provider
     cm = MagicMock()
     cm.get_config.return_value = parse_config({
         "models": {"chat/model-a": {"provider": "prov-a",
                                     "provider_model_name": "upstream-a"}},
         "providers": {"prov-a": {"type": "openai", "base_url": "http://upstream.invalid"}},
     })
-    return ChatService(cm, MagicMock())
+    return ChatService(cm, registry, MagicMock())
 
 
 def _happy_request(body: dict):
@@ -115,12 +117,6 @@ def _happy_request(body: dict):
     return request
 
 
-def _patch_provider(provider):
-    async def _get_instance(name):
-        return provider
-    return patch("src.services.base.get_provider_instance", side_effect=_get_instance)
-
-
 class TestChatHappyPaths:
 
     @pytest.mark.asyncio
@@ -129,9 +125,8 @@ class TestChatHappyPaths:
         request = _happy_request({"model": "chat/model-a",
                                   "messages": [{"role": "user", "content": "ping"}]})
 
-        with _patch_provider(provider):
-            response = await _happy_service(provider).chat_completions(
-                request, _make_auth_context())
+        response = await _happy_service(provider).chat_completions(
+            request, _make_auth_context())
 
         assert isinstance(response, JSONResponse)
         body = json.loads(response.body)
@@ -160,9 +155,8 @@ class TestChatHappyPaths:
                                   "messages": [{"role": "user", "content": "ping"}],
                                   "stream": True})
 
-        with _patch_provider(provider):
-            response = await _happy_service(provider).chat_completions(
-                request, _make_auth_context())
+        response = await _happy_service(provider).chat_completions(
+            request, _make_auth_context())
 
         assert isinstance(response, StreamingResponse)
         assert response.media_type == "text/event-stream"

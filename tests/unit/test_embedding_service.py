@@ -9,6 +9,7 @@ from fastapi import HTTPException
 
 from src.core.config_schema import parse_config
 from src.core.context import AuthContext, RequestContext
+from src.providers import ProviderRegistry
 from src.services.embedding_service import EmbeddingService
 
 
@@ -41,7 +42,7 @@ class TestInvalidJsonBody:
     @pytest.mark.asyncio
     async def test_malformed_json_raises_400(self):
         """A body that is not valid JSON yields a 400, not an unhandled error."""
-        service = EmbeddingService(_make_config_manager())
+        service = EmbeddingService(_make_config_manager(), MagicMock(spec=ProviderRegistry))
         request = _make_request(b"{not json")
 
         with pytest.raises(HTTPException) as exc_info:
@@ -57,7 +58,7 @@ class TestInvalidJsonBody:
         request.json = AsyncMock(
             side_effect=UnicodeDecodeError("utf-8", b"\xff\xfe", 0, 1, "invalid start byte")
         )
-        service = EmbeddingService(_make_config_manager())
+        service = EmbeddingService(_make_config_manager(), MagicMock(spec=ProviderRegistry))
 
         with pytest.raises(HTTPException) as exc_info:
             await service.create_embeddings(request, _make_auth_context())
@@ -74,15 +75,14 @@ class TestIdentityHeadersForwarded:
         embeddings call, so endpoints of one provider share one fingerprint."""
         models = {"emb/model": {"provider": "embed"}}
         providers = {"embed": {"type": "openai", "base_url": "https://api.example.com"}}
-        service = EmbeddingService(_make_config_manager(models, providers))
+        service = EmbeddingService(_make_config_manager(models, providers), MagicMock(spec=ProviderRegistry))
 
         request = _make_request(json.dumps({"model": "emb/model", "input": "hi"}).encode())
         request.headers = {"user-agent": "Kilo-Code/7.5.5", "authorization": "Bearer nnp-v1-x"}
 
         provider_instance = SimpleNamespace(identity="passthrough")
         provider_instance.embeddings = AsyncMock(return_value={"data": [], "usage": {}})
-        with patch("src.services.base.get_provider_instance",
-                   new=AsyncMock(return_value=provider_instance)):
+        with patch.object(service.registry, "get", return_value=provider_instance):
             await service.create_embeddings(request, _make_auth_context())
 
         kwargs = provider_instance.embeddings.call_args.kwargs

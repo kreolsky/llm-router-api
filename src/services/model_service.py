@@ -18,17 +18,19 @@ from ..core.logging import logger
 from ..core.model_capabilities import (
     CapabilitiesCache,
     merge_capabilities,
-    refresh_provider_capabilities,
     render_capabilities,
 )
+from ..providers import ProviderRegistry
 from .base import BaseService
+from .capabilities_refresh import refresh_provider_capabilities
 
 
 class ModelService(BaseService):
     """Lists models and retrieves single-model details from merged capabilities."""
 
-    def __init__(self, config_manager, capabilities_cache: CapabilitiesCache | None = None):
-        super().__init__(config_manager)
+    def __init__(self, config_manager, registry: ProviderRegistry,
+                 capabilities_cache: CapabilitiesCache | None = None):
+        super().__init__(config_manager, registry)
         self.capabilities_cache = capabilities_cache
 
     def _build_model_response(self, model_id: str, **extra_fields) -> dict[str, Any]:
@@ -199,7 +201,8 @@ class ModelService(BaseService):
             and self.config_manager.settings.model_cache_enabled
         ):
             try:
-                await refresh_provider_capabilities(self.config_manager, self.capabilities_cache, provider_name)
+                await refresh_provider_capabilities(self.config_manager, self.registry,
+                                                    self.capabilities_cache, provider_name)
             except Exception as e:
                 logger.warning(
                     f"Debug capabilities refresh failed for {model_id}: {e}",

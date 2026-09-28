@@ -17,7 +17,7 @@ from ..core.header_policy import (
 )
 from ..core.logging import logger
 from ..core.usage_db import RequestStats, request_stats
-from ..providers import get_provider_instance
+from ..providers import ProviderRegistry
 from ..providers.base import Provider
 from .reasoning_dialect import translate_reasoning_fields
 from .reasoning_effort import apply_reasoning_effort
@@ -61,8 +61,9 @@ class PreparedDispatch(ResolvedTarget):
 class BaseService:
     """Common base for ChatService, EmbeddingService, ModelService, and TranscriptionService."""
 
-    def __init__(self, config_manager: ConfigManager):
+    def __init__(self, config_manager: ConfigManager, registry: ProviderRegistry):
         self.config_manager = config_manager
+        self.registry = registry
 
     @contextlib.asynccontextmanager
     async def _guard_service_errors(self, error_ctx: dict[str, Any]):
@@ -195,7 +196,7 @@ class BaseService:
             self._validate_and_get_config(model_id, auth_context, **error_ctx)
         stats.provider_name = provider_name
 
-        provider_instance = await get_provider_instance(provider_name)
+        provider_instance = self.registry.get(provider_name)
         identity_headers = self._build_identity_headers(provider_instance, request)
 
         return ResolvedTarget(

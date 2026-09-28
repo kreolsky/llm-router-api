@@ -18,21 +18,18 @@ a manual ``input_modalities`` override must not be duplicated by the cache.
 Both layers store the SAME normalized shape, so the merge is well-defined.
 
 Split by concern: ``render.py`` (stored -> response + merge),
-``normalizers.py`` (raw upstream -> stored), ``cache.py`` (the store),
-``refresh.py`` (background orchestration).
+``normalizers.py`` (raw upstream -> stored), ``cache.py`` (the store). The
+background refresh that feeds the cache orchestrates providers, so it lives in
+``src/services/capabilities_refresh.py``.
 """
 # SYSTEM: model-capabilities — manual layer + auto-cache + render
 from .cache import CapabilitiesCache
 from .normalizers import normalize_provider_model
-from .refresh import capabilities_refresh_loop, refresh_all_capabilities, refresh_provider_capabilities
 from .render import merge_capabilities, render_capabilities
 
 __all__ = [
     "CapabilitiesCache",
-    "capabilities_refresh_loop",
     "merge_capabilities",
     "normalize_provider_model",
-    "refresh_all_capabilities",
-    "refresh_provider_capabilities",
     "render_capabilities",
 ]

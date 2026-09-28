@@ -2,6 +2,7 @@
 
 import json
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,11 +10,10 @@ from src.core.model_capabilities import (
     CapabilitiesCache,
     merge_capabilities,
     normalize_provider_model,
-    refresh_all_capabilities,
-    refresh_provider_capabilities,
     render_capabilities,
 )
 from src.core.model_capabilities.render import _format_price
+from src.services.capabilities_refresh import refresh_all_capabilities, refresh_provider_capabilities
 
 # ---------------------------------------------------------------------------
 # Price formatting (decision 2 — regression on 4.35e-07)
@@ -384,11 +384,11 @@ class TestRefreshProviderCapabilities:
             "data": [{"id": path_id, "meta": {"n_ctx": 131072, "n_ctx_train": 262144}}],
         }
 
-        async def fake_gpi(*a, **k):
+        def fake_gpi(*a, **k):
             return _FakeProvider(upstream)
 
-        monkeypatch.setattr("src.core.model_capabilities.refresh.get_provider_instance", fake_gpi)
-        await refresh_provider_capabilities(cm, cache, "orange")
+        registry = SimpleNamespace(get=fake_gpi)
+        await refresh_provider_capabilities(cm, registry, cache, "orange")
 
         for mid in ("local/chat", "local/reasoner"):
             data = cache.get(mid)
@@ -403,11 +403,11 @@ class TestRefreshProviderCapabilities:
         cache = CapabilitiesCache(str(tmp_path / "c.json"))
         upstream = {"data": [{"id": "deepseek-v4-flash", "context_length": 262144}]}
 
-        async def fake_gpi(*a, **k):
+        def fake_gpi(*a, **k):
             return _FakeProvider(upstream)
 
-        monkeypatch.setattr("src.core.model_capabilities.refresh.get_provider_instance", fake_gpi)
-        await refresh_provider_capabilities(cm, cache, "deepseek")
+        registry = SimpleNamespace(get=fake_gpi)
+        await refresh_provider_capabilities(cm, registry, cache, "deepseek")
 
         assert cache.get("deepseek/flash")["context_length"] == 262144
 
@@ -423,11 +423,11 @@ class TestRefreshProviderCapabilities:
             async def list_models(self, request_id="unknown"):
                 raise RuntimeError("upstream 502")
 
-        async def fake_gpi(*a, **k):
+        def fake_gpi(*a, **k):
             return _Boom()
 
-        monkeypatch.setattr("src.core.model_capabilities.refresh.get_provider_instance", fake_gpi)
-        await refresh_provider_capabilities(cm, cache, "orange")  # must not raise
+        registry = SimpleNamespace(get=fake_gpi)
+        await refresh_provider_capabilities(cm, registry, cache, "orange")  # must not raise
 
         # existing entry retained
         assert cache.get("local/chat") == {"context_length": 32768}
@@ -456,11 +456,11 @@ class TestRefreshProviderCapabilities:
             ]
         }
 
-        async def fake_gpi(*a, **k):
+        def fake_gpi(*a, **k):
             return _FakeProvider(upstream)
 
-        monkeypatch.setattr("src.core.model_capabilities.refresh.get_provider_instance", fake_gpi)
-        await refresh_provider_capabilities(cm, cache, "openrouter")
+        registry = SimpleNamespace(get=fake_gpi)
+        await refresh_provider_capabilities(cm, registry, cache, "openrouter")
 
         data = cache.get("gemini/pro")
         assert data is not None
@@ -482,11 +482,11 @@ class TestRefreshProviderCapabilities:
             ]
         }
 
-        async def fake_gpi(*a, **k):
+        def fake_gpi(*a, **k):
             return _FakeProvider(upstream)
 
-        monkeypatch.setattr("src.core.model_capabilities.refresh.get_provider_instance", fake_gpi)
-        await refresh_provider_capabilities(cm, cache, "openrouter")
+        registry = SimpleNamespace(get=fake_gpi)
+        await refresh_provider_capabilities(cm, registry, cache, "openrouter")
 
         assert cache.get("m/free")["pricing"]["prompt"] == 0.0
 
@@ -507,11 +507,11 @@ class TestRefreshProviderCapabilities:
             ]
         }
 
-        async def fake_gpi(*a, **k):
+        def fake_gpi(*a, **k):
             return _FakeProvider(upstream)
 
-        monkeypatch.setattr("src.core.model_capabilities.refresh.get_provider_instance", fake_gpi)
-        await refresh_all_capabilities(cm, cache)
+        registry = SimpleNamespace(get=fake_gpi)
+        await refresh_all_capabilities(cm, registry, cache)
 
         assert cache.persist_calls == 1
         assert cache.get("a/one")["context_length"] == 8192
@@ -527,11 +527,11 @@ class TestRefreshProviderCapabilities:
         cache = _CountingCache(str(tmp_path / "c.json"))
         upstream = {"data": [{"id": "/p/m.gguf", "context_length": 32768}]}
 
-        async def fake_gpi(*a, **k):
+        def fake_gpi(*a, **k):
             return _FakeProvider(upstream)
 
-        monkeypatch.setattr("src.core.model_capabilities.refresh.get_provider_instance", fake_gpi)
-        await refresh_provider_capabilities(cm, cache, "orange")
+        registry = SimpleNamespace(get=fake_gpi)
+        await refresh_provider_capabilities(cm, registry, cache, "orange")
 
         assert cache.persist_calls == 1
         assert os.path.exists(str(tmp_path / "c.json"))
@@ -543,13 +543,18 @@ class TestRefreshProviderCapabilities:
 
 class TestPackageLayout:
     def test_split_by_concern(self):
-        """normalizers / cache / refresh live as their own modules with the
-        SYSTEM: marker on the package root."""
-        from src.core.model_capabilities import cache, normalizers, refresh  # noqa: F401
+        """normalizers / cache live as their own modules with the SYSTEM:
+        marker on the package root; the refresh that drives providers lives
+        in the service layer (core never imports providers)."""
+        import importlib.util
+
+        from src.core.model_capabilities import cache, normalizers
+        from src.services import capabilities_refresh
 
         assert hasattr(normalizers, "normalize_provider_model")
         assert hasattr(cache, "CapabilitiesCache")
-        assert hasattr(refresh, "refresh_provider_capabilities")
+        assert hasattr(capabilities_refresh, "refresh_provider_capabilities")
+        assert importlib.util.find_spec("src.core.model_capabilities.refresh") is None
 
 
 class TestLlamaNativeCapsMerge:

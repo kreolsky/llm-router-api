@@ -6,6 +6,7 @@ from fastapi import Request, UploadFile
 from ..core.context import AuthContext
 from ..core.error_handling import ErrorType, create_error
 from ..core.logging import logger
+from ..providers import ProviderRegistry
 from ..services.model_service import ModelService
 from ..utils.mask import mask_headers
 from .base import BaseService
@@ -19,8 +20,8 @@ class TranscriptionService(BaseService):
     Uses BaseService for validation, provider instantiation, and logging.
     """
 
-    def __init__(self, config_manager, model_service: ModelService):
-        super().__init__(config_manager)
+    def __init__(self, config_manager, registry: ProviderRegistry, model_service: ModelService):
+        super().__init__(config_manager, registry)
         self.model_service = model_service
 
     async def create_transcription(

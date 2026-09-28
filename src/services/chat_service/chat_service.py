@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from ...core.config_manager import ConfigManager
 from ...core.context import AuthContext
+from ...providers import ProviderRegistry
 from ...services.base import BaseService
 from ...services.model_service import ModelService
 from .stream_processor import StreamProcessor, duplicate_reasoning_field, open_provider_stream
@@ -15,8 +16,9 @@ from .stream_processor import StreamProcessor, duplicate_reasoning_field, open_p
 class ChatService(BaseService):
     """Coordinates chat completion requests across providers with streaming support."""
 
-    def __init__(self, config_manager: ConfigManager, model_service: ModelService):
-        super().__init__(config_manager)
+    def __init__(self, config_manager: ConfigManager, registry: ProviderRegistry,
+                 model_service: ModelService):
+        super().__init__(config_manager, registry)
         self.model_service = model_service
         self.stream_processor = StreamProcessor()
 

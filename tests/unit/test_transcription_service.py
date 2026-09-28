@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from src.core.config_schema import parse_config
 from src.core.context import AuthContext, RequestContext
 from src.core.usage_db import RequestStats
+from src.providers import ProviderRegistry
 from src.services.transcription_service import TranscriptionService
 
 
@@ -53,13 +54,12 @@ class TestSharedFunnel:
         cross-cutting policy added to the resolver reaches transcription too."""
         models = {"stt/model": {"provider": "stt"}}
         providers = {"stt": {"type": "openai", "base_url": "https://api.example.com"}}
-        service = TranscriptionService(_make_config_manager(models, providers), model_service=MagicMock())
+        service = TranscriptionService(_make_config_manager(models, providers), MagicMock(spec=ProviderRegistry), model_service=MagicMock())
 
         provider_instance = SimpleNamespace(identity="passthrough")
         provider_instance.transcriptions = AsyncMock(return_value={"text": "ok"})
 
-        with patch("src.services.base.get_provider_instance",
-                   new=AsyncMock(return_value=provider_instance)), \
+        with patch.object(service.registry, "get", return_value=provider_instance), \
              patch.object(
                  TranscriptionService, "_resolve_target",
                  new=AsyncMock(return_value=SimpleNamespace(
@@ -92,12 +92,11 @@ class TestSharedFunnel:
             "reasoning_effort": {"allowed": ["low", "high"], "default": "high"},
         }}
         providers = {"stt": {"type": "openai", "base_url": "https://api.example.com"}}
-        service = TranscriptionService(_make_config_manager(models, providers), model_service=MagicMock())
+        service = TranscriptionService(_make_config_manager(models, providers), MagicMock(spec=ProviderRegistry), model_service=MagicMock())
 
         provider_instance = SimpleNamespace(identity=None)
         provider_instance.transcriptions = AsyncMock(return_value={"text": "ok"})
-        with patch("src.services.base.get_provider_instance",
-                   new=AsyncMock(return_value=provider_instance)):
+        with patch.object(service.registry, "get", return_value=provider_instance):
             await service.create_transcription(
                 _make_request(), _make_audio_file(), _make_auth_context(), model_id="stt/model"
             )
@@ -113,19 +112,18 @@ class TestIdentityHeadersForwarded:
     async def test_client_user_agent_reaches_provider(self):
         """identity: passthrough — the client's User-Agent rides along to the
         transcriptions call (multipart body; Content-Type is still owned by
-        httpx via _make_request), so endpoints of one provider share one
+        httpx via Provider._send), so endpoints of one provider share one
         fingerprint."""
         models = {"stt/model": {"provider": "stt"}}
         providers = {"stt": {"type": "openai", "base_url": "https://api.example.com"}}
-        service = TranscriptionService(_make_config_manager(models, providers), model_service=MagicMock())
+        service = TranscriptionService(_make_config_manager(models, providers), MagicMock(spec=ProviderRegistry), model_service=MagicMock())
 
         request = _make_request()
         request.headers = {"user-agent": "Kilo-Code/7.5.5", "authorization": "Bearer nnp-v1-x"}
 
         provider_instance = SimpleNamespace(identity="passthrough")
         provider_instance.transcriptions = AsyncMock(return_value={"text": "ok"})
-        with patch("src.services.base.get_provider_instance",
-                   new=AsyncMock(return_value=provider_instance)):
+        with patch.object(service.registry, "get", return_value=provider_instance):
             response = await service.create_transcription(
                 request, _make_audio_file(), _make_auth_context(), model_id="stt/model"
             )
@@ -142,7 +140,7 @@ class TestRefusalLogsHeaders:
         """A request with neither audio_file nor file is refused by the SERVICE,
         after the header log — the route no longer refuses anything, so the one
         refusal where the headers were worth having is still logged."""
-        service = TranscriptionService(_make_config_manager(), model_service=MagicMock())
+        service = TranscriptionService(_make_config_manager(), MagicMock(spec=ProviderRegistry), model_service=MagicMock())
         request = _make_request()
         request.headers = {}
 
