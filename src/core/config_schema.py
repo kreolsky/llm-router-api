@@ -6,7 +6,7 @@ so the request path never re-validates and never sees a malformed entry.
 Two validation classes, matching what a hot reload may do to a running router:
 
   soft — warn and drop, never veto a reload: the per-model ``reasoning_effort``
-      block and ``model_info`` entries/keys;
+      block, ``model_info`` entries/keys and non-numeric pricing values;
   hard — ``ConfigError`` listing every bad entry: startup refuses to start, a
       reload keeps the previous config: provider ``type``, ``identity``,
       ``reasoning_dialect``, static ``headers:``, and non-mapping entries.
@@ -269,13 +269,50 @@ _MODEL_INFO_ARCH_KEYS = {
 }
 
 
+def _parse_pricing(model_id: str, pricing: Any) -> dict[str, float] | None:
+    """Normalize one model_info pricing block to floats.
+
+    PyYAML loads ``1e-7`` (exponent, no dot) as the STRING ``"1e-7"`` while
+    the dotted form is a float — and the usage writer multiplies prices with
+    token counts, so a str price would record string repetition as ``cost_usd``
+    or lose the whole row to a TypeError. int, float and numeric strings
+    become floats; a bool or unparsable value is dropped with a warning
+    naming the model and key. Returns None for a non-mapping ``pricing`` so
+    the caller drops the whole block.
+    """
+    if not isinstance(pricing, dict):
+        logger.warning(
+            f"model_info entry '{model_id}' has a non-mapping pricing, ignoring",
+            extra={"config": {"model_info_key": model_id}},
+        )
+        return None
+    parsed: dict[str, float] = {}
+    for key, value in pricing.items():
+        try:
+            # bool is an int subclass: float(True) == 1.0 would silently
+            # price a typo'd `prompt: true` as a real rate.
+            price = None if isinstance(value, bool) else float(value)
+        except (TypeError, ValueError):
+            price = None
+        if price is None:
+            logger.warning(
+                f"model_info entry '{model_id}' pricing key '{key}' has a "
+                f"non-numeric value {value!r}, ignoring it",
+                extra={"config": {"model_info_key": model_id, "pricing_key": key}},
+            )
+            continue
+        parsed[key] = price
+    return parsed
+
+
 def _parse_model_info(model_info: Any, models: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     """Soft-validate model_info: warn on unknown keys and orphan entries.
 
     Non-fatal (model_info is optional). Warns when an entry has no
     matching model in models.yaml, or uses keys outside the normalized
     schema — both indicate a stale or mistyped catalog. A non-mapping entry
-    is dropped.
+    is dropped. Pricing values are normalized to floats via _parse_pricing
+    (PyYAML can hand a numeric string where a number is meant).
     """
     if not isinstance(model_info, dict):
         return {}
@@ -307,6 +344,15 @@ def _parse_model_info(model_info: Any, models: Mapping[str, Any]) -> dict[str, d
                     f"model_info entry '{model_id}'.architecture has unknown keys: {sorted(arch_unknown)}",
                     extra={"config": {"model_info_key": model_id, "unknown_keys": sorted(arch_unknown)}},
                 )
+        if "pricing" in entry:
+            parsed = _parse_pricing(model_id, entry["pricing"])
+            # Copy, never mutate: the raw dict belongs to the caller.
+            entry = dict(entry)
+            if parsed is None:
+                entry.pop("pricing")
+            else:
+                entry["pricing"] = parsed
+            kept[model_id] = entry
     return kept
 
 

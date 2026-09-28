@@ -208,7 +208,8 @@ def _compute_cost_usd(stats: RequestStats, pricing_lookup: PricingLookup | None)
     (prompt - cached) * prompt + cached * input_cache_read + completion * completion.
     A missing input_cache_read falls back to the prompt rate — stored pricing
     only contains the keys the upstream actually sent, and treating an absent
-    cache rate as free would systematically under-report cost.
+    cache rate as free would systematically under-report cost. A price that
+    is not a number also returns None: an unpriced row, never a lost one.
     """
     if stats.prompt_tokens + stats.completion_tokens <= 0:
         return None
@@ -226,6 +227,14 @@ def _compute_cost_usd(stats: RequestStats, pricing_lookup: PricingLookup | None)
     if prompt_price is None or completion_price is None:
         return None
     cache_price = pricing.get("input_cache_read", prompt_price)
+    # WHY: a price that is not a number degrades to an unpriced row, never a
+    # lost one — int*str is string repetition, a float+str sum raises
+    # TypeError, and _flush_row calls this OUTSIDE its try, so the whole
+    # usage row would vanish. bool is excluded explicitly: it is an int
+    # subclass, so True would price as a real 1.0.
+    if any(isinstance(p, bool) or not isinstance(p, (int, float))
+           for p in (prompt_price, completion_price, cache_price)):
+        return None
     non_cached = max(stats.prompt_tokens - stats.cached_tokens, 0)
     return (non_cached * prompt_price
             + stats.cached_tokens * cache_price
