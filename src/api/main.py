@@ -93,7 +93,7 @@ async def lifespan(app: FastAPI):
     app.state.embedding_service = EmbeddingService(config_manager, registry)
     app.state.transcription_service = TranscriptionService(config_manager, registry)
 
-    await init_db(config_manager.settings.usage_db_path)
+    await init_db(config_manager.settings.usage_db_path, app.state.model_service.get_pricing)
 
     capabilities_task = asyncio.create_task(capabilities_refresh_loop(config_manager, registry, capabilities_cache))
 

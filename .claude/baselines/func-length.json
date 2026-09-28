@@ -1,43 +1,19 @@
 {
   "limit": 50,
   "scan_dir": "src",
-  "total": 11,
+  "total": 5,
   "violations": {
     "src/api/main.py::lifespan": {
       "label": "src/api/main.py::lifespan",
       "span": 54
     },
-    "src/api/middleware.py::RequestLoggerMiddleware.__call__": {
-      "label": "src/api/middleware.py::RequestLoggerMiddleware.__call__",
-      "span": 119
-    },
-    "src/core/auth.py::get_api_key": {
-      "label": "src/core/auth.py::get_api_key",
-      "span": 90
-    },
     "src/core/config_manager.py::ConfigManager.reload_config": {
       "label": "src/core/config_manager.py::ConfigManager.reload_config",
       "span": 57
     },
-    "src/core/usage_db/queries.py::get_requests": {
-      "label": "src/core/usage_db/queries.py::get_requests",
-      "span": 88
-    },
-    "src/core/usage_db/queries.py::get_summary": {
-      "label": "src/core/usage_db/queries.py::get_summary",
-      "span": 116
-    },
-    "src/core/usage_db/queries.py::get_usage_data": {
-      "label": "src/core/usage_db/queries.py::get_usage_data",
-      "span": 80
-    },
     "src/core/usage_db/writer.py::_flush_row": {
       "label": "src/core/usage_db/writer.py::_flush_row",
       "span": 71
-    },
-    "src/core/usage_db/writer.py::init_db": {
-      "label": "src/core/usage_db/writer.py::init_db",
-      "span": 52
     },
     "src/providers/pool.py::ProviderPool.__init__": {
       "label": "src/providers/pool.py::ProviderPool.__init__",

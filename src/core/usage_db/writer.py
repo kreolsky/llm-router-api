@@ -7,12 +7,15 @@ single row in a ``finally`` at the end of the request lifecycle — including
 SSE streams, whose generator completes before the middleware returns.
 
 Cost is computed at flush time from merged capabilities pricing, so historical
-rows do not drift when tariffs change.
+rows do not drift when tariffs change. The pricing source is injected by
+init_db (a model_id -> pricing callable), so this core package never reaches
+into the service layer for it.
 """
 
 import asyncio
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -26,6 +29,12 @@ from ._conn import get_connection
 # garbage-collected before completion. Each task removes itself via a done
 # callback that logs a WARNING on unexpected failure.
 _usage_tasks: set[asyncio.Task] = set()
+
+# model_id -> stored per-token pricing (or None when unpriced).
+PricingLookup = Callable[[str], dict[str, Any] | None]
+
+# Installed by init_db, cleared by close_db; None prices nothing.
+_pricing_lookup: PricingLookup | None = None
 
 # Stored error messages are truncated to this length.
 _MAX_ERROR_MESSAGE = 500
@@ -110,7 +119,10 @@ def request_stats(request: object | None) -> RequestStats:
 # Schema
 # ---------------------------------------------------------------------------
 
-async def init_db(db_path: str) -> None:
+async def init_db(db_path: str, pricing_lookup: PricingLookup) -> None:
+    """Open the usage DB, apply the schema and migrations, install pricing_lookup."""
+    global _pricing_lookup
+    _pricing_lookup = pricing_lookup
     db_dir = os.path.dirname(db_path)
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
@@ -118,6 +130,9 @@ async def init_db(db_path: str) -> None:
     # prior connection (a re-init, a leaked handle) is closed instead of
     # orphaned.
     conn = await aiosqlite.connect(db_path)
+    # WHY: dashboard queries map rows by column name (dict(row)), so the SQL
+    # aliases ARE the JSON keys; index access keeps working for the rest.
+    conn.row_factory = aiosqlite.Row
     await _conn.set_connection(conn)
     await conn.execute("PRAGMA journal_mode=WAL")
     # WHY: WAL allows one writer at a time; busy_timeout makes a concurrent
@@ -128,6 +143,11 @@ async def init_db(db_path: str) -> None:
     # survivable at all (it resets the WAL over VirtioFS) — preventing that is
     # the INVARIANT(data-loss) on the usage_data volume in docker-compose.yml.
     await conn.execute("PRAGMA busy_timeout=5000")
+    await _apply_schema(conn)
+
+
+async def _apply_schema(conn: aiosqlite.Connection) -> None:
+    """Create usage_events, apply the additive migrations and the timestamp index."""
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS usage_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -169,6 +189,8 @@ async def init_db(db_path: str) -> None:
 
 
 async def close_db() -> None:
+    global _pricing_lookup
+    _pricing_lookup = None
     await _conn.set_connection(None)
 
 
@@ -180,7 +202,7 @@ async def close_db() -> None:
 # Why: model_info.yaml is hand-curated — a "per 1M tokens" value would silently
 # inflate every recorded cost by 10^6, and costs are frozen at write time so
 # the error would be invisible and permanent. Pinned by tests.
-def _compute_cost_usd(stats: RequestStats, app_state: Any | None) -> float | None:
+def _compute_cost_usd(stats: RequestStats, pricing_lookup: PricingLookup | None) -> float | None:
     """Write-time cost from merged capabilities pricing; None when unpriced.
 
     (prompt - cached) * prompt + cached * input_cache_read + completion * completion.
@@ -190,13 +212,12 @@ def _compute_cost_usd(stats: RequestStats, app_state: Any | None) -> float | Non
     """
     if stats.prompt_tokens + stats.completion_tokens <= 0:
         return None
-    model_service = getattr(app_state, "model_service", None)
-    if model_service is None:
+    if pricing_lookup is None:
         return None
     try:
-        pricing = model_service.get_pricing(stats.model_id)
+        pricing = pricing_lookup(stats.model_id)
     except Exception:
-        # Includes a missing/broken model_service during early lifespan.
+        # A broken pricing source degrades to an unpriced row, never a lost one.
         return None
     if not isinstance(pricing, dict) or not pricing:
         return None
@@ -218,7 +239,6 @@ async def _flush_row(
     project_name: str,
     duration_ms: float,
     status_code: int,
-    app_state: Any | None,
 ) -> None:
     """Insert the single usage_events row for a finished request.
 
@@ -226,7 +246,7 @@ async def _flush_row(
     substitutes "unknown" / "" — without this the INSERT raises and the
     failure is swallowed below, i.e. errors would silently not be recorded.
     """
-    cost_usd = _compute_cost_usd(stats, app_state)
+    cost_usd = _compute_cost_usd(stats, _pricing_lookup)
     error_message = stats.error_message[:_MAX_ERROR_MESSAGE] if stats.error_message else None
     try:
         conn = get_connection()
@@ -338,7 +358,6 @@ def schedule_flush(
     project_name: str,
     duration_ms: float,
     status_code: int,
-    app_state: Any | None,
 ) -> asyncio.Task | None:
     """Fire-and-forget single-row flush (tracked in _usage_tasks).
 
@@ -357,7 +376,6 @@ def schedule_flush(
         project_name=project_name,
         duration_ms=duration_ms,
         status_code=status_code,
-        app_state=app_state,
     ))
     _usage_tasks.add(task)
     task.add_done_callback(_on_usage_done)

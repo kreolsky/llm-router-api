@@ -1,10 +1,14 @@
 """Dashboard query side of usage tracking: every read path for /stat/api/*.
 
 Pure reads over usage_events; shares only the connection (in _conn.py) with
-the writer. No SQL beyond what the module held before the split.
+the writer. The connection's row factory is aiosqlite.Row (set in init_db),
+so every SELECT aliases its columns to the JSON keys the dashboard reads and a
+row becomes its response object through dict(row).
 """
 
 import time
+
+import aiosqlite
 
 from ._conn import get_connection
 
@@ -78,8 +82,7 @@ async def get_usage_data(
         return {"series": []}
 
     where, params = _filter_where(users, models, days)
-
-    query = f"""
+    cursor = await conn.execute(f"""
         SELECT
             project_name,
             model_id,
@@ -91,63 +94,33 @@ async def get_usage_data(
         {where}
         GROUP BY project_name, model_id, day
         ORDER BY project_name, model_id, day
-    """
-
-    cursor = await conn.execute(query, params)
+    """, params)
     rows = await cursor.fetchall()
 
-    series_map: dict[tuple[str, str], dict] = {}
-    all_dates: set[str] = set()
+    per_series: dict[tuple[str, str], dict[str, tuple[int, int, int]]] = {}
+    for row in rows:
+        by_day = per_series.setdefault((row["project_name"], row["model_id"]), {})
+        by_day[row["day"]] = (row["prompt"], row["cached"], row["completion"])
+    sorted_dates = sorted({day for by_day in per_series.values() for day in by_day})
 
-    for project_name, model_id, day, prompt, cached, completion in rows:
-        key = (project_name, model_id)
-        if key not in series_map:
-            series_map[key] = {
-                "user": project_name,
-                "model": model_id,
-                "dates": [],
-                "prompt": [],
-                "cached": [],
-                "completion": [],
-            }
-        series_map[key]["dates"].append(day)
-        series_map[key]["prompt"].append(prompt)
-        series_map[key]["cached"].append(cached)
-        series_map[key]["completion"].append(completion)
-        all_dates.add(day)
+    return {"series": [
+        _aligned_series(user, model, by_day, sorted_dates)
+        for (user, model), by_day in per_series.items()
+    ]}
 
-    sorted_dates = sorted(all_dates)
 
-    series = []
-    for s in series_map.values():
-        # strict=True: dates and the metric triples are appended together row by
-        # row, so unequal lengths would mean corrupted series data — fail loudly.
-        date_map = dict(zip(s["dates"],
-                            zip(s["prompt"], s["cached"], s["completion"], strict=True),
-                            strict=True))
-        aligned_prompt = []
-        aligned_cached = []
-        aligned_completion = []
-        for d in sorted_dates:
-            if d in date_map:
-                p, c, comp = date_map[d]
-                aligned_prompt.append(p)
-                aligned_cached.append(c)
-                aligned_completion.append(comp)
-            else:
-                aligned_prompt.append(0)
-                aligned_cached.append(0)
-                aligned_completion.append(0)
-        series.append({
-            "user": s["user"],
-            "model": s["model"],
-            "dates": sorted_dates,
-            "prompt": aligned_prompt,
-            "cached": aligned_cached,
-            "completion": aligned_completion,
-        })
-
-    return {"series": series}
+def _aligned_series(user: str, model: str, by_day: dict[str, tuple[int, int, int]],
+                    sorted_dates: list[str]) -> dict:
+    """One (user, model) series over every selected day, 0 where it had no rows."""
+    points = [by_day.get(day, (0, 0, 0)) for day in sorted_dates]
+    return {
+        "user": user,
+        "model": model,
+        "dates": sorted_dates,
+        "prompt": [p for p, _, _ in points],
+        "cached": [c for _, c, _ in points],
+        "completion": [comp for _, _, comp in points],
+    }
 
 
 def _empty_summary() -> dict:
@@ -186,127 +159,101 @@ async def get_summary(users: list[str], models: list[str], days: int | None) -> 
         return _empty_summary()
 
     where, params = _filter_where(users, models, days)
-    err = _ERR_SQL
+    return {
+        "totals": await _summary_totals(conn, where, params),
+        "by_user": await _breakdown(conn, where, params, "project_name", "user"),
+        "by_model": await _breakdown(conn, where, params, "model_id", "model"),
+        "by_provider": await _breakdown(conn, where, params, "provider_name", "provider"),
+        "by_error_code": await _by_error_code(conn, where, params),
+        "by_day": await _by_day(conn, where, params),
+    }
 
+
+async def _summary_totals(conn: aiosqlite.Connection, where: str, params: list) -> dict:
+    """The totals block: sums, the error and cache-hit rates, priced/unpriced split."""
     cursor = await conn.execute(f"""
-        SELECT COUNT(*),
-               SUM(CASE WHEN {err} THEN 1 ELSE 0 END),
-               SUM(prompt_tokens), SUM(cached_tokens), SUM(completion_tokens),
-               SUM(reasoning_tokens), SUM(total_tokens), SUM(cost_usd),
-               SUM(CASE WHEN cost_usd IS NULL AND prompt_tokens + completion_tokens > 0
-                        THEN 1 ELSE 0 END)
+        SELECT COUNT(*) AS requests,
+               COALESCE(SUM(CASE WHEN {_ERR_SQL} THEN 1 ELSE 0 END), 0) AS errors,
+               COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+               COALESCE(SUM(cached_tokens), 0) AS cached_tokens,
+               COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+               COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens,
+               COALESCE(SUM(total_tokens), 0) AS total_tokens,
+               SUM(cost_usd) AS cost_usd,
+               COALESCE(SUM(CASE WHEN cost_usd IS NULL AND prompt_tokens + completion_tokens > 0
+                                 THEN 1 ELSE 0 END), 0) AS unpriced
         FROM usage_events {where}
     """, params)
-    (requests, errors, prompt, cached, completion, reasoning, total, cost, unpriced) = \
-        await cursor.fetchone()
+    row = await cursor.fetchone()
+    requests, errors = row["requests"], row["errors"]
+    prompt, cached = row["prompt_tokens"], row["cached_tokens"]
+    return {
+        "requests": requests,
+        "errors": errors,
+        "error_rate": (errors / requests) if requests else 0.0,
+        "prompt_tokens": prompt,
+        "cached_tokens": cached,
+        "completion_tokens": row["completion_tokens"],
+        "reasoning_tokens": row["reasoning_tokens"],
+        "total_tokens": row["total_tokens"],
+        "cost_usd": row["cost_usd"],
+        "unpriced": row["unpriced"],
+        "cache_hit_rate": (cached / prompt) if prompt else 0.0,
+    }
 
-    requests = requests or 0
-    errors = errors or 0
-    prompt = prompt or 0
-    cached = cached or 0
-    completion = completion or 0
-    reasoning = reasoning or 0
-    total = total or 0
 
-    async def _breakdown(dimension: str, label: str) -> list[dict]:
-        cursor = await conn.execute(f"""
-            SELECT {dimension} AS dim,
-                   COUNT(*),
-                   SUM(CASE WHEN {err} THEN 1 ELSE 0 END),
-                   SUM(prompt_tokens), SUM(cached_tokens),
-                   SUM(completion_tokens), SUM(total_tokens), SUM(cost_usd)
-            FROM usage_events {where}
-            GROUP BY dim
-            ORDER BY SUM(total_tokens) DESC
-        """, params)
-        rows = await cursor.fetchall()
-        return [
-            {
-                label: row[0],
-                "requests": row[1],
-                "errors": row[2] or 0,
-                "prompt_tokens": row[3] or 0,
-                "cached_tokens": row[4] or 0,
-                "completion_tokens": row[5] or 0,
-                "total_tokens": row[6] or 0,
-                "cost_usd": row[7],
-            }
-            for row in rows
-        ]
-
-    # Errors only (NULL error_code bucket = errors that bypassed the
-    # enrichment point: 422s, disconnects, string-detail 404s).
+async def _breakdown(conn: aiosqlite.Connection, where: str, params: list,
+                     dimension: str, label: str) -> list[dict]:
+    """Per-dimension sums (user / model / provider), heaviest token user first."""
     cursor = await conn.execute(f"""
-        SELECT error_code, COUNT(*)
-        FROM usage_events {where}{' AND ' + err if where else ' WHERE ' + err}
+        SELECT {dimension} AS "{label}",
+               COUNT(*) AS requests,
+               COALESCE(SUM(CASE WHEN {_ERR_SQL} THEN 1 ELSE 0 END), 0) AS errors,
+               COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+               COALESCE(SUM(cached_tokens), 0) AS cached_tokens,
+               COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+               COALESCE(SUM(total_tokens), 0) AS total_tokens,
+               SUM(cost_usd) AS cost_usd
+        FROM usage_events {where}
+        GROUP BY {dimension}
+        ORDER BY SUM(usage_events.total_tokens) DESC
+    """, params)
+    return [dict(row) for row in await cursor.fetchall()]
+
+
+async def _by_error_code(conn: aiosqlite.Connection, where: str, params: list) -> list[dict]:
+    """Errors only (NULL error_code bucket = errors that bypassed the
+    enrichment point: 422s, disconnects, string-detail 404s)."""
+    cursor = await conn.execute(f"""
+        SELECT error_code, COUNT(*) AS count
+        FROM usage_events {where}{' AND ' + _ERR_SQL if where else ' WHERE ' + _ERR_SQL}
         GROUP BY error_code
         ORDER BY COUNT(*) DESC
     """, params)
-    by_error_code = [
-        {"error_code": row[0], "count": row[1]} for row in await cursor.fetchall()
-    ]
+    return [dict(row) for row in await cursor.fetchall()]
 
+
+async def _by_day(conn: aiosqlite.Connection, where: str, params: list) -> list[dict]:
+    """Per-UTC-day sums, oldest first."""
     cursor = await conn.execute(f"""
         SELECT date(timestamp, 'unixepoch') AS day,
-               COUNT(*),
-               SUM(CASE WHEN {err} THEN 1 ELSE 0 END),
-               SUM(prompt_tokens), SUM(cached_tokens), SUM(completion_tokens),
-               SUM(cost_usd)
+               COUNT(*) AS requests,
+               COALESCE(SUM(CASE WHEN {_ERR_SQL} THEN 1 ELSE 0 END), 0) AS errors,
+               COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+               COALESCE(SUM(cached_tokens), 0) AS cached_tokens,
+               COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+               SUM(cost_usd) AS cost_usd
         FROM usage_events {where}
         GROUP BY day
         ORDER BY day
     """, params)
-    by_day = [
-        {
-            "day": row[0],
-            "requests": row[1],
-            "errors": row[2] or 0,
-            "prompt_tokens": row[3] or 0,
-            "cached_tokens": row[4] or 0,
-            "completion_tokens": row[5] or 0,
-            "cost_usd": row[6],
-        }
-        for row in await cursor.fetchall()
-    ]
-
-    return {
-        "totals": {
-            "requests": requests,
-            "errors": errors,
-            "error_rate": (errors / requests) if requests else 0.0,
-            "prompt_tokens": prompt,
-            "cached_tokens": cached,
-            "completion_tokens": completion,
-            "reasoning_tokens": reasoning,
-            "total_tokens": total,
-            "cost_usd": cost,
-            "unpriced": unpriced or 0,
-            "cache_hit_rate": (cached / prompt) if prompt else 0.0,
-        },
-        "by_user": await _breakdown("project_name", "user"),
-        "by_model": await _breakdown("model_id", "model"),
-        "by_provider": await _breakdown("provider_name", "provider"),
-        "by_error_code": by_error_code,
-        "by_day": by_day,
-    }
+    return [dict(row) for row in await cursor.fetchall()]
 
 
-async def get_requests(
-    users: list[str],
-    models: list[str],
-    providers: list[str],
-    status: str,
-    error_code: str,
-    request_id: str,
-    days: int | None,
-    limit: int = 50,
-    offset: int = 0,
-) -> dict:
-    """Newest-first request log with filters and pagination."""
-    conn = get_connection()
-    if conn is None:
-        return {"requests": [], "total": 0}
-
+def _request_filters(
+    providers: list[str], status: str, error_code: str, request_id: str,
+) -> tuple[list[str], list]:
+    """Conditions specific to the request log (status, error code, id, providers)."""
     conditions: list[str] = []
     params: list = []
 
@@ -331,7 +278,26 @@ async def get_requests(
         placeholders = ",".join("?" for _ in providers)
         conditions.append(f"provider_name IN ({placeholders})")
         params.extend(providers)
+    return conditions, params
 
+
+async def get_requests(
+    users: list[str],
+    models: list[str],
+    providers: list[str],
+    status: str,
+    error_code: str,
+    request_id: str,
+    days: int | None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict:
+    """Newest-first request log with filters and pagination."""
+    conn = get_connection()
+    if conn is None:
+        return {"requests": [], "total": 0}
+
+    conditions, params = _request_filters(providers, status, error_code, request_id)
     where, params = _filter_where(users, models, days, conditions, params)
 
     cursor = await conn.execute(
@@ -349,33 +315,8 @@ async def get_requests(
         ORDER BY timestamp DESC, id DESC
         LIMIT ? OFFSET ?
     """, [*params, limit, offset])
-    rows = await cursor.fetchall()
-
     return {
-        "requests": [
-            {
-                "id": row[0],
-                "request_id": row[1],
-                "timestamp": row[2],
-                "project_name": row[3],
-                "model_id": row[4],
-                "provider_name": row[5],
-                "endpoint": row[6],
-                "stream": bool(row[7]),
-                "prompt_tokens": row[8],
-                "completion_tokens": row[9],
-                "cached_tokens": row[10],
-                "reasoning_tokens": row[11],
-                "total_tokens": row[12],
-                "cost_usd": row[13],
-                "duration_ms": row[14],
-                "status_code": row[15],
-                "error_code": row[16],
-                "error_message": row[17],
-                "api_key_hash": row[18],
-                "client_ip": row[19],
-            }
-            for row in rows
-        ],
+        "requests": [{**dict(row), "stream": bool(row["stream"])}
+                     for row in await cursor.fetchall()],
         "total": total,
     }

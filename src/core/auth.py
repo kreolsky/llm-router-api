@@ -2,10 +2,12 @@
 # SYSTEM: auth — bearer authentication (constant-time key comparison) and per-key model access control
 import hashlib
 import hmac
+from collections.abc import Mapping
 
 from fastapi import Depends, Request, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from .config_schema import KeyEntry
 from .context import AuthContext, request_context
 from .error_handling import ErrorType, create_error
 from .logging import logger
@@ -40,16 +42,49 @@ async def get_api_key(
     })
 
     if not api_key:
-        logger.warning("Authentication failed: missing API key", extra={
-            "auth": {
-                "error_type": "missing_api_key",
-                "request_path": str(request.url.path)
-            }
-        })
+        _log_auth_failure(request, "missing API key", "missing_api_key")
         raise create_error(ErrorType.MISSING_API_KEY)
 
-    found_project = None
-    for project_name, key_entry in config.user_keys.items():
+    found_project = _find_project(config.user_keys, api_key)
+    if not found_project:
+        # Enrich the stats holder before raising: the row will carry a
+        # truncated SHA-256 hash of the presented (invalid) key.
+        request_stats(request).api_key_hash = hashlib.sha256(api_key.encode()).hexdigest()[:8]
+        _log_auth_failure(request, "invalid API key", "invalid_api_key")
+        raise create_error(ErrorType.INVALID_API_KEY)
+
+    return _grant(request, found_project, config.user_keys[found_project])
+
+
+def _grant(request: Request, project_name: str, key_entry: KeyEntry) -> AuthContext:
+    """Attach the project to the request context and return the key's grants."""
+    allowed_models = list(key_entry.allowed_models)
+    allowed_endpoints = list(key_entry.allowed_endpoints)
+
+    # SIDE EFFECT: attach project_name to the typed RequestContext read by
+    # downstream handlers — the single owner of the resolved project name.
+    # The accessor's placeholder covers a request that never passed through
+    # the middleware (unit tests driving raw ASGI).
+    request.state.request_context = request_context(request).with_project_name(project_name)
+
+    logger.info("Authentication successful", extra={
+        "auth": {
+            "project_name": project_name,
+            "allowed_models_count": len(allowed_models),
+            "allowed_endpoints_count": len(allowed_endpoints),
+            "request_path": str(request.url.path)
+        }
+    })
+
+    return AuthContext(
+        allowed_models=allowed_models,
+        allowed_endpoints=allowed_endpoints,
+    )
+
+
+def _find_project(user_keys: Mapping[str, KeyEntry], api_key: str) -> str | None:
+    """The project whose key matches api_key, or None."""
+    for project_name, key_entry in user_keys.items():
         stored_key = key_entry.api_key
         # INVARIANT: constant-time comparison prevents timing attacks
         # WHY: compared as UTF-8 bytes — hmac.compare_digest rejects non-ASCII
@@ -57,43 +92,18 @@ async def get_api_key(
         # Starlette) would raise TypeError ⇒ 500 instead of 401. Mirrors the
         # stat-key check in api/stat_routes.py verify_stat_key.
         if stored_key and hmac.compare_digest(stored_key.encode(), api_key.encode()):
-            found_project = project_name
-            break
+            return project_name
+    return None
 
-    if not found_project:
-        # Enrich the stats holder before raising: the row will carry a
-        # truncated SHA-256 hash of the presented (invalid) key.
-        request_stats(request).api_key_hash = hashlib.sha256(api_key.encode()).hexdigest()[:8]
-        logger.warning("Authentication failed: invalid API key", extra={
-            "auth": {
-                "error_type": "invalid_api_key",
-                "request_path": str(request.url.path)
-            }
-        })
-        raise create_error(ErrorType.INVALID_API_KEY)
-    
-    allowed_models = list(config.user_keys[found_project].allowed_models)
-    allowed_endpoints = list(config.user_keys[found_project].allowed_endpoints)
-    
-    # SIDE EFFECT: attach project_name to the typed RequestContext read by
-    # downstream handlers — the single owner of the resolved project name.
-    # The accessor's placeholder covers a request that never passed through
-    # the middleware (unit tests driving raw ASGI).
-    request.state.request_context = request_context(request).with_project_name(found_project)
 
-    logger.info("Authentication successful", extra={
+def _log_auth_failure(request: Request, reason: str, error_type: str) -> None:
+    """The WARNING line every refused authentication writes."""
+    logger.warning(f"Authentication failed: {reason}", extra={
         "auth": {
-            "project_name": found_project,
-            "allowed_models_count": len(allowed_models),
-            "allowed_endpoints_count": len(allowed_endpoints),
+            "error_type": error_type,
             "request_path": str(request.url.path)
         }
     })
-    
-    return AuthContext(
-        allowed_models=allowed_models,
-        allowed_endpoints=allowed_endpoints,
-    )
 
 
 def check_endpoint_access(endpoint_path: str):

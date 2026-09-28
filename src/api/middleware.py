@@ -61,40 +61,12 @@ class RequestLoggerMiddleware:
         path = scope.get("path", "")
         query = scope.get("query_string", b"").decode("utf-8", errors="replace")
         url = f"{path}?{query}" if query else path
+        stats = _start_stats(scope, path, state)
 
-        # ARCH: per-request stats holder; enriched by services/auth, flushed
-        # once below. Skipped paths (health, stats, docs) never record.
-        # endpoint starts as the raw path — the route's name (set by the
-        # router during the app call below) replaces it in the finally.
-        should_record = not path.startswith(_SKIP_PATH_PREFIXES)
-        stats: RequestStats | None = None
-        if should_record:
-            stats = RequestStats(
-                endpoint=path,
-                client_ip=client_host(Request(scope)),
-            )
-            state["request_stats"] = stats
+        logger.info(f"Request: Incoming Request | method={method}",
+                    request_id=request_id, user_id="unknown", url=url)
 
-        logger.info(
-            f"Request: Incoming Request | method={method}",
-            request_id=request_id,
-            user_id="unknown",
-            url=url
-        )
-
-        status_code = None
-
-        async def send_wrapper(message):
-            nonlocal status_code
-            if message["type"] == "http.response.start":
-                status_code = message.get("status", 0)
-                # Add X-Process-Time header
-                headers = list(message.get("headers", []))
-                process_time = time.time() - start_time
-                headers.append((b"x-process-time", str(process_time).encode()))
-                message = {**message, "headers": headers}
-            await send(message)
-
+        send_wrapper = _StatusRecordingSend(send, start_time)
         try:
             await self.app(scope, receive, send_wrapper)
         except Exception as e:
@@ -110,31 +82,78 @@ class RequestLoggerMiddleware:
             # WHY finally: must run for unhandled 500s and mid-stream client
             # disconnects (CancelledError), not just clean returns. With no
             # http.response.start ever sent, the row records status 500.
-            if should_record and stats is not None:
-                # The route is only populated on scope AFTER the app call —
-                # including its except branches and a client disconnect
-                # mid-stream. A request that never resolved (404) keeps the
-                # raw path it started with.
-                route = scope.get("route")
-                if route is not None and getattr(route, "name", None):
-                    stats.endpoint = route.name
-                ctx: RequestContext | None = scope.get("state", {}).get("request_context")
-                project_name = ctx.user_id if ctx else "unknown"
-                schedule_flush(
-                    stats,
-                    request_id=request_id,
-                    project_name=project_name,
-                    duration_ms=(time.time() - start_time) * 1000,
-                    status_code=status_code if status_code else 500,
-                    app_state=getattr(scope.get("app"), "state", None),
-                )
+            if stats is not None:
+                _flush_stats(scope, stats, request_id, start_time, send_wrapper.status_code)
 
-        process_time = time.time() - start_time
-        ctx: RequestContext = scope.get("state", {}).get("request_context")
-        user_id = ctx.user_id if ctx else "unknown"
+        _log_outgoing(scope, request_id, send_wrapper.status_code, start_time)
 
-        logger.info(
-            f"Response: Outgoing Response | status={status_code} | time={round(process_time * 1000)}ms",
-            request_id=request_id,
-            user_id=user_id
-        )
+
+class _StatusRecordingSend:
+    """ASGI send wrapper: records the response status and adds X-Process-Time."""
+
+    def __init__(self, send, start_time: float):
+        self._send = send
+        self._start_time = start_time
+        self.status_code: int | None = None
+
+    async def __call__(self, message):
+        if message["type"] == "http.response.start":
+            self.status_code = message.get("status", 0)
+            # Add X-Process-Time header
+            headers = list(message.get("headers", []))
+            process_time = time.time() - self._start_time
+            headers.append((b"x-process-time", str(process_time).encode()))
+            message = {**message, "headers": headers}
+        await self._send(message)
+
+
+def _log_outgoing(scope, request_id: str, status_code: int | None, start_time: float) -> None:
+    """The Outgoing Response bookend, attributed to the authenticated project."""
+    process_time = time.time() - start_time
+    ctx: RequestContext = scope.get("state", {}).get("request_context")
+    user_id = ctx.user_id if ctx else "unknown"
+
+    logger.info(
+        f"Response: Outgoing Response | status={status_code} | time={round(process_time * 1000)}ms",
+        request_id=request_id,
+        user_id=user_id
+    )
+
+
+def _start_stats(scope, path: str, state: dict) -> RequestStats | None:
+    """Create and install the per-request stats holder, or None for a skipped path.
+
+    ARCH: per-request stats holder; enriched by services/auth, flushed
+    once in the middleware's finally. Skipped paths (health, stats, docs)
+    never record. endpoint starts as the raw path — the route's name (set by
+    the router during the app call) replaces it at flush time.
+    """
+    if path.startswith(_SKIP_PATH_PREFIXES):
+        return None
+    stats = RequestStats(
+        endpoint=path,
+        client_ip=client_host(Request(scope)),
+    )
+    state["request_stats"] = stats
+    return stats
+
+
+def _flush_stats(scope, stats: RequestStats, request_id: str, start_time: float,
+                 status_code: int | None) -> None:
+    """Resolve the endpoint name and project, then schedule the one INSERT."""
+    # The route is only populated on scope AFTER the app call —
+    # including its except branches and a client disconnect
+    # mid-stream. A request that never resolved (404) keeps the
+    # raw path it started with.
+    route = scope.get("route")
+    if route is not None and getattr(route, "name", None):
+        stats.endpoint = route.name
+    ctx: RequestContext | None = scope.get("state", {}).get("request_context")
+    project_name = ctx.user_id if ctx else "unknown"
+    schedule_flush(
+        stats,
+        request_id=request_id,
+        project_name=project_name,
+        duration_ms=(time.time() - start_time) * 1000,
+        status_code=status_code if status_code else 500,
+    )
