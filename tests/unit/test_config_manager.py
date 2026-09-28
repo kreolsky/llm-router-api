@@ -281,6 +281,98 @@ class TestHardValidationVeto:
         assert "models.m" in message
 
 
+class TestMaxConcurrentValidation:
+    """max_concurrent is a hard check in parse_provider: only a positive int
+    (or absent/null) parses — a quoted "3" would silently disable the pool's
+    gate and `true` (bool is an int subclass) would build a Semaphore(1)."""
+
+    @pytest.mark.parametrize("bad", ["3", True, 0, -1])
+    def test_bad_value_is_config_error(self, bad):
+        from src.core.config_schema import ConfigError, parse_provider
+        with pytest.raises(ConfigError, match="max_concurrent"):
+            parse_provider({"type": "openai", "max_concurrent": bad})
+
+    def test_positive_int_parses(self):
+        from src.core.config_schema import parse_provider
+        assert parse_provider({"type": "openai", "max_concurrent": 3}).max_concurrent == 3
+
+    def test_absent_and_null_parse(self):
+        from src.core.config_schema import parse_provider
+        assert parse_provider({"type": "openai"}).max_concurrent is None
+        assert parse_provider({"type": "openai", "max_concurrent": None}).max_concurrent is None
+
+    def test_bad_value_in_a_section_names_the_provider(self):
+        """Through parse_config the error is wrapped with the entry's name —
+        an operator sees `providers.orange`, not a bare value complaint."""
+        from src.core.config_schema import ConfigError, parse_config
+        with pytest.raises(ConfigError) as exc_info:
+            parse_config({
+                "providers": {"orange": {"type": "openai", "max_concurrent": "3"}},
+                "models": {"m": {"provider": "orange"}},
+                "user_keys": {},
+            })
+        assert "providers.orange" in str(exc_info.value)
+        assert "max_concurrent" in str(exc_info.value)
+
+
+class TestCrossReferenceWarnings:
+    """Cross-file references are a soft check in parse_config: a model whose
+    provider is not a providers.yaml key and a key whose allowed_models names
+    an unknown model each warn once — nothing dropped, no veto (the
+    model_info orphan warning's class)."""
+
+    def _parse(self, raw):
+        from src.core.config_schema import parse_config
+        with patch("src.core.config_schema.logger") as mock_logger:
+            config = parse_config(raw)
+        return config, mock_logger
+
+    def test_unknown_provider_and_unknown_allowed_model_each_warn_once(self):
+        config, mock_logger = self._parse({
+            "providers": {"openai": {"type": "openai"}},
+            "models": {
+                "gpt-4": {"provider": "openai"},
+                "ghost-backed": {"provider": "ghost"},
+            },
+            "user_keys": {
+                "full-key": {"api_key": "k1", "allowed_models": ["gpt-4"]},
+                "ghost-key": {"api_key": "k2", "allowed_models": ["ghost-model"]},
+            },
+        })
+        # Soft: nothing dropped, no veto.
+        assert "ghost-backed" in config.models
+        assert "ghost-key" in config.user_keys
+        warnings = [str(call) for call in mock_logger.warning.call_args_list]
+        assert len(warnings) == 2
+        assert any("ghost-backed" in w and "unknown provider 'ghost'" in w
+                   for w in warnings)
+        assert any("ghost-key" in w and "ghost-model" in w for w in warnings)
+
+    def test_matching_references_do_not_warn(self):
+        _, mock_logger = self._parse({
+            "providers": {"openai": {"type": "openai"}},
+            "models": {"gpt-4": {"provider": "openai"}},
+            "user_keys": {"full-key": {"api_key": "k1", "allowed_models": ["gpt-4"]}},
+        })
+        assert mock_logger.warning.call_args_list == []
+
+    def test_empty_referenced_section_does_not_warn(self):
+        """A section's references are checked only when it is non-empty: an
+        empty providers/models section never reaches parse_config in
+        production (rejected before parsing), and warning per entry there
+        would only re-describe the missing section."""
+        # providers empty → the model's dangling provider is not warned.
+        _, mock_logger = self._parse({
+            "models": {"m": {"provider": "ghost"}},
+        })
+        assert mock_logger.warning.call_args_list == []
+        # models empty → the key's dangling allowed_model is not warned.
+        _, mock_logger = self._parse({
+            "user_keys": {"k": {"api_key": "x", "allowed_models": ["ghost"]}},
+        })
+        assert mock_logger.warning.call_args_list == []
+
+
 # ===================================================================
 # Typed Settings snapshot
 # ===================================================================
@@ -338,11 +430,12 @@ class TestSettings:
         with patch.dict("os.environ", {"STREAM_READ_TIMEOUT": "999"}, clear=True):
             assert cm.settings.stream_read_timeout == 111.0
 
-    def test_malformed_env_falls_back_to_default(self):
-        """An unparsable numeric env var degrades to the Settings default."""
+    def test_malformed_env_refuses_to_start(self):
+        """A malformed numeric env var refuses to start (the module ARCH
+        promises fail-fast) instead of silently degrading to the default."""
         with patch.dict("os.environ", {"QUEUE_WAIT_TIMEOUT": "not-a-number"}, clear=True):
-            cm = _build_config_manager()
-        assert cm.settings.queue_wait_timeout == 30.0
+            with pytest.raises(RuntimeError, match="QUEUE_WAIT_TIMEOUT"):
+                _build_config_manager()
 
 
 class TestPropertyGetters:
@@ -418,7 +511,7 @@ class TestPropertyGetters:
 
 
 class TestEnvSettingsResolvedOnce:
-    """Values are frozen at construction and malformed input degrades gracefully."""
+    """Values are frozen at construction; a malformed value refuses to start."""
 
     def test_later_env_change_is_ignored(self):
         """Changing the env after construction does not change a resolved setting."""
@@ -427,10 +520,48 @@ class TestEnvSettingsResolvedOnce:
         with patch.dict("os.environ", {"STREAM_READ_TIMEOUT": "999"}, clear=True):
             assert cm.settings.stream_read_timeout == 111.0
 
-    def test_malformed_number_falls_back_to_default(self):
-        """An unparsable numeric env var falls back rather than crashing a request."""
+    def test_malformed_number_names_variable_and_raw_value(self):
+        """A malformed numeric env var raises RuntimeError naming the variable
+        AND its raw value, so a crash log is enough to fix the .env line."""
         with patch.dict("os.environ", {"QUEUE_WAIT_TIMEOUT": "not-a-number"}, clear=True):
+            with pytest.raises(RuntimeError) as exc_info:
+                _build_config_manager()
+        message = str(exc_info.value)
+        assert "QUEUE_WAIT_TIMEOUT" in message
+        assert "'not-a-number'" in message
+
+    def test_malformed_bool_refuses_to_start(self):
+        """`MODEL_CACHE_ENABLED=yes` raises instead of reading as False —
+        anything-not-`true` used to disable the model cache in silence."""
+        with patch.dict("os.environ", {"MODEL_CACHE_ENABLED": "yes"}, clear=True):
+            with pytest.raises(RuntimeError, match="MODEL_CACHE_ENABLED"):
+                _build_config_manager()
+
+    def test_every_malformed_variable_is_named_at_once(self):
+        """One RuntimeError lists every malformed variable — the same
+        collect-then-raise shape as parse_config, fix them all in one pass."""
+        with patch.dict("os.environ", {"QUEUE_WAIT_TIMEOUT": "abc",
+                                       "MODEL_CACHE_ENABLED": "yes"}, clear=True):
+            with pytest.raises(RuntimeError) as exc_info:
+                _build_config_manager()
+        message = str(exc_info.value)
+        assert "QUEUE_WAIT_TIMEOUT" in message and "'abc'" in message
+        assert "MODEL_CACHE_ENABLED" in message and "'yes'" in message
+
+    def test_bool_true_is_case_and_whitespace_tolerant(self):
+        """` TRUE ` parses as True — the strip/lower tolerance is kept."""
+        with patch.dict("os.environ", {"MODEL_CACHE_ENABLED": " TRUE "}, clear=True):
             cm = _build_config_manager()
+        assert cm.settings.model_cache_enabled is True
+
+    def test_empty_value_means_unset(self):
+        """An empty value is an unset knob, not a malformed one: bool and
+        numeric fields keep their defaults (`MODEL_CACHE_ENABLED=` in a .env
+        file must not refuse to start)."""
+        with patch.dict("os.environ", {"MODEL_CACHE_ENABLED": "",
+                                       "QUEUE_WAIT_TIMEOUT": ""}, clear=True):
+            cm = _build_config_manager()
+        assert cm.settings.model_cache_enabled is True
         assert cm.settings.queue_wait_timeout == 30.0
 
     def test_unknown_attribute_still_raises(self):

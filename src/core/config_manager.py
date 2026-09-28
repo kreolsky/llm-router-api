@@ -71,24 +71,45 @@ class Settings:
     stat_api_key: str = ""
 
 
+class _MalformedEnvValue(ValueError):
+    """One env var whose raw value cannot become its Settings type; the
+    message names the variable and its raw value."""
+
+    def __init__(self, name: str, raw: str, expected: str):
+        super().__init__(f"{name}={raw!r} {expected}")
+
+
 def _env_bool(name: str, default: bool) -> bool:
+    """Read a bool env var: `true`/`false`, case-insensitive, whitespace-tolerant.
+
+    Unset or empty/whitespace-only means the default (an empty `VAR=` line in
+    a .env file is an unset knob, not a typo). Any other value raises
+    _MalformedEnvValue — anything-not-`true` used to read as False, silently
+    disabling the model cache on a typo like `MODEL_CACHE_ENABLED=yes`.
+    """
     raw = os.getenv(name)
-    return default if raw is None else raw.strip().lower() == "true"
+    if raw is None or not raw.strip():
+        return default
+    value = raw.strip().lower()
+    if value not in ("true", "false"):
+        raise _MalformedEnvValue(name, raw, "is not a boolean (expected 'true' or 'false')")
+    return value == "true"
 
 
 def _env_number(name: str, default, cast):
-    """Read a numeric env var, falling back to default with a warning if unparsable."""
+    """Read a numeric env var; a malformed value raises _MalformedEnvValue.
+
+    Unset or empty/whitespace-only means the default. The old
+    fallback-to-default-with-a-warning contradicted the module ARCH (startup
+    fail-fast): a typo'd QUEUE_WAIT_TIMEOUT served its default in silence.
+    """
     raw = os.getenv(name)
-    if raw is None:
+    if raw is None or not raw.strip():
         return default
     try:
         return cast(raw)
     except (ValueError, TypeError):
-        logger.warning(
-            f"{name} has invalid value {raw!r}, falling back to default {default}",
-            extra={"config": {"setting": name, "raw_value": raw}},
-        )
-        return default
+        raise _MalformedEnvValue(name, raw, f"is not a valid {cast.__name__}") from None
 
 
 class ReloadOutcome(Enum):
@@ -193,16 +214,31 @@ class ConfigManager:
             )
     
     def _read_env_settings(self) -> Settings:
-        """Resolve every Settings field from its upper-cased env var (see module header)."""
+        """Resolve every Settings field from its upper-cased env var (see module header).
+
+        Fail fast: a malformed value refuses to start, and one RuntimeError
+        names every offending variable — the same collect-then-raise shape as
+        parse_config, so an operator fixes them all in one pass. Unset or
+        empty values keep their defaults; str fields are passed through as-is.
+        """
         values: dict[str, Any] = {}
+        malformed: list[str] = []
         for f in fields(Settings):
             env_var = f.name.upper()
-            if isinstance(f.default, bool):
-                values[f.name] = _env_bool(env_var, f.default)
-            elif isinstance(f.default, str):
-                values[f.name] = os.getenv(env_var, f.default)
-            else:
-                values[f.name] = _env_number(env_var, f.default, type(f.default))
+            try:
+                if isinstance(f.default, bool):
+                    values[f.name] = _env_bool(env_var, f.default)
+                elif isinstance(f.default, str):
+                    values[f.name] = os.getenv(env_var, f.default)
+                else:
+                    values[f.name] = _env_number(env_var, f.default, type(f.default))
+            except _MalformedEnvValue as e:
+                malformed.append(f"  - {e}")
+        if malformed:
+            raise RuntimeError(
+                "Malformed environment variable(s), refusing to start:\n"
+                + "\n".join(malformed)
+            )
         return Settings(**values)
 
     def add_reload_callback(self, callback, name: str = ""):

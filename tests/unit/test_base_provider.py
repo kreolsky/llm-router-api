@@ -15,6 +15,7 @@ from src.core.config_schema import (
     DEFAULT_REASONING_DIALECT,
     ConfigError,
     ModelEntry,
+    ProviderEntry,
     parse_provider,
 )
 from src.providers.base import Provider
@@ -73,11 +74,18 @@ def _make_settings(**overrides) -> Settings:
 
 
 def _build_limited_provider(max_concurrent, settings=None):
-    """Build a ProviderStub with max_concurrent set."""
-    config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
-              "max_concurrent": max_concurrent}
+    """Build a ProviderStub with max_concurrent set.
+
+    The entry is built directly, not via parse_provider: the schema now
+    refuses a non-positive/non-int max_concurrent (ConfigError), while the
+    pool keeps its defensive check for direct construction — pinned by
+    test_max_concurrent_non_positive_disables_limit below.
+    """
+    entry = ProviderEntry(
+        type="openai", base_url="https://api.example.com",
+        api_key_env="TEST_API_KEY", max_concurrent=max_concurrent)
     with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-        return ProviderStub(_entry(config), settings=settings or Settings())
+        return ProviderStub(entry, settings=settings or Settings())
 
 
 def _mock_response(json_body=None):
