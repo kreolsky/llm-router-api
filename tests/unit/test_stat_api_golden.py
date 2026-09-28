@@ -48,6 +48,9 @@ _QUERIES = [
     "/stat/api/usage?users=alice,bob&models=m1",
     "/stat/api/summary",
     "/stat/api/summary?users=alice&models=m1",
+    # A filter matching no row: the SUMs are NULL here, so the 0-coalescing is pinned.
+    "/stat/api/usage?users=__nobody__",
+    "/stat/api/summary?users=__nobody__",
     "/stat/api/requests",
     "/stat/api/requests?status=error",
     "/stat/api/requests?status=ok&providers=p1",
@@ -58,6 +61,15 @@ _QUERIES = [
 ]
 
 GOLDEN: dict[str, bytes] = {
+    '/stat/api/usage?users=__nobody__': (
+        b'{"series":[]}'
+    ),
+    '/stat/api/summary?users=__nobody__': (
+        b'{"totals":{"requests":0,"errors":0,"error_rate":0.0,"prompt_tokens":0,"cached_to'
+        b'kens":0,"completion_tokens":0,"reasoning_tokens":0,"total_tokens":0,"cost_usd":n'
+        b'ull,"unpriced":0,"cache_hit_rate":0.0},"by_user":[],"by_model":[],"by_provider":'
+        b'[],"by_error_code":[],"by_day":[]}'
+    ),
     '/stat/api/users': (
         b'["alice","bob","carol","unknown"]'
     ),
