@@ -153,8 +153,8 @@ class TestChatHappyPaths:
         ]
         provider = _StubProvider(stream_frames=frames)
         request = _happy_request({"model": "chat/model-a",
-                                  "messages": [{"role": "user", "content": "ping"}],
-                                  "stream": True})
+                                   "messages": [{"role": "user", "content": "ping"}],
+                                   "stream": True})
 
         response = await _happy_service(provider).chat_completions(
             request, _make_auth_context())
@@ -166,3 +166,43 @@ class TestChatHappyPaths:
         # stream flag was set on the stats holder before dispatch
         assert request.state.request_stats.stream is True
         assert provider.stream_calls[0][1] == "upstream-a"
+
+    @pytest.mark.asyncio
+    async def test_stream_without_stream_options_asks_upstream_for_usage(self):
+        """INVARIANT: a stream request with no stream_options reaches the
+        provider with include_usage injected — llama-server emits the usage
+        frame only when asked."""
+        provider = _StubProvider(stream_frames=[b'data: [DONE]\n\n'])
+        request = _happy_request({"model": "chat/model-a",
+                                  "messages": [{"role": "user", "content": "ping"}],
+                                  "stream": True})
+
+        await _happy_service(provider).chat_completions(request, _make_auth_context())
+
+        assert provider.stream_calls[0][0]["stream_options"] == {"include_usage": True}
+
+    @pytest.mark.asyncio
+    async def test_stream_with_client_stream_options_left_unchanged(self):
+        """A client-set stream_options (including include_usage: false) is
+        forwarded exactly as sent — the router never overrides the client."""
+        provider = _StubProvider(stream_frames=[b'data: [DONE]\n\n'])
+        request = _happy_request({"model": "chat/model-a",
+                                  "messages": [{"role": "user", "content": "ping"}],
+                                  "stream": True,
+                                  "stream_options": {"include_usage": False}})
+
+        await _happy_service(provider).chat_completions(request, _make_auth_context())
+
+        assert provider.stream_calls[0][0]["stream_options"] == {"include_usage": False}
+
+    @pytest.mark.asyncio
+    async def test_non_stream_request_never_gets_stream_options(self):
+        """The injection is stream-branch-only: a non-stream request reaches
+        the provider without a stream_options key."""
+        provider = _StubProvider()
+        request = _happy_request({"model": "chat/model-a",
+                                  "messages": [{"role": "user", "content": "ping"}]})
+
+        await _happy_service(provider).chat_completions(request, _make_auth_context())
+
+        assert "stream_options" not in provider.chat_calls[0][0]

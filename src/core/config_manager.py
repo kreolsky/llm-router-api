@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import os
 from dataclasses import dataclass, fields
+from enum import Enum
 from typing import Any
 
 import yaml
@@ -70,24 +71,65 @@ class Settings:
     stat_api_key: str = ""
 
 
+class _MalformedEnvValue(ValueError):
+    """One env var whose raw value cannot become its Settings type; the
+    message names the variable and its raw value."""
+
+    def __init__(self, name: str, raw: str, expected: str):
+        super().__init__(f"{name}={raw!r} {expected}")
+
+
 def _env_bool(name: str, default: bool) -> bool:
+    """Read a bool env var: `true`/`false`, case-insensitive, whitespace-tolerant.
+
+    Unset or empty/whitespace-only means the default (an empty `VAR=` line in
+    a .env file is an unset knob, not a typo). Any other value raises
+    _MalformedEnvValue — anything-not-`true` used to read as False, silently
+    disabling the model cache on a typo like `MODEL_CACHE_ENABLED=yes`.
+    """
     raw = os.getenv(name)
-    return default if raw is None else raw.strip().lower() == "true"
+    if raw is None or not raw.strip():
+        return default
+    value = raw.strip().lower()
+    if value not in ("true", "false"):
+        raise _MalformedEnvValue(name, raw, "is not a boolean (expected 'true' or 'false')")
+    return value == "true"
 
 
 def _env_number(name: str, default, cast):
-    """Read a numeric env var, falling back to default with a warning if unparsable."""
+    """Read a numeric env var; a malformed value raises _MalformedEnvValue.
+
+    Unset or empty/whitespace-only means the default. The old
+    fallback-to-default-with-a-warning contradicted the module ARCH (startup
+    fail-fast): a typo'd QUEUE_WAIT_TIMEOUT served its default in silence.
+    """
     raw = os.getenv(name)
-    if raw is None:
+    if raw is None or not raw.strip():
         return default
     try:
         return cast(raw)
     except (ValueError, TypeError):
-        logger.warning(
-            f"{name} has invalid value {raw!r}, falling back to default {default}",
-            extra={"config": {"setting": name, "raw_value": raw}},
-        )
-        return default
+        raise _MalformedEnvValue(name, raw, f"is not a valid {cast.__name__}") from None
+
+
+class ReloadOutcome(Enum):
+    """Verdict of one reload_config attempt, and what _poll_once does with it.
+
+    APPLIED — the new config is published and every callback ran cleanly;
+        the new mtimes are committed, nothing is retried.
+    REJECTED — the on-disk config was refused (incomplete, a ConfigError, or
+        a vetoing pre-swap callback); the previous config keeps serving. A
+        rejection is final for those file bytes: parsing is deterministic and
+        the env is frozen per process, so the mtimes are committed anyway and
+        only the next file change re-triggers a reload.
+    POST_SWAP_FAILED — the swap is published but a post-swap callback failed;
+        nothing is rolled back. The mtimes stay uncommitted so the next poll
+        retries until the derived caches catch up (see _log_reload_complete).
+    """
+
+    APPLIED = "applied"
+    REJECTED = "rejected"
+    POST_SWAP_FAILED = "post_swap_failed"
 
 
 class ConfigManager:
@@ -172,16 +214,31 @@ class ConfigManager:
             )
     
     def _read_env_settings(self) -> Settings:
-        """Resolve every Settings field from its upper-cased env var (see module header)."""
+        """Resolve every Settings field from its upper-cased env var (see module header).
+
+        Fail fast: a malformed value refuses to start, and one RuntimeError
+        names every offending variable — the same collect-then-raise shape as
+        parse_config, so an operator fixes them all in one pass. Unset or
+        empty values keep their defaults; str fields are passed through as-is.
+        """
         values: dict[str, Any] = {}
+        malformed: list[str] = []
         for f in fields(Settings):
             env_var = f.name.upper()
-            if isinstance(f.default, bool):
-                values[f.name] = _env_bool(env_var, f.default)
-            elif isinstance(f.default, str):
-                values[f.name] = os.getenv(env_var, f.default)
-            else:
-                values[f.name] = _env_number(env_var, f.default, type(f.default))
+            try:
+                if isinstance(f.default, bool):
+                    values[f.name] = _env_bool(env_var, f.default)
+                elif isinstance(f.default, str):
+                    values[f.name] = os.getenv(env_var, f.default)
+                else:
+                    values[f.name] = _env_number(env_var, f.default, type(f.default))
+            except _MalformedEnvValue as e:
+                malformed.append(f"  - {e}")
+        if malformed:
+            raise RuntimeError(
+                "Malformed environment variable(s), refusing to start:\n"
+                + "\n".join(malformed)
+            )
         return Settings(**values)
 
     def add_reload_callback(self, callback, name: str = ""):
@@ -206,26 +263,29 @@ class ConfigManager:
         """
         self._post_swap_callbacks.append((name, callback))
 
-    async def reload_config(self) -> bool:
+    async def reload_config(self) -> ReloadOutcome:
         """Reload config from disk in two phases.
 
         Phase 1 (pre-swap): the freshly loaded files are parsed (a ConfigError
         rejects the reload like a vetoing callback), then every
-        add_reload_callback runs with the new_config while self.config still holds the previous value. A
-        raising callback ABORTS the reload: self.config is not swapped and
-        False is returned — the previous config stays in place.
+        add_reload_callback runs with the new_config while self.config still
+        holds the previous value. A raising callback ABORTS the reload:
+        self.config is not swapped and REJECTED is returned — the previous
+        config stays in place.
 
         Phase 2 (post-swap): self.config = new_config, then every
         add_post_swap_callback runs. A raising callback is logged and the
         swap STAYS published (there is nothing to roll back to), but the
-        reload reports False — see Returns.
+        reload reports POST_SWAP_FAILED — see Returns.
 
-        Returns True only when the new config was applied AND every post-swap
-        callback ran cleanly. False when it was rejected (incomplete on disk,
-        or refused by a pre-swap callback) or a post-swap callback failed:
-        the config stays published either way, but the on-disk state must not
-        be treated as consumed — the caller leaves last_mtimes uncommitted so
-        the next poll retries (see _poll_once).
+        Returns:
+            APPLIED — applied cleanly; every post-swap callback ran.
+            REJECTED — refused (incomplete on disk, a ConfigError, or a
+                vetoing pre-swap callback); the previous config keeps
+                serving. Final for those file bytes — the next file change
+                is the retry (see ReloadOutcome).
+            POST_SWAP_FAILED — the swap is published but a post-swap
+                callback failed; _poll_once retries (see _log_reload_complete).
         """
         logger.info("Reloading configuration", extra={
             "config": {
@@ -237,24 +297,21 @@ class ConfigManager:
         if not self._missing_sections(raw):
             new_config = self._parse_for_reload(raw)
             if new_config is None or not await self._run_pre_swap_callbacks(new_config):
-                return False
+                return ReloadOutcome.REJECTED
             self.config = new_config
             post_swap_failed = not await self._run_post_swap_callbacks(new_config)
             self._log_reload_complete(post_swap_failed)
-            # WHY: True here would let _poll_once commit last_mtimes, and a
-            # half-applied reload (the config swapped, a derived cache like
-            # the provider registry not) would never be retried until the
-            # file changed again — e.g. a provider added by this reload
-            # would 404 in silence. False keeps the on-disk state
-            # unconsumed so the next tick retries; with provider instance
-            # reuse the retry re-stages cheaply. The retry repeats every
-            # config_reload_interval until the callback succeeds or the
-            # files change again — deliberate: a half-applied reload must
-            # not go quiet, and the reuse path keeps each attempt cheap.
-            return not post_swap_failed
+            # WHY: APPLIED here would let _poll_once commit last_mtimes, and a
+            # half-applied reload (the config swapped, a derived cache like the
+            # provider registry not) would never be retried — e.g. a provider
+            # added by this reload would 404 in silence. POST_SWAP_FAILED keeps
+            # the on-disk state unconsumed so the next tick retries (cheap with
+            # provider instance reuse) until the callback succeeds or the files
+            # change again — a half-applied reload must not go quiet.
+            return ReloadOutcome.POST_SWAP_FAILED if post_swap_failed else ReloadOutcome.APPLIED
 
         logger.warning("Partial config reload rejected, keeping previous config")
-        return False
+        return ReloadOutcome.REJECTED
 
     def _parse_for_reload(self, raw: dict) -> RouterConfig | None:
         """Parse the reloaded files; None (logged) when a ConfigError rejects them."""
@@ -262,7 +319,7 @@ class ConfigManager:
             return parse_config(raw)
         except ConfigError as e:
             # Same veto as a refusing pre-swap callback: the previous
-            # config keeps serving and the next poll retries.
+            # config keeps serving and the next file change retries.
             logger.error(
                 f"Config reload rejected, keeping previous config: {e}",
                 extra={"config": {"operation": "reload_rejected"}},
@@ -348,12 +405,13 @@ class ConfigManager:
         accepted), so callers/tests can distinguish "nothing to do" from "work
         attempted".
 
-        # WHY: last_mtimes is committed only after reload_config() reports
-        # success — and success means APPLIED CLEANLY, post-swap callbacks
-        # included. Recording it up front means a config rejected by a
-        # callback (a typo in providers.yaml) or half-applied by a failed
-        # post-swap step is never retried until the file changes again, and
-        # the router keeps serving the stale or half-new state in silence.
+        # WHY: last_mtimes is committed for APPLIED and REJECTED alike, and
+        # left uncommitted only for POST_SWAP_FAILED. A rejected reload is
+        # not retried because the same bytes and the same frozen env always
+        # give the same verdict, so a retry only repeats the rejection; its
+        # one log line per file change is the signal. A post-swap failure is
+        # the exception: the config is already swapped and the derived cache
+        # must catch up, so the next poll retries until it does.
         """
         mtimes = self._current_mtimes()
         changed_files = [
@@ -369,7 +427,7 @@ class ConfigManager:
                 "changed_files": changed_files,
             }
         })
-        if await self.reload_config():
+        if await self.reload_config() is not ReloadOutcome.POST_SWAP_FAILED:
             self.last_mtimes = mtimes
         return True
 

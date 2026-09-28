@@ -5,11 +5,15 @@ ARCH: ``parse_config`` is the single place a raw YAML dict becomes the typed
 so the request path never re-validates and never sees a malformed entry.
 Two validation classes, matching what a hot reload may do to a running router:
 
-  soft — warn and drop, never veto a reload: the per-model ``reasoning_effort``
-      block and ``model_info`` entries/keys;
+  soft — warn, never veto a reload: the per-model ``reasoning_effort`` block,
+      ``model_info`` entries/keys and non-numeric pricing values (dropped),
+      and dangling cross-file references — a model whose ``provider`` is not
+      a providers.yaml key, a key whose ``allowed_models`` names an unknown
+      model (kept; the request path answers them);
   hard — ``ConfigError`` listing every bad entry: startup refuses to start, a
       reload keeps the previous config: provider ``type``, ``identity``,
-      ``reasoning_dialect``, static ``headers:``, and non-mapping entries.
+      ``reasoning_dialect``, static ``headers:``, ``max_concurrent``, and
+      non-mapping entries.
 
 Env-dependent checks (``base_url``, the ``api_key_env`` variable) stay at
 provider construction — they belong to the process, not to the YAML.
@@ -205,6 +209,15 @@ def parse_provider(raw: Any) -> ProviderEntry:
         validate_reasoning_dialect(dialect)
     headers = raw.get("headers") or {}
     _validate_static_headers(_require_mapping(headers, "headers"))
+    max_concurrent = raw.get("max_concurrent")
+    # bool is an int subclass: `true` would pass isinstance and build a
+    # Semaphore(1), and a quoted "3" silently disables the gate — neither
+    # typo is auto-correctable, so the value refuses to parse.
+    if max_concurrent is not None and (isinstance(max_concurrent, bool)
+                                       or not isinstance(max_concurrent, int)
+                                       or max_concurrent <= 0):
+        raise ConfigError(
+            f"max_concurrent must be a positive int, got {max_concurrent!r}.")
     return ProviderEntry(
         type=provider_type,
         base_url=raw.get("base_url"),
@@ -213,7 +226,7 @@ def parse_provider(raw: Any) -> ProviderEntry:
         proxy=raw.get("proxy"),
         identity=identity,
         reasoning_dialect=dialect if dialect is not None else DEFAULT_REASONING_DIALECT,
-        max_concurrent=raw.get("max_concurrent"),
+        max_concurrent=max_concurrent,
     )
 
 
@@ -269,13 +282,50 @@ _MODEL_INFO_ARCH_KEYS = {
 }
 
 
+def _parse_pricing(model_id: str, pricing: Any) -> dict[str, float] | None:
+    """Normalize one model_info pricing block to floats.
+
+    PyYAML loads ``1e-7`` (exponent, no dot) as the STRING ``"1e-7"`` while
+    the dotted form is a float — and the usage writer multiplies prices with
+    token counts, so a str price would record string repetition as ``cost_usd``
+    or lose the whole row to a TypeError. int, float and numeric strings
+    become floats; a bool or unparsable value is dropped with a warning
+    naming the model and key. Returns None for a non-mapping ``pricing`` so
+    the caller drops the whole block.
+    """
+    if not isinstance(pricing, dict):
+        logger.warning(
+            f"model_info entry '{model_id}' has a non-mapping pricing, ignoring",
+            extra={"config": {"model_info_key": model_id}},
+        )
+        return None
+    parsed: dict[str, float] = {}
+    for key, value in pricing.items():
+        try:
+            # bool is an int subclass: float(True) == 1.0 would silently
+            # price a typo'd `prompt: true` as a real rate.
+            price = None if isinstance(value, bool) else float(value)
+        except (TypeError, ValueError):
+            price = None
+        if price is None:
+            logger.warning(
+                f"model_info entry '{model_id}' pricing key '{key}' has a "
+                f"non-numeric value {value!r}, ignoring it",
+                extra={"config": {"model_info_key": model_id, "pricing_key": key}},
+            )
+            continue
+        parsed[key] = price
+    return parsed
+
+
 def _parse_model_info(model_info: Any, models: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     """Soft-validate model_info: warn on unknown keys and orphan entries.
 
     Non-fatal (model_info is optional). Warns when an entry has no
     matching model in models.yaml, or uses keys outside the normalized
     schema — both indicate a stale or mistyped catalog. A non-mapping entry
-    is dropped.
+    is dropped. Pricing values are normalized to floats via _parse_pricing
+    (PyYAML can hand a numeric string where a number is meant).
     """
     if not isinstance(model_info, dict):
         return {}
@@ -307,6 +357,15 @@ def _parse_model_info(model_info: Any, models: Mapping[str, Any]) -> dict[str, d
                     f"model_info entry '{model_id}'.architecture has unknown keys: {sorted(arch_unknown)}",
                     extra={"config": {"model_info_key": model_id, "unknown_keys": sorted(arch_unknown)}},
                 )
+        if "pricing" in entry:
+            parsed = _parse_pricing(model_id, entry["pricing"])
+            # Copy, never mutate: the raw dict belongs to the caller.
+            entry = dict(entry)
+            if parsed is None:
+                entry.pop("pricing")
+            else:
+                entry["pricing"] = parsed
+            kept[model_id] = entry
     return kept
 
 
@@ -320,6 +379,40 @@ def _parse_section(section: str, raw: Any, parse_one, errors: list[str]) -> dict
         except ConfigError as e:
             errors.append(f"  - {section}.{name}: {e}")
     return parsed
+
+
+def _warn_dangling_references(
+        providers: Mapping[str, ProviderEntry],
+        models: Mapping[str, ModelEntry],
+        user_keys: Mapping[str, KeyEntry]) -> None:
+    """Soft cross-file check: warn when models.yaml or user_keys.yaml name an
+    entry another file does not have (the model_info orphan warning's class —
+    nothing dropped, no veto; the request path answers the dangling reference).
+
+    INVARIANT: a section's references are checked only when that section is
+    non-empty.
+    Why: an empty providers/models section never reaches parse_config in
+    production (startup's _assert_config_complete and the reload's
+    _missing_sections reject it first), so warning per entry there would
+    only re-describe the missing section — every model/key would dangle.
+    """
+    if providers:
+        for model_id, entry in models.items():
+            if entry.provider is not None and entry.provider not in providers:
+                logger.warning(
+                    f"models.yaml '{model_id}' references unknown provider "
+                    f"'{entry.provider}' (not a key of providers.yaml)",
+                    extra={"config": {"model": model_id, "provider": entry.provider}},
+                )
+    if models:
+        for key_id, entry in user_keys.items():
+            unknown = [m for m in entry.allowed_models if m not in models]
+            if unknown:
+                logger.warning(
+                    f"user_keys.yaml '{key_id}' allows unknown model(s): "
+                    f"{', '.join(unknown)} (not in models.yaml)",
+                    extra={"config": {"user_key": key_id, "unknown_models": unknown}},
+                )
 
 
 def parse_config(raw: Mapping[str, Any]) -> RouterConfig:
@@ -341,6 +434,7 @@ def parse_config(raw: Mapping[str, Any]) -> RouterConfig:
                                lambda _name, entry: _parse_key(entry), errors)
     if errors:
         raise ConfigError("Invalid configuration:\n" + "\n".join(errors))
+    _warn_dangling_references(providers, models, user_keys)
     return RouterConfig(
         providers=providers,
         models=models,

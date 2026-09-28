@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import yaml
 
-from src.core.config_manager import ConfigManager
+from src.core.config_manager import ConfigManager, ReloadOutcome
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -257,7 +257,7 @@ class TestHardValidationVeto:
         file_map = {**ALL_YAMLS, "providers.yaml": self.BAD_DIALECT_YAML}
         with patch("builtins.open", side_effect=_multi_open(file_map)), \
              patch("src.core.config_manager.logger") as mock_logger:
-            assert await cm.reload_config() is False
+            assert await cm.reload_config() is ReloadOutcome.REJECTED
 
         assert cm.get_config() is original_config
         pre.assert_not_called()
@@ -279,6 +279,98 @@ class TestHardValidationVeto:
         assert "providers.a" in message
         assert "providers.b" in message
         assert "models.m" in message
+
+
+class TestMaxConcurrentValidation:
+    """max_concurrent is a hard check in parse_provider: only a positive int
+    (or absent/null) parses — a quoted "3" would silently disable the pool's
+    gate and `true` (bool is an int subclass) would build a Semaphore(1)."""
+
+    @pytest.mark.parametrize("bad", ["3", True, 0, -1])
+    def test_bad_value_is_config_error(self, bad):
+        from src.core.config_schema import ConfigError, parse_provider
+        with pytest.raises(ConfigError, match="max_concurrent"):
+            parse_provider({"type": "openai", "max_concurrent": bad})
+
+    def test_positive_int_parses(self):
+        from src.core.config_schema import parse_provider
+        assert parse_provider({"type": "openai", "max_concurrent": 3}).max_concurrent == 3
+
+    def test_absent_and_null_parse(self):
+        from src.core.config_schema import parse_provider
+        assert parse_provider({"type": "openai"}).max_concurrent is None
+        assert parse_provider({"type": "openai", "max_concurrent": None}).max_concurrent is None
+
+    def test_bad_value_in_a_section_names_the_provider(self):
+        """Through parse_config the error is wrapped with the entry's name —
+        an operator sees `providers.orange`, not a bare value complaint."""
+        from src.core.config_schema import ConfigError, parse_config
+        with pytest.raises(ConfigError) as exc_info:
+            parse_config({
+                "providers": {"orange": {"type": "openai", "max_concurrent": "3"}},
+                "models": {"m": {"provider": "orange"}},
+                "user_keys": {},
+            })
+        assert "providers.orange" in str(exc_info.value)
+        assert "max_concurrent" in str(exc_info.value)
+
+
+class TestCrossReferenceWarnings:
+    """Cross-file references are a soft check in parse_config: a model whose
+    provider is not a providers.yaml key and a key whose allowed_models names
+    an unknown model each warn once — nothing dropped, no veto (the
+    model_info orphan warning's class)."""
+
+    def _parse(self, raw):
+        from src.core.config_schema import parse_config
+        with patch("src.core.config_schema.logger") as mock_logger:
+            config = parse_config(raw)
+        return config, mock_logger
+
+    def test_unknown_provider_and_unknown_allowed_model_each_warn_once(self):
+        config, mock_logger = self._parse({
+            "providers": {"openai": {"type": "openai"}},
+            "models": {
+                "gpt-4": {"provider": "openai"},
+                "ghost-backed": {"provider": "ghost"},
+            },
+            "user_keys": {
+                "full-key": {"api_key": "k1", "allowed_models": ["gpt-4"]},
+                "ghost-key": {"api_key": "k2", "allowed_models": ["ghost-model"]},
+            },
+        })
+        # Soft: nothing dropped, no veto.
+        assert "ghost-backed" in config.models
+        assert "ghost-key" in config.user_keys
+        warnings = [str(call) for call in mock_logger.warning.call_args_list]
+        assert len(warnings) == 2
+        assert any("ghost-backed" in w and "unknown provider 'ghost'" in w
+                   for w in warnings)
+        assert any("ghost-key" in w and "ghost-model" in w for w in warnings)
+
+    def test_matching_references_do_not_warn(self):
+        _, mock_logger = self._parse({
+            "providers": {"openai": {"type": "openai"}},
+            "models": {"gpt-4": {"provider": "openai"}},
+            "user_keys": {"full-key": {"api_key": "k1", "allowed_models": ["gpt-4"]}},
+        })
+        assert mock_logger.warning.call_args_list == []
+
+    def test_empty_referenced_section_does_not_warn(self):
+        """A section's references are checked only when it is non-empty: an
+        empty providers/models section never reaches parse_config in
+        production (rejected before parsing), and warning per entry there
+        would only re-describe the missing section."""
+        # providers empty → the model's dangling provider is not warned.
+        _, mock_logger = self._parse({
+            "models": {"m": {"provider": "ghost"}},
+        })
+        assert mock_logger.warning.call_args_list == []
+        # models empty → the key's dangling allowed_model is not warned.
+        _, mock_logger = self._parse({
+            "user_keys": {"k": {"api_key": "x", "allowed_models": ["ghost"]}},
+        })
+        assert mock_logger.warning.call_args_list == []
 
 
 # ===================================================================
@@ -338,11 +430,12 @@ class TestSettings:
         with patch.dict("os.environ", {"STREAM_READ_TIMEOUT": "999"}, clear=True):
             assert cm.settings.stream_read_timeout == 111.0
 
-    def test_malformed_env_falls_back_to_default(self):
-        """An unparsable numeric env var degrades to the Settings default."""
+    def test_malformed_env_refuses_to_start(self):
+        """A malformed numeric env var refuses to start (the module ARCH
+        promises fail-fast) instead of silently degrading to the default."""
         with patch.dict("os.environ", {"QUEUE_WAIT_TIMEOUT": "not-a-number"}, clear=True):
-            cm = _build_config_manager()
-        assert cm.settings.queue_wait_timeout == 30.0
+            with pytest.raises(RuntimeError, match="QUEUE_WAIT_TIMEOUT"):
+                _build_config_manager()
 
 
 class TestPropertyGetters:
@@ -418,7 +511,7 @@ class TestPropertyGetters:
 
 
 class TestEnvSettingsResolvedOnce:
-    """Values are frozen at construction and malformed input degrades gracefully."""
+    """Values are frozen at construction; a malformed value refuses to start."""
 
     def test_later_env_change_is_ignored(self):
         """Changing the env after construction does not change a resolved setting."""
@@ -427,10 +520,48 @@ class TestEnvSettingsResolvedOnce:
         with patch.dict("os.environ", {"STREAM_READ_TIMEOUT": "999"}, clear=True):
             assert cm.settings.stream_read_timeout == 111.0
 
-    def test_malformed_number_falls_back_to_default(self):
-        """An unparsable numeric env var falls back rather than crashing a request."""
+    def test_malformed_number_names_variable_and_raw_value(self):
+        """A malformed numeric env var raises RuntimeError naming the variable
+        AND its raw value, so a crash log is enough to fix the .env line."""
         with patch.dict("os.environ", {"QUEUE_WAIT_TIMEOUT": "not-a-number"}, clear=True):
+            with pytest.raises(RuntimeError) as exc_info:
+                _build_config_manager()
+        message = str(exc_info.value)
+        assert "QUEUE_WAIT_TIMEOUT" in message
+        assert "'not-a-number'" in message
+
+    def test_malformed_bool_refuses_to_start(self):
+        """`MODEL_CACHE_ENABLED=yes` raises instead of reading as False —
+        anything-not-`true` used to disable the model cache in silence."""
+        with patch.dict("os.environ", {"MODEL_CACHE_ENABLED": "yes"}, clear=True):
+            with pytest.raises(RuntimeError, match="MODEL_CACHE_ENABLED"):
+                _build_config_manager()
+
+    def test_every_malformed_variable_is_named_at_once(self):
+        """One RuntimeError lists every malformed variable — the same
+        collect-then-raise shape as parse_config, fix them all in one pass."""
+        with patch.dict("os.environ", {"QUEUE_WAIT_TIMEOUT": "abc",
+                                       "MODEL_CACHE_ENABLED": "yes"}, clear=True):
+            with pytest.raises(RuntimeError) as exc_info:
+                _build_config_manager()
+        message = str(exc_info.value)
+        assert "QUEUE_WAIT_TIMEOUT" in message and "'abc'" in message
+        assert "MODEL_CACHE_ENABLED" in message and "'yes'" in message
+
+    def test_bool_true_is_case_and_whitespace_tolerant(self):
+        """` TRUE ` parses as True — the strip/lower tolerance is kept."""
+        with patch.dict("os.environ", {"MODEL_CACHE_ENABLED": " TRUE "}, clear=True):
             cm = _build_config_manager()
+        assert cm.settings.model_cache_enabled is True
+
+    def test_empty_value_means_unset(self):
+        """An empty value is an unset knob, not a malformed one: bool and
+        numeric fields keep their defaults (`MODEL_CACHE_ENABLED=` in a .env
+        file must not refuse to start)."""
+        with patch.dict("os.environ", {"MODEL_CACHE_ENABLED": "",
+                                       "QUEUE_WAIT_TIMEOUT": ""}, clear=True):
+            cm = _build_config_manager()
+        assert cm.settings.model_cache_enabled is True
         assert cm.settings.queue_wait_timeout == 30.0
 
     def test_unknown_attribute_still_raises(self):
@@ -537,17 +668,17 @@ class TestAddPostSwapCallback:
         }
         with patch("builtins.open", side_effect=_multi_open(file_map)), \
              patch("src.core.config_manager.logger"):
-            assert await cm.reload_config() is True
+            assert await cm.reload_config() is ReloadOutcome.APPLIED
 
         assert seen == {"pre": False, "post": True}
 
     @pytest.mark.asyncio
-    async def test_post_swap_failure_returns_false_but_keeps_new_config(self):
+    async def test_post_swap_failure_returns_post_swap_failed_but_keeps_new_config(self):
         """A failing post-swap callback cannot un-publish the swap: the config
         is already live and there is nothing to roll back to. The reload still
-        reports False so _poll_once does not treat the on-disk state as
-        consumed — the next tick retries the reload (cheap with provider
-        instance reuse)."""
+        reports POST_SWAP_FAILED so _poll_once does not treat the on-disk
+        state as consumed — the next tick retries the reload (cheap with
+        provider instance reuse)."""
         cm = _build_config_manager()
         failing = AsyncMock(side_effect=RuntimeError("boom"))
         cm.add_post_swap_callback(failing, name="failing_post")
@@ -559,7 +690,7 @@ class TestAddPostSwapCallback:
         }
         with patch("builtins.open", side_effect=_multi_open(file_map)), \
              patch("src.core.config_manager.logger"):
-            assert await cm.reload_config() is False
+            assert await cm.reload_config() is ReloadOutcome.POST_SWAP_FAILED
 
         failing.assert_awaited_once()
         # The swap itself stays published.
@@ -576,7 +707,7 @@ class TestAddPostSwapCallback:
 
         with patch("builtins.open", side_effect=_multi_open(ALL_YAMLS)), \
              patch("src.core.config_manager.logger") as mock_logger:
-            assert await cm.reload_config() is False
+            assert await cm.reload_config() is ReloadOutcome.POST_SWAP_FAILED
 
         completions = [
             call for call in mock_logger.warning.call_args_list
@@ -599,7 +730,7 @@ class TestAddPostSwapCallback:
 
         with patch("builtins.open", side_effect=_multi_open(ALL_YAMLS)), \
              patch("src.core.config_manager.logger") as mock_logger:
-            assert await cm.reload_config() is True
+            assert await cm.reload_config() is ReloadOutcome.APPLIED
 
         completions = [
             call for call in mock_logger.info.call_args_list
@@ -621,63 +752,97 @@ class TestAddPostSwapCallback:
 
         with patch("builtins.open", side_effect=_multi_open(ALL_YAMLS)), \
              patch("src.core.config_manager.logger"):
-            assert await cm.reload_config() is False
+            assert await cm.reload_config() is ReloadOutcome.REJECTED
 
         post.assert_not_called()
         assert cm.get_config() is original_config
 
 
 # ===================================================================
-# mtime bookkeeping: a rejected reload must be retried
+# mtime bookkeeping: what each reload outcome commits
 # ===================================================================
 
-class TestReloadRetriesAfterFailure:
-    """The watcher must not treat a REJECTED reload as applied.
+class TestReloadOutcomeMtimes:
+    """_poll_once commits last_mtimes for APPLIED and REJECTED alike, and
+    leaves them uncommitted only for POST_SWAP_FAILED.
 
-    Recording the new mtimes before knowing whether the reload succeeded means a
-    config rejected by a callback (e.g. a typo in providers.yaml) is never retried
-    until the file changes again — the router silently keeps serving stale config.
+    A rejection is final for those file bytes: parsing is deterministic and
+    the env is frozen per process, so a retry only repeats the rejection —
+    its one log line per file change is the signal. A post-swap failure is
+    different: the config is already published and the derived cache must
+    catch up, so the next poll retries.
     """
 
     @pytest.mark.asyncio
     async def test_reload_config_reports_success(self):
-        """reload_config returns True when the new config is applied."""
+        """reload_config returns APPLIED when the new config is applied."""
         cm = _build_config_manager()
         with patch("builtins.open", side_effect=_multi_open(ALL_YAMLS)), \
              patch("src.core.config_manager.logger"):
-            assert await cm.reload_config() is True
+            assert await cm.reload_config() is ReloadOutcome.APPLIED
 
     @pytest.mark.asyncio
     async def test_reload_config_reports_callback_failure(self):
-        """reload_config returns False when a callback rejects the new config."""
+        """reload_config returns REJECTED when a pre-swap callback vetoes the new config."""
         cm = _build_config_manager()
         cm.add_reload_callback(AsyncMock(side_effect=RuntimeError("boom")), name="failing")
         with patch("builtins.open", side_effect=_multi_open(ALL_YAMLS)), \
              patch("src.core.config_manager.logger"):
-            assert await cm.reload_config() is False
+            assert await cm.reload_config() is ReloadOutcome.REJECTED
 
     @pytest.mark.asyncio
     async def test_reload_config_reports_partial_rejection(self):
-        """reload_config returns False when the loaded config is incomplete."""
+        """reload_config returns REJECTED when the loaded config is incomplete."""
         cm = _build_config_manager()
         with patch("builtins.open", side_effect=_multi_open({"providers.yaml": PROVIDERS_YAML})), \
              patch("src.core.config_manager.logger"):
-            assert await cm.reload_config() is False
+            assert await cm.reload_config() is ReloadOutcome.REJECTED
 
     @pytest.mark.asyncio
-    async def test_failed_reload_leaves_mtimes_unchanged(self):
-        """After a rejected reload the recorded mtimes still allow a retry."""
+    async def test_config_error_reload_returns_rejected_and_commits_mtimes(self):
+        """A ConfigError reload returns REJECTED and commits last_mtimes —
+        the same bytes would give the same verdict on every retry."""
         cm = _build_config_manager()
-        before = dict(cm.last_mtimes)
+        file_map = {**ALL_YAMLS, "providers.yaml": PROVIDERS_YAML + "    reasoning_dialect: typo\n"}
+
+        with patch("os.path.getmtime", return_value=2000.0), \
+             patch("builtins.open", side_effect=_multi_open(file_map)), \
+             patch("src.core.config_manager.logger"):
+            assert await cm.reload_config() is ReloadOutcome.REJECTED
+            assert await cm._poll_once() is True    # change detected, reload re-attempted
+            assert await cm._poll_once() is False   # the rejection is final for these bytes
+
+        assert set(cm.last_mtimes.values()) == {2000.0}
+
+    @pytest.mark.asyncio
+    async def test_missing_section_reload_returns_rejected_and_commits_mtimes(self):
+        """An incomplete on-disk config returns REJECTED and commits
+        last_mtimes — the same finality as a ConfigError."""
+        cm = _build_config_manager()
+
+        with patch("os.path.getmtime", return_value=2000.0), \
+             patch("builtins.open", side_effect=_multi_open({"providers.yaml": PROVIDERS_YAML})), \
+             patch("src.core.config_manager.logger"):
+            assert await cm.reload_config() is ReloadOutcome.REJECTED
+            assert await cm._poll_once() is True    # change detected, reload re-attempted
+            assert await cm._poll_once() is False   # the rejection is final for these bytes
+
+        assert set(cm.last_mtimes.values()) == {2000.0}
+
+    @pytest.mark.asyncio
+    async def test_vetoed_reload_commits_mtimes(self):
+        """A vetoed reload is final for those file bytes: last_mtimes are
+        committed and the second _poll_once returns False (no retry)."""
+        cm = _build_config_manager()
         cm.add_reload_callback(AsyncMock(side_effect=RuntimeError("boom")), name="failing")
 
         with patch("os.path.getmtime", return_value=2000.0), \
              patch("builtins.open", side_effect=_multi_open(ALL_YAMLS)), \
              patch("src.core.config_manager.logger"):
-            assert await cm._poll_once() is True   # change detected, reload attempted
-            assert await cm._poll_once() is True   # still pending: retried
+            assert await cm._poll_once() is True    # change detected, reload attempted
+            assert await cm._poll_once() is False   # rejected: final, not retried
 
-        assert cm.last_mtimes == before
+        assert set(cm.last_mtimes.values()) == {2000.0}
 
     @pytest.mark.asyncio
     async def test_post_swap_failure_leaves_mtimes_uncommitted(self):

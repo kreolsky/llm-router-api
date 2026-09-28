@@ -333,6 +333,24 @@ class TestComputeCost:
         state = pricing_lookup({"prompt": 3e-6, "completion": 15e-6})
         assert writer._compute_cost_usd(stats, state) == pytest.approx(3.0)
 
+    def test_non_numeric_price_returns_none(self):
+        """A str/bool price degrades to an unpriced row, never a lost one:
+        int*str is string repetition and a float+str sum raises TypeError —
+        and _flush_row computes cost OUTSIDE its try, so the row would vanish."""
+        stats = RequestStats(prompt_tokens=10, completion_tokens=5)
+        assert writer._compute_cost_usd(
+            stats, pricing_lookup({"prompt": "1e-7", "completion": 2e-6})) is None
+        assert writer._compute_cost_usd(
+            stats, pricing_lookup({"prompt": 1e-6, "completion": True})) is None
+
+    def test_non_numeric_cache_rate_returns_none(self):
+        """The prompt-rate fallback only applies when input_cache_read is
+        ABSENT — a present-but-bad cache rate must be caught by the guard."""
+        stats = RequestStats(prompt_tokens=10, completion_tokens=0, cached_tokens=4)
+        state = pricing_lookup({"prompt": 1e-6, "completion": 2e-6,
+                                "input_cache_read": "x"})
+        assert writer._compute_cost_usd(stats, state) is None
+
 
 # ---------------------------------------------------------------------------
 # Flush
@@ -395,6 +413,20 @@ class TestFlushRow:
         await flush(stats, status_code=500)
         row = (await fetch_rows(db))[0]
         assert row["error_message"] == "x" * 500
+
+    @pytest.mark.asyncio
+    async def test_non_numeric_price_still_inserts_unpriced_row(self, db):
+        """A bad price loses the cost, not the row: cost_usd NULL, usage kept."""
+        stats = RequestStats(endpoint="chat", model_id="m", provider_name="p")
+        stats.set_usage({"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15})
+        with patch("src.core.usage_db.writer._pricing_lookup",
+                   pricing_lookup({"prompt": 1e-7, "completion": "x"})):
+            await flush(stats, status_code=200)
+
+        row = (await fetch_rows(db))[0]
+        assert row["prompt_tokens"] == 10
+        assert row["has_usage"] == 1
+        assert row["cost_usd"] is None
 
     @pytest.mark.asyncio
     async def test_no_connection_noop(self, db_path):

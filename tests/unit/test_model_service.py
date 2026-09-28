@@ -653,3 +653,59 @@ class TestGetPricing:
         svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS,
                              model_info=model_info)
         assert svc.get_pricing("model-a") is None
+
+
+# ===================================================================
+# model_info pricing values — floats in the stored form
+# ===================================================================
+
+class TestModelInfoPricingValues:
+    """_parse_pricing (config_schema) normalizes model_info pricing to floats.
+
+    PyYAML loads `1e-7` (exponent, no dot) as the STRING "1e-7"; the usage
+    writer multiplies prices with token counts, so a str price would record
+    string repetition (or a TypeError) instead of a cost."""
+
+    @pytest.mark.asyncio
+    async def test_numeric_string_renders_like_the_float_form(self):
+        """`prompt: "1e-7"` renders the same pricing strings as `prompt: 1e-7`,
+        and get_pricing returns floats."""
+        model_info = {"model-a": {"pricing": {"prompt": "1e-7", "completion": 3e-07}}}
+        float_info = {"model-a": {"pricing": {"prompt": 1e-7, "completion": 3e-07}}}
+        svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS,
+                             model_info=model_info)
+        svc_float = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS,
+                                   model_info=float_info)
+        auth_ctx = _make_auth_context(allowed_models=[])
+
+        detail = await svc.retrieve_model("model-a", auth_ctx)
+        detail_float = await svc_float.retrieve_model("model-a", auth_ctx)
+
+        assert detail["pricing"] == detail_float["pricing"]
+        assert detail["pricing"]["prompt"] == "0.0000001"
+        pricing = svc.get_pricing("model-a")
+        assert pricing == {"prompt": 1e-7, "completion": 3e-07}
+        assert all(isinstance(v, float) for v in pricing.values())
+
+    def test_unparsable_value_drops_only_that_key_with_warning(self):
+        model_info = {"model-a": {"pricing": {"prompt": "abc", "completion": 0.001}}}
+        with patch("src.core.config_schema.logger") as mock_logger:
+            svc = _build_service(models=SAMPLE_MODELS, model_info=model_info)
+
+        assert svc.get_pricing("model-a") == {"completion": 0.001}
+        mock_logger.warning.assert_called_once()
+        message = mock_logger.warning.call_args[0][0]
+        assert "model-a" in message and "prompt" in message
+
+    def test_bool_value_dropped(self):
+        model_info = {"model-a": {"pricing": {"prompt": True, "completion": 0.001}}}
+        with patch("src.core.config_schema.logger"):
+            svc = _build_service(models=SAMPLE_MODELS, model_info=model_info)
+        assert svc.get_pricing("model-a") == {"completion": 0.001}
+
+    def test_non_mapping_pricing_dropped_with_warning(self):
+        model_info = {"model-a": {"pricing": "free"}}
+        with patch("src.core.config_schema.logger") as mock_logger:
+            svc = _build_service(models=SAMPLE_MODELS, model_info=model_info)
+        assert svc.get_pricing("model-a") is None
+        mock_logger.warning.assert_called_once()
