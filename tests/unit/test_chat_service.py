@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from src.core.config_schema import parse_config
 from src.core.context import AuthContext, RequestContext
 from src.core.usage_db import RequestStats
 from src.services.chat_service.chat_service import ChatService
@@ -95,11 +96,11 @@ class _StubProvider:
 
 def _happy_service(provider: _StubProvider) -> ChatService:
     cm = MagicMock()
-    cm.get_config.return_value = {
+    cm.get_config.return_value = parse_config({
         "models": {"chat/model-a": {"provider": "prov-a",
                                     "provider_model_name": "upstream-a"}},
-        "providers": {"prov-a": {"base_url": "http://upstream.invalid"}},
-    }
+        "providers": {"prov-a": {"type": "openai", "base_url": "http://upstream.invalid"}},
+    })
     return ChatService(cm, MagicMock())
 
 

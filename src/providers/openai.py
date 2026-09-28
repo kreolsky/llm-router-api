@@ -2,12 +2,13 @@
 from collections.abc import AsyncGenerator
 from typing import Any
 
+from ..core.config_schema import ModelEntry
 from .base import BaseProvider
 
 
 class OpenAICompatibleProvider(BaseProvider):
     async def chat_completions(self, request_body: dict[str, Any], provider_model_name: str,
-                               model_config: dict[str, Any], request_id: str = "unknown",
+                               model_config: ModelEntry, request_id: str = "unknown",
                                extra_headers: dict[str, str] = None) -> dict[str, Any]:
         """Forward a non-streaming chat completion to an OpenAI-compatible API."""
         request_body = self._apply_model_config(request_body, provider_model_name, model_config)
@@ -29,7 +30,7 @@ class OpenAICompatibleProvider(BaseProvider):
         )
 
     def chat_completions_stream(self, request_body: dict[str, Any], provider_model_name: str,
-                                model_config: dict[str, Any], request_id: str = "unknown",
+                                model_config: ModelEntry, request_id: str = "unknown",
                                 extra_headers: dict[str, str] = None) -> AsyncGenerator[bytes, None]:
         """Forward a streaming chat completion to an OpenAI-compatible API."""
         request_body = self._apply_model_config(request_body, provider_model_name, model_config)
@@ -37,7 +38,7 @@ class OpenAICompatibleProvider(BaseProvider):
                                     request_id=request_id, extra_headers=extra_headers)
 
     async def transcriptions(self, request_body: dict[str, Any], provider_model_name: str,
-                             model_config: dict[str, Any], request_id: str = "unknown",
+                             model_config: ModelEntry, request_id: str = "unknown",
                              extra_headers: dict[str, str] = None) -> dict[str, Any]:
         """Send audio to an OpenAI-compatible /audio/transcriptions endpoint.
 
@@ -81,7 +82,7 @@ class OpenAICompatibleProvider(BaseProvider):
         )
 
     async def embeddings(self, request_body: dict[str, Any], provider_model_name: str,
-                         model_config: dict[str, Any], request_id: str = "unknown",
+                         model_config: ModelEntry, request_id: str = "unknown",
                          extra_headers: dict[str, str] = None) -> Any:
         """Forward embedding request to an OpenAI-compatible API."""
         request_body = self._apply_model_config(request_body, provider_model_name, model_config)

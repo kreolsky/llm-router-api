@@ -64,11 +64,11 @@ class TestLoadConfig:
         """Loads providers, models, and user_keys from YAML files correctly."""
         cm = _build_config_manager()
         config = cm.get_config()
-        assert "providers" in config
-        assert "models" in config
-        assert "user_keys" in config
-        assert config["providers"]["openai"]["type"] == "openai"
-        assert config["models"]["gpt-4"]["provider"] == "openai"
+        assert "openai" in config.providers
+        assert "gpt-4" in config.models
+        assert "test-key" in config.user_keys
+        assert config.providers["openai"].type == "openai"
+        assert config.models["gpt-4"].provider == "openai"
 
     def test_missing_file_fail_on_error_true_raises(self):
         """Missing file with fail_on_error=True raises RuntimeError."""
@@ -199,7 +199,7 @@ class TestReloadConfig:
     async def test_rejects_partial_config_keeps_previous(self):
         """Partial config is rejected; previous config is kept."""
         cm = _build_config_manager()
-        original_config = cm.get_config().copy()
+        original_config = cm.get_config()
         callback = AsyncMock()
         cm.add_reload_callback(callback, name="test_cb")
 
@@ -212,13 +212,13 @@ class TestReloadConfig:
         # Callback should NOT be invoked
         callback.assert_not_called()
         # Config should remain unchanged
-        assert cm.get_config() == original_config
+        assert cm.get_config() is original_config
 
     @pytest.mark.asyncio
     async def test_callback_failure_keeps_previous_config(self):
         """When a callback raises, self.config is NOT swapped (old config retained)."""
         cm = _build_config_manager()
-        original_config = cm.get_config().copy()
+        original_config = cm.get_config()
         failing_cb = AsyncMock(side_effect=RuntimeError("boom"))
         cm.add_reload_callback(failing_cb, name="failing")
 
@@ -227,7 +227,58 @@ class TestReloadConfig:
             await cm.reload_config()
 
         failing_cb.assert_awaited_once()
-        assert cm.get_config() == original_config  # old config retained
+        assert cm.get_config() is original_config  # old config retained
+
+
+class TestHardValidationVeto:
+    """A hard config error (parse_config's ConfigError) refuses to start and
+    vetoes a reload with the previous config still serving."""
+
+    BAD_DIALECT_YAML = PROVIDERS_YAML + "    reasoning_dialect: typo\n"
+
+    def test_unknown_provider_type_refuses_to_start(self):
+        from src.core.config_schema import ConfigError
+        file_map = {**ALL_YAMLS,
+                    "providers.yaml": "providers:\n  p:\n    type: anthropic\n    base_url: https://x\n"}
+        with pytest.raises(ConfigError) as exc_info:
+            _build_config_manager(file_map)
+        assert "providers.p" in str(exc_info.value)
+        assert "anthropic" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_bad_dialect_vetoes_reload_and_keeps_old_config(self):
+        cm = _build_config_manager()
+        original_config = cm.get_config()
+        pre = AsyncMock()
+        post = AsyncMock()
+        cm.add_reload_callback(pre, name="pre")
+        cm.add_post_swap_callback(post, name="post")
+
+        file_map = {**ALL_YAMLS, "providers.yaml": self.BAD_DIALECT_YAML}
+        with patch("builtins.open", side_effect=_multi_open(file_map)), \
+             patch("src.core.config_manager.logger") as mock_logger:
+            assert await cm.reload_config() is False
+
+        assert cm.get_config() is original_config
+        pre.assert_not_called()
+        post.assert_not_called()
+        rejection = str(mock_logger.error.call_args)
+        assert "reload rejected" in rejection
+        assert "reasoning_dialect" in rejection
+
+    def test_every_bad_entry_is_listed(self):
+        """One ConfigError names every broken entry, not only the first."""
+        from src.core.config_schema import ConfigError, parse_config
+        with pytest.raises(ConfigError) as exc_info:
+            parse_config({
+                "providers": {"a": {"type": "openai", "identity": "x"},
+                              "b": {"type": "openai", "headers": {"Host": "h"}}},
+                "models": {"m": "not-a-mapping"},
+            })
+        message = str(exc_info.value)
+        assert "providers.a" in message
+        assert "providers.b" in message
+        assert "models.m" in message
 
 
 # ===================================================================
@@ -471,10 +522,10 @@ class TestAddPostSwapCallback:
         seen = {}
 
         async def pre_cb(new_config):
-            seen["pre"] = "gpt-5" in cm.get_config().get("models", {})
+            seen["pre"] = "gpt-5" in cm.get_config().models
 
         async def post_cb(new_config):
-            seen["post"] = "gpt-5" in cm.get_config().get("models", {})
+            seen["post"] = "gpt-5" in cm.get_config().models
 
         cm.add_reload_callback(pre_cb, name="pre")
         cm.add_post_swap_callback(post_cb, name="post")
@@ -512,7 +563,7 @@ class TestAddPostSwapCallback:
 
         failing.assert_awaited_once()
         # The swap itself stays published.
-        assert "gpt-5" in cm.get_config().get("models", {})
+        assert "gpt-5" in cm.get_config().models
 
     @pytest.mark.asyncio
     async def test_post_swap_failure_never_logs_the_plain_success_line(self):
@@ -563,7 +614,7 @@ class TestAddPostSwapCallback:
         """A pre-swap (aborting) callback failure prevents the swap AND the
         post-swap callbacks from running at all."""
         cm = _build_config_manager()
-        original_config = cm.get_config().copy()
+        original_config = cm.get_config()
         post = AsyncMock()
         cm.add_reload_callback(AsyncMock(side_effect=RuntimeError("boom")), name="failing_pre")
         cm.add_post_swap_callback(post, name="post")
@@ -573,7 +624,7 @@ class TestAddPostSwapCallback:
             assert await cm.reload_config() is False
 
         post.assert_not_called()
-        assert cm.get_config() == original_config
+        assert cm.get_config() is original_config
 
 
 # ===================================================================

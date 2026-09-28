@@ -1,9 +1,9 @@
 """Provider registry with instance caching keyed by provider name."""
 # SYSTEM: provider-registry — provider instances cached by name, drained on reload
 import asyncio
-from typing import Any
 
 from ..core.config_manager import Settings
+from ..core.config_schema import ProviderEntry, RouterConfig
 from ..core.error_handling import ErrorType, create_error
 from .base import BaseProvider
 from .openai import OpenAICompatibleProvider
@@ -40,27 +40,21 @@ def _on_drain_done(task: asyncio.Task) -> None:
 
 def _build_provider(
     provider_name: str,
-    provider_config: dict[str, Any],
+    entry: ProviderEntry,
     settings: Settings,
 ) -> BaseProvider:
-    """Pure factory: dispatch on provider type and return a new instance.
+    """Pure factory: return a new instance. No caching.
 
-    No caching. Raises via create_error on an unknown provider type.
+    The entry's `type` was validated by parse_config, so there is one arm.
     """
-    provider_type = provider_config.get("type")
-    if provider_type == "openai":
-        return OpenAICompatibleProvider(provider_config, settings,
-                                        provider_name=provider_name)
-    raise create_error(
-        ErrorType.PROVIDER_NOT_FOUND, provider_name=provider_type, model_id="unknown"
-    )
+    return OpenAICompatibleProvider(entry, settings, provider_name=provider_name)
 
 
 # INVARIANT: the published cache is the ONLY source of provider instances —
 # a lookup miss is an error, never a lazy build.
-# Why: callers resolve provider_config from the config and then await, so a
+# Why: callers resolve the provider entry from the config and then await, so a
 # reload can publish between the two. A lazy build would take that caller's
-# stale provider_config and insert a provider the operator just deleted into
+# stale entry and insert a provider the operator just deleted into
 # the freshly published cache, where it would serve traffic until the next
 # reload. prepare_provider_cache builds every configured provider up front
 # (startup and every reload), so a miss can only mean "not in the live
@@ -88,7 +82,7 @@ async def _gather_closes(coros) -> None:
 
 def _live_instance_if_unchanged(
     provider_name: str,
-    provider_config: dict[str, Any],
+    entry: ProviderEntry,
     settings: Settings,
 ) -> BaseProvider | None:
     """Return the published instance when it can be carried into the staged
@@ -101,8 +95,8 @@ def _live_instance_if_unchanged(
     # trigger this callback, so a models.yaml edit qualifies) resets the
     # semaphore, letting the old pool's in-flight requests plus the new
     # pool's fresh slots exceed max_concurrent together for the drain window
-    # (up to stream_read_timeout). Sameness is plain dict equality on the
-    # YAML-loaded entry AND the same Settings object (frozen at construction,
+    # (up to stream_read_timeout). Sameness is value equality on the
+    # parsed ProviderEntry AND the same Settings object (frozen at construction,
     # never swapped without a restart — identity is enough). The name is
     # looked up in the NEW config's iteration, so a provider the operator
     # deleted is never carried over.
@@ -110,7 +104,7 @@ def _live_instance_if_unchanged(
     live = _provider_cache.get(provider_name)
     if live is None:
         return None
-    if live.settings is not settings or live.provider_config != provider_config:
+    if live.settings is not settings or live.entry != entry:
         return None
     return live
 
@@ -130,7 +124,7 @@ def _stale_stage_values(superseded: dict[str, BaseProvider]) -> list[BaseProvide
 
 
 def _build_stage(
-    config: dict[str, Any], settings: Settings
+    config: RouterConfig, settings: Settings
 ) -> tuple[dict[str, BaseProvider], list[BaseProvider], list[str]]:
     """Stage one entry per configured provider: the live instance when the
     entry is unchanged (see _live_instance_if_unchanged), a fresh build
@@ -140,13 +134,13 @@ def _build_stage(
     temp: dict[str, BaseProvider] = {}
     fresh: list[BaseProvider] = []
     errors: list[str] = []
-    for provider_name, provider_config in (config.get("providers") or {}).items():
-        reused = _live_instance_if_unchanged(provider_name, provider_config, settings)
+    for provider_name, entry in config.providers.items():
+        reused = _live_instance_if_unchanged(provider_name, entry, settings)
         if reused is not None:
             temp[provider_name] = reused
             continue
         try:
-            built = _build_provider(provider_name, provider_config, settings)
+            built = _build_provider(provider_name, entry, settings)
         except Exception as e:
             errors.append(f"  - {provider_name}: {e}")
             continue
@@ -155,7 +149,7 @@ def _build_stage(
     return temp, fresh, errors
 
 
-async def prepare_provider_cache(config: dict[str, Any], settings: Settings) -> None:
+async def prepare_provider_cache(config: RouterConfig, settings: Settings) -> None:
     """Build and stage the next provider cache (phase 1 of the reload).
 
     Stages a temp dict for every configured provider under _cache_lock:

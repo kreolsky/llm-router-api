@@ -13,16 +13,17 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 
 from src.api.main import custom_http_exception_handler
 from src.core.auth import get_api_key
+from src.core.config_schema import parse_config
 from src.core.context import AuthContext, request_context
 
 
 def _config_manager_with_keys(keys: dict):
     class _CM:
         def get_config(self):
-            return {"user_keys": {
+            return parse_config({"user_keys": {
                 name: ({"api_key": key} if isinstance(key, str) else dict(key))
                 for name, key in keys.items()
-            }}
+            }})
     return _CM()
 
 

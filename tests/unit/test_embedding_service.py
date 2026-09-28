@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
+from src.core.config_schema import parse_config
 from src.core.context import AuthContext, RequestContext
 from src.services.embedding_service import EmbeddingService
 
@@ -18,10 +19,10 @@ def _make_auth_context():
 
 def _make_config_manager(models=None, providers=None):
     cm = MagicMock()
-    cm.get_config.return_value = {
+    cm.get_config.return_value = parse_config({
         "models": models or {},
         "providers": providers or {},
-    }
+    })
     return cm
 
 

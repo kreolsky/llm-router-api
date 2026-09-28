@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
+from src.core.config_schema import ModelEntry, ProviderEntry, parse_config, parse_model, parse_provider
 from src.core.context import AuthContext, RequestContext
 from src.core.usage_db import RequestStats
 from src.services.base import BaseService
@@ -26,7 +27,7 @@ def _make_config_manager(models=None, providers=None):
         "models": models or {},
         "providers": providers or {},
     }
-    cm.get_config.return_value = config
+    cm.get_config.return_value = parse_config(config)
     return cm
 
 
@@ -165,10 +166,10 @@ class TestValidateAndGetConfig:
         model_config, provider_name, provider_model_name, provider_config = \
             svc._validate_and_get_config("my-model", auth_ctx, model_id="my-model")
 
-        assert model_config == models["my-model"]
+        assert model_config == parse_model("my-model", models["my-model"])
         assert provider_name == "openai"
         assert provider_model_name == "gpt-4-turbo"
-        assert provider_config == providers["openai"]
+        assert provider_config == parse_provider(providers["openai"])
 
     def test_happy_path_defaults_provider_model_name(self):
         """When provider_model_name is absent, defaults to the requested model name."""
@@ -200,7 +201,7 @@ class TestValidateAndGetConfig:
         model_config, provider_name, provider_model_name, provider_config = \
             svc._validate_and_get_config("gpt-4", auth_ctx, model_id="gpt-4")
 
-        assert model_config == models["gpt-4"]
+        assert model_config == parse_model("gpt-4", models["gpt-4"])
         assert provider_name == "openai"
         assert provider_model_name == "gpt-4-turbo"
 
@@ -255,12 +256,13 @@ class TestPrepareDispatchProviders:
     @pytest.mark.asyncio
     @patch("src.services.base.get_provider_instance", new_callable=AsyncMock)
     async def test_registry_error_propagates(self, mock_get):
-        """An invalid provider type raises (factory raises HTTPException via create_error)."""
+        """A registry lookup error propagates unchanged (an unknown provider
+        type never gets this far — parse_config refuses it)."""
         mock_get.side_effect = HTTPException(status_code=404, detail="not found")
 
         svc = _build_service(
             models={"gpt-4": {"provider": "bad"}},
-            providers={"bad": {"type": "bad"}}
+            providers={"bad": {"type": "openai"}}
         )
         auth_ctx = _make_auth_context()
         request = _make_request("req-1")
@@ -463,7 +465,7 @@ class TestResolveTarget:
         assert target.provider is mock_get.return_value
         assert target.provider_name == "openai"
         assert target.provider_model_name == "m"
-        assert target.model_config == {"provider": "openai"}
+        assert target.model_config == ModelEntry(provider="openai")
         assert target.identity_headers == {"user-agent": "oc/1.0"}
         assert target.request_id == "req-1"
         assert target.user_id == "proj"
@@ -500,8 +502,8 @@ class TestResolveTarget:
                           new_callable=AsyncMock) as mock_resolve:
             mock_resolve.return_value = SimpleNamespace(
                 request_id="req-1", user_id="unknown", stats=RequestStats(),
-                error_ctx={}, model_config={}, provider_name="openai",
-                provider_model_name="m", provider_config={},
+                error_ctx={}, model_config=ModelEntry(provider="openai"), provider_name="openai",
+                provider_model_name="m", provider_config=ProviderEntry(type="openai"),
                 provider=mock_get.return_value, identity_headers=None,
             )
             prepared = await svc._prepare_dispatch(

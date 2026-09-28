@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
+from src.core.config_schema import parse_config
 from src.core.context import AuthContext, RequestContext
 from src.core.usage_db import RequestStats
 from src.services.transcription_service import TranscriptionService
@@ -19,10 +20,10 @@ def _make_auth_context():
 def _make_config_manager(models=None, providers=None, default_stt_model="stt/dummy"):
     from src.core.config_manager import Settings
     cm = MagicMock()
-    cm.get_config.return_value = {
+    cm.get_config.return_value = parse_config({
         "models": models or {},
         "providers": providers or {},
-    }
+    })
     cm.settings = Settings(default_stt_model=default_stt_model)
     return cm
 

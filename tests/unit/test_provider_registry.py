@@ -6,6 +6,7 @@ import pytest
 
 import src.providers as provider_registry
 from src.core.config_manager import Settings
+from src.core.config_schema import ConfigError, parse_config, parse_provider
 from src.providers import (
     _build_provider,
     clear_provider_cache_async,
@@ -13,6 +14,11 @@ from src.providers import (
     prepare_provider_cache,
     publish_provider_cache,
 )
+
+
+async def _prepare(config: dict, settings: Settings) -> None:
+    """prepare_provider_cache over a YAML-shaped dict, parsed like the loader does."""
+    await prepare_provider_cache(parse_config(config), settings)
 
 
 @pytest.fixture(autouse=True)
@@ -40,7 +46,7 @@ class TestBuildProviderName:
     def test_instance_gets_real_provider_name(self):
         """_build_provider("glm", ...) → provider_name "glm": logs and startup
         errors name the actual backend, not the shared type literal."""
-        instance = _build_provider("glm", _make_config(), Settings())
+        instance = _build_provider("glm", parse_provider(_make_config()), Settings())
         assert instance.provider_name == "glm"
 
     @patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False)
@@ -49,7 +55,7 @@ class TestBuildProviderName:
         literal for every provider of a type, which is why the factory passes
         the config key explicitly."""
         from src.providers.openai import OpenAICompatibleProvider
-        instance = OpenAICompatibleProvider(_make_config(), Settings())
+        instance = OpenAICompatibleProvider(parse_provider(_make_config()), Settings())
         assert instance.provider_name == "openaicompatible"
 
 
@@ -85,11 +91,11 @@ class TestGetProviderInstance:
 
     @patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False)
     @pytest.mark.asyncio
-    async def test_unknown_type_is_refused_at_prepare(self):
-        """An unknown provider type fails the build, so it never reaches the
-        cache — the lookup is not where the type is validated."""
-        with pytest.raises(RuntimeError) as exc_info:
-            await prepare_provider_cache(
+    async def test_unknown_type_is_refused_before_prepare(self):
+        """An unknown provider type is refused by parse_config, so it never
+        reaches the cache — the lookup is not where the type is validated."""
+        with pytest.raises(ConfigError) as exc_info:
+            await _prepare(
                 {"providers": {"alpha": {"type": "unknown", "base_url": "https://x.example.com"}}},
                 Settings(),
             )
@@ -127,7 +133,7 @@ class TestClearProviderCacheAsync:
 
 async def _seed_cache(config, settings):
     """prepare + publish back to back — what startup and a full reload do."""
-    await prepare_provider_cache(config, settings)
+    await _prepare(config, settings)
     await publish_provider_cache()
 
 
@@ -143,7 +149,7 @@ class TestPreparePublishProviderCache:
         await _seed_cache(config, Settings())
         old_instance = provider_registry._provider_cache["ok"]
 
-        await prepare_provider_cache({"providers": {"renamed": _make_config()}}, Settings())
+        await _prepare({"providers": {"renamed": _make_config()}}, Settings())
 
         assert "renamed" in provider_registry._staged_cache
         assert "renamed" not in provider_registry._provider_cache
@@ -159,7 +165,7 @@ class TestPreparePublishProviderCache:
         old_instance = provider_registry._provider_cache["ok"]
         old_instance.aclose = AsyncMock()
 
-        await prepare_provider_cache({"providers": {"ok": _make_config()}}, Settings())
+        await _prepare({"providers": {"ok": _make_config()}}, Settings())
         await publish_provider_cache()
 
         assert provider_registry._provider_cache["ok"] is not old_instance
@@ -181,7 +187,7 @@ class TestPreparePublishProviderCache:
             "broken-b": {"type": "openai", "base_url": "https://b.example.com", "api_key_env": "MISSING_B"},
         }
         with patch.dict("os.environ", {}, clear=True), pytest.raises(RuntimeError) as exc_info:
-            await prepare_provider_cache({"providers": bad}, Settings())
+            await _prepare({"providers": bad}, Settings())
         msg = str(exc_info.value)
         assert "broken-a" in msg
         assert "broken-b" in msg
@@ -209,7 +215,7 @@ class TestPreparePublishProviderCache:
             {"providers": {"kept": _make_config(), "doomed": _make_config()}}, Settings())
 
         # New config drops "doomed"; prepare stages the shrunken cache.
-        await prepare_provider_cache({"providers": {"kept": _make_config()}}, Settings())
+        await _prepare({"providers": {"kept": _make_config()}}, Settings())
 
         # Mid-reload, the stale resolution still finds the live (old) instance.
         assert await get_provider_instance("doomed") is provider_registry._provider_cache["doomed"]
@@ -229,11 +235,11 @@ class TestPreparePublishProviderCache:
         prepare replaces it — one httpx pool per provider would leak otherwise."""
         await _seed_cache({"providers": {"ok": _make_config()}}, Settings())
 
-        await prepare_provider_cache({"providers": {"vetoed": _make_config()}}, Settings())
+        await _prepare({"providers": {"vetoed": _make_config()}}, Settings())
         stranded = provider_registry._staged_cache["vetoed"]
         stranded.aclose = AsyncMock()
 
-        await prepare_provider_cache({"providers": {"next": _make_config()}}, Settings())
+        await _prepare({"providers": {"next": _make_config()}}, Settings())
 
         stranded.aclose.assert_awaited_once()
         assert set(provider_registry._staged_cache) == {"next"}
@@ -259,7 +265,7 @@ class TestPreparePublishProviderCache:
 
         old_instance.aclose = slow_aclose
 
-        await prepare_provider_cache({"providers": {"ok": _make_config()}}, Settings())
+        await _prepare({"providers": {"ok": _make_config()}}, Settings())
         await publish_provider_cache()
         assert provider_registry._drain_tasks, "drain task must be tracked while pools close"
         tracked = next(iter(provider_registry._drain_tasks))
@@ -388,7 +394,7 @@ class TestInstanceReuse:
         broken = {"type": "openai", "base_url": "https://broken.example.com",
                   "api_key_env": "MISSING_KEY"}
         with patch.dict("os.environ", {}, clear=True), pytest.raises(RuntimeError) as exc_info:
-            await prepare_provider_cache(
+            await _prepare(
                 {"providers": {"good": _make_config(), "broken": broken}}, settings)
 
         assert "broken" in str(exc_info.value)
@@ -408,13 +414,13 @@ class TestInstanceReuse:
         live_alpha = provider_registry._provider_cache["alpha"]
 
         # Stage 1 reuses the live alpha; the reload is vetoed before publish.
-        await prepare_provider_cache({"providers": {"alpha": _make_config()}}, settings)
+        await _prepare({"providers": {"alpha": _make_config()}}, settings)
         assert provider_registry._staged_cache["alpha"] is live_alpha
 
         # Stage 2 supersedes stage 1 with a changed entry.
         changed = {"type": "openai", "base_url": "https://changed.example.com",
                    "api_key_env": "TEST_API_KEY"}
-        await prepare_provider_cache({"providers": {"alpha": changed}}, settings)
+        await _prepare({"providers": {"alpha": changed}}, settings)
 
         assert live_alpha.pool._closed is False
         assert provider_registry._staged_cache["alpha"] is not live_alpha

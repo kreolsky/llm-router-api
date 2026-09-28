@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import HTTPException, Request
 
 from ..core.config_manager import ConfigManager
+from ..core.config_schema import ModelEntry, ProviderEntry
 from ..core.context import AuthContext, RequestContext, request_context
 from ..core.error_handling import ErrorType, create_error
 from ..core.header_policy import (
@@ -36,10 +37,10 @@ class ResolvedTarget:
     user_id: str
     stats: RequestStats
     error_ctx: dict[str, Any]
-    model_config: dict[str, Any]
+    model_config: ModelEntry
     provider_name: str
     provider_model_name: str
-    provider_config: dict[str, Any]
+    provider_config: ProviderEntry
     provider: BaseProvider
     identity_headers: dict[str, str] | None
 
@@ -123,7 +124,7 @@ class BaseService:
         requested_model: str,
         auth_context: AuthContext,
         **error_context
-    ) -> tuple[dict[str, Any], str, str, dict[str, Any]]:
+    ) -> tuple[ModelEntry, str, str, ProviderEntry]:
         """Validate model access and return (model_config, provider_name, provider_model_name, provider_config)."""
         allowed_models = auth_context.allowed_models
 
@@ -136,15 +137,14 @@ class BaseService:
             raise create_error(ErrorType.MODEL_NOT_ALLOWED, **error_context)
 
         current_config = self.config_manager.get_config()
-        models = current_config.get("models", {})
-        model_config = models.get(requested_model)
+        model_config = current_config.models.get(requested_model)
 
         if not model_config:
             raise create_error(ErrorType.MODEL_NOT_FOUND, **error_context)
 
-        provider_name = model_config.get("provider")
-        provider_model_name = model_config.get("provider_model_name", requested_model)
-        provider_config = current_config.get("providers", {}).get(provider_name)
+        provider_name = model_config.provider
+        provider_model_name = model_config.provider_model_name or requested_model
+        provider_config = current_config.providers.get(provider_name)
 
         if not provider_config:
             raise create_error(ErrorType.PROVIDER_NOT_FOUND, provider_name=provider_name, **error_context)
@@ -230,12 +230,13 @@ class BaseService:
         target = await self._resolve_target(request, auth_context, requested_model)
 
         # ARCH: the effort policy rides the one dispatch funnel (services/reasoning_effort.py).
-        request_body = apply_reasoning_effort(request_body, target.model_config, **target.error_ctx)
+        request_body = apply_reasoning_effort(request_body, target.model_config.effort_policy,
+                                              **target.error_ctx)
 
         # ARCH: the dialect translation rides the same funnel
         # (services/reasoning_dialect.py), AFTER the policy — the value the
         # gate ruled legal is what gets re-nested for the upstream's dialect.
-        request_body = translate_reasoning_fields(request_body, target.provider_config)
+        request_body = translate_reasoning_fields(request_body, target.provider_config.reasoning_dialect)
 
         # Fields are DERIVED from ResolvedTarget, not re-listed: a field added
         # to the resolver reaches the JSON wrapper without a second edit.

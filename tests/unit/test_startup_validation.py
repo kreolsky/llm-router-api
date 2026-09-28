@@ -6,6 +6,7 @@ import pytest
 
 import src.providers as provider_registry
 from src.api.main import _validate_providers
+from src.core.config_schema import parse_config
 
 
 @pytest.fixture(autouse=True)
@@ -18,7 +19,7 @@ def reset_provider_cache():
 def _cm_with_providers(providers):
     from src.core.config_manager import Settings
     cm = MagicMock()
-    cm.get_config.return_value = {"providers": providers}
+    cm.get_config.return_value = parse_config({"providers": providers})
     # Real Settings so httpx client construction works
     cm.settings = Settings()
     return cm

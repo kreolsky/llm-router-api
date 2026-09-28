@@ -6,9 +6,11 @@ path never touches the network — only this module (and the optional
 normalizers.py; this file only schedules and distributes.
 """
 import asyncio
+from collections.abc import Mapping
 from typing import Any
 
 from ...providers import get_provider_instance
+from ..config_schema import ModelEntry, RouterConfig
 from ..logging import logger
 from .cache import CapabilitiesCache
 from .normalizers import normalize_provider_model
@@ -69,17 +71,17 @@ async def _fetch_upstream_models(provider_name: str) -> dict[str, Any] | None:
 
 
 def _provider_entries(
-    config: dict[str, Any],
+    config: RouterConfig,
     provider_name: str,
-    models_config: dict[str, Any],
+    models_config: Mapping[str, ModelEntry],
 ) -> list[tuple[str, str]]:
     """[(model_id, provider_model_name)] for every model backed by the provider."""
-    if not config.get("providers", {}).get(provider_name):
+    if provider_name not in config.providers:
         return []
     return [
-        (model_id, mcfg["provider_model_name"])
+        (model_id, mcfg.provider_model_name)
         for model_id, mcfg in models_config.items()
-        if mcfg.get("provider") == provider_name and mcfg.get("provider_model_name")
+        if mcfg.provider == provider_name and mcfg.provider_model_name
     ]
 
 
@@ -95,7 +97,7 @@ async def refresh_provider_capabilities(
     config_manager,
     cache: CapabilitiesCache,
     provider_name: str,
-    models_config: dict[str, Any] | None = None,
+    models_config: Mapping[str, ModelEntry] | None = None,
     persist: bool = True,
 ) -> None:
     """Refresh capabilities for every model_id backed by ``provider_name``.
@@ -111,7 +113,7 @@ async def refresh_provider_capabilities(
     """
     config = config_manager.get_config()
     if models_config is None:
-        models_config = config.get("models", {})
+        models_config = config.models
     entries = _provider_entries(config, provider_name, models_config)
     if not entries:
         return
@@ -143,11 +145,10 @@ async def refresh_provider_capabilities(
 
 async def refresh_all_capabilities(config_manager, cache: CapabilitiesCache) -> None:
     """Refresh capabilities for every provider referenced by models.yaml."""
-    config = config_manager.get_config()
-    models_config = config.get("models", {})
+    models_config = config_manager.get_config().models
     seen: set = set()
     for mcfg in models_config.values():
-        provider_name = mcfg.get("provider")
+        provider_name = mcfg.provider
         if provider_name and provider_name not in seen:
             seen.add(provider_name)
             await refresh_provider_capabilities(

@@ -10,9 +10,14 @@ import pytest
 from fastapi import HTTPException
 
 from src.core.config_manager import Settings
+from src.core.config_schema import (
+    DEFAULT_REASONING_DIALECT,
+    ConfigError,
+    ModelEntry,
+    parse_provider,
+)
 from src.providers.base import BaseProvider
 from src.providers.openai import OpenAICompatibleProvider
-from src.services.reasoning_dialect import DEFAULT_REASONING_DIALECT, resolve_dialect
 
 # ---------------------------------------------------------------------------
 # Concrete subclass so we can instantiate the (otherwise abstract-ish) base
@@ -34,6 +39,14 @@ class ProviderStub(BaseProvider):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+NO_OPTIONS = ModelEntry(provider=None)
+
+
+def _entry(config):
+    """Parse a providers.yaml-shaped dict (type defaulted) into a ProviderEntry."""
+    return parse_provider({"type": "openai", **config})
+
 
 def _make_config(base_url="https://api.example.com", api_key_env="TEST_API_KEY", **extra):
     cfg = {"base_url": base_url, "api_key_env": api_key_env, **extra}
@@ -60,7 +73,7 @@ def _build_provider(base_url="https://api.example.com", api_key_env="TEST_API_KE
         env.update(env_vars)
 
     with patch.dict("os.environ", env, clear=False):
-        provider = ProviderStub(config, settings=settings or Settings())
+        provider = ProviderStub(_entry(config), settings=settings or Settings())
     return provider
 
 
@@ -74,7 +87,7 @@ def _build_limited_provider(max_concurrent, settings=None):
     config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
               "max_concurrent": max_concurrent}
     with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-        return ProviderStub(config, settings=settings or Settings())
+        return ProviderStub(_entry(config), settings=settings or Settings())
 
 
 def _mock_response(json_body=None):
@@ -223,20 +236,20 @@ class TestBaseProviderInit:
         config = {"api_key_env": "TEST_API_KEY"}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False):
             with pytest.raises(HTTPException) as exc_info:
-                ProviderStub(config, Settings())
+                ProviderStub(_entry(config), Settings())
         assert exc_info.value.status_code == 500
 
     def test_missing_api_key_env_var_raises(self):
         """Missing API key env var raises HTTPException."""
         config = {"base_url": "https://api.example.com", "api_key_env": "MISSING_KEY"}
         with patch.dict("os.environ", {}, clear=True), pytest.raises(HTTPException) as exc_info:
-            ProviderStub(config, Settings())
+            ProviderStub(_entry(config), Settings())
         assert exc_info.value.status_code == 500
 
     def test_no_api_key_env_no_error(self):
         """No api_key_env in config means no Authorization header, no error."""
         config = {"base_url": "https://api.example.com"}
-        provider = ProviderStub(config, Settings())
+        provider = ProviderStub(_entry(config), Settings())
         assert "Authorization" not in provider.headers
         assert provider.api_key is None
 
@@ -296,7 +309,7 @@ class TestApplyModelConfig:
         """Sets model name in request body."""
         provider = _build_provider()
         body = {"messages": []}
-        model_config = {}
+        model_config = NO_OPTIONS
         result = provider._apply_model_config(body, "gpt-4", model_config)
         assert result["model"] == "gpt-4"
 
@@ -304,7 +317,7 @@ class TestApplyModelConfig:
         """Merges options via deep_merge when present."""
         provider = _build_provider()
         body = {"messages": [], "temperature": 0.5}
-        model_config = {"options": {"temperature": 0.9, "top_p": 0.8}}
+        model_config = ModelEntry(provider=None, options={"temperature": 0.9, "top_p": 0.8})
         result = provider._apply_model_config(body, "gpt-4", model_config)
         assert result["model"] == "gpt-4"
         # deep_merge: options override existing keys
@@ -315,7 +328,7 @@ class TestApplyModelConfig:
         """`stream` in options is dropped: the service already branched on the client's value."""
         provider = _build_provider()
         body = {"messages": [], "stream": False}
-        model_config = {"options": {"stream": True, "temperature": 0.9}}
+        model_config = ModelEntry(provider=None, options={"stream": True, "temperature": 0.9})
         result = provider._apply_model_config(body, "gpt-4", model_config)
         assert result["stream"] is False
         assert result["temperature"] == 0.9
@@ -324,7 +337,7 @@ class TestApplyModelConfig:
         """Options may not INTRODUCE stream either — an absent key means non-stream."""
         provider = _build_provider()
         body = {"messages": []}
-        model_config = {"options": {"stream": True}}
+        model_config = ModelEntry(provider=None, options={"stream": True})
         result = provider._apply_model_config(body, "gpt-4", model_config)
         assert "stream" not in result
 
@@ -332,7 +345,7 @@ class TestApplyModelConfig:
         """The guard copies: dropping stream must not edit the live config dict."""
         provider = _build_provider()
         options = {"stream": True, "top_p": 0.8}
-        model_config = {"options": options}
+        model_config = ModelEntry(provider=None, options=options)
         provider._apply_model_config({"messages": []}, "gpt-4", model_config)
         assert options == {"stream": True, "top_p": 0.8}
 
@@ -340,7 +353,7 @@ class TestApplyModelConfig:
         """No options in model_config means no merge, body unchanged except model."""
         provider = _build_provider()
         body = {"messages": [], "temperature": 0.5}
-        model_config = {}
+        model_config = NO_OPTIONS
         result = provider._apply_model_config(body, "gpt-4", model_config)
         assert result == {"messages": [], "temperature": 0.5, "model": "gpt-4"}
 
@@ -488,7 +501,7 @@ class TestProxySupport:
 def _build_openai_provider(settings=None):
     config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY"}
     with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-        return OpenAICompatibleProvider(config, settings=settings or Settings())
+        return OpenAICompatibleProvider(_entry(config), settings=settings or Settings())
 
 
 class TestListModels:
@@ -828,13 +841,13 @@ class TestHeaderMergeParity:
 
 
 class TestIdentityProfileInit:
-    """identity config key in BaseProvider.__init__."""
+    """identity config key — validated by parse_provider before construction."""
 
     def test_identity_passthrough_sets_no_user_agent(self):
         config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
                   "identity": "passthrough"}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            provider = ProviderStub(config, Settings())
+            provider = ProviderStub(_entry(config), Settings())
         assert provider.identity == "passthrough"
         assert "User-Agent" not in provider.headers
 
@@ -842,10 +855,9 @@ class TestIdentityProfileInit:
         config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
                   "identity": "opencode"}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            with pytest.raises(HTTPException) as exc_info:
-                ProviderStub(config, Settings())
-        assert exc_info.value.status_code == 500
-        assert "expected 'passthrough'" in str(exc_info.value.detail)
+            with pytest.raises(ConfigError) as exc_info:
+                ProviderStub(_entry(config), Settings())
+        assert "expected 'passthrough'" in str(exc_info.value)
 
     def test_no_identity_keeps_current_behavior(self):
         provider = _build_provider()
@@ -854,63 +866,61 @@ class TestIdentityProfileInit:
 
 
 class TestReasoningDialectInit:
-    """reasoning_dialect config key in BaseProvider.__init__ — fail at
-    construction so a typo never reaches the funnel as a silent `openai`."""
+    """reasoning_dialect config key — parse_provider fails before construction
+    so a typo never reaches the funnel as a silent `openai`."""
 
     @pytest.mark.parametrize("dialect", ["openai", "deepseek", "openrouter"])
     def test_known_dialects_construct(self, dialect):
         config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
                   "reasoning_dialect": dialect}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            provider = ProviderStub(config, Settings())
+            provider = ProviderStub(_entry(config), Settings())
         assert provider.base_url == config["base_url"]
 
     def test_unknown_dialect_fails_fast(self):
         config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
                   "reasoning_dialect": "openrouter-compatible"}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            with pytest.raises(HTTPException) as exc_info:
-                ProviderStub(config, Settings())
-        assert exc_info.value.status_code == 500
-        assert "reasoning_dialect" in str(exc_info.value.detail)
+            with pytest.raises(ConfigError) as exc_info:
+                ProviderStub(_entry(config), Settings())
+        assert "reasoning_dialect" in str(exc_info.value)
 
     def test_absent_key_keeps_current_behavior(self):
-        """No key: no validation fires, and the funnel's defensive read
-        resolves the same config to the default dialect."""
+        """No key: no validation fires, and the entry carries the default dialect."""
         config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY"}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            provider = ProviderStub(config, Settings())
+            provider = ProviderStub(_entry(config), Settings())
         assert provider.base_url == config["base_url"]
-        assert resolve_dialect(config) == DEFAULT_REASONING_DIALECT
+        assert provider.entry.reasoning_dialect == DEFAULT_REASONING_DIALECT
 
 
 class TestStaticHeadersValidation:
-    """Static `headers:` from providers.yaml fails fast at construction."""
+    """Static `headers:` from providers.yaml fails fast in parse_provider."""
 
     def test_non_string_value_fails_fast(self):
         """X-Title: 12345 (YAML int) is rejected at startup, not on first request."""
         config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
                   "headers": {"X-Title": 12345}}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            with pytest.raises(HTTPException) as exc_info:
-                ProviderStub(config, Settings())
-        assert exc_info.value.status_code == 500
+            with pytest.raises(ConfigError) as exc_info:
+                ProviderStub(_entry(config), Settings())
+        assert "headers" in str(exc_info.value)
 
     def test_non_string_key_fails_fast(self):
         config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
                   "headers": {123: "value"}}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            with pytest.raises(HTTPException) as exc_info:
-                ProviderStub(config, Settings())
-        assert exc_info.value.status_code == 500
+            with pytest.raises(ConfigError) as exc_info:
+                ProviderStub(_entry(config), Settings())
+        assert "headers" in str(exc_info.value)
 
     def test_authorization_in_headers_fails_fast(self):
         config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
                   "headers": {"Authorization": "Bearer literal-key"}}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            with pytest.raises(HTTPException) as exc_info:
-                ProviderStub(config, Settings())
-        assert exc_info.value.status_code == 500
+            with pytest.raises(ConfigError) as exc_info:
+                ProviderStub(_entry(config), Settings())
+        assert "headers" in str(exc_info.value)
 
     @pytest.mark.parametrize("name", ["Content-Length", "host", "Transfer-Encoding",
                                       "Connection", "Accept-Encoding"])
@@ -918,9 +928,9 @@ class TestStaticHeadersValidation:
         config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY",
                   "headers": {name: "x"}}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            with pytest.raises(HTTPException) as exc_info:
-                ProviderStub(config, Settings())
-        assert exc_info.value.status_code == 500
+            with pytest.raises(ConfigError) as exc_info:
+                ProviderStub(_entry(config), Settings())
+        assert "headers" in str(exc_info.value)
 
     def test_valid_static_headers_accepted(self):
         """Attribution headers pass validation; Content-Type default still applied."""
@@ -938,7 +948,7 @@ class TestChatExtraHeadersForwarding:
         provider = _build_openai_provider()
         provider._make_request = AsyncMock(return_value={"ok": True})
         extra = {"X-Session-Id": "ses_x", "x-session-affinity": "ses_x"}
-        await provider.chat_completions({"messages": []}, "gpt-4", {}, request_id="r1",
+        await provider.chat_completions({"messages": []}, "gpt-4", NO_OPTIONS, request_id="r1",
                                         extra_headers=extra)
         assert provider._make_request.call_args.kwargs["extra_headers"] == extra
 
@@ -951,7 +961,7 @@ class TestChatExtraHeadersForwarding:
             yield b""
 
         provider._stream_request = fake_stream
-        gen = provider.chat_completions_stream({"messages": []}, "gpt-4", {}, request_id="r1",
+        gen = provider.chat_completions_stream({"messages": []}, "gpt-4", NO_OPTIONS, request_id="r1",
                                                extra_headers={"X-Session-Id": "ses_x"})
         async for _ in gen:
             pass
@@ -961,7 +971,7 @@ class TestChatExtraHeadersForwarding:
         provider = _build_openai_provider()
         provider._make_request = AsyncMock(return_value={"data": []})
         extra = {"user-agent": "Kilo-Code/7.5.5"}
-        await provider.embeddings({"input": "hi"}, "emb", {}, request_id="r1",
+        await provider.embeddings({"input": "hi"}, "emb", NO_OPTIONS, request_id="r1",
                                   extra_headers=extra)
         assert provider._make_request.call_args.kwargs["extra_headers"] == extra
 
@@ -972,7 +982,7 @@ class TestChatExtraHeadersForwarding:
         extra = {"user-agent": "Kilo-Code/7.5.5"}
         body = {"audio": {"filename": "a.wav", "content_type": "audio/wav", "data": b"x"},
                 "params": {}}
-        await provider.transcriptions(body, "stt", {}, request_id="r1", extra_headers=extra)
+        await provider.transcriptions(body, "stt", NO_OPTIONS, request_id="r1", extra_headers=extra)
         assert provider._make_request.call_args.kwargs["extra_headers"] == extra
 
 
@@ -1008,7 +1018,7 @@ class TestCallSiteTimeouts:
     def _openai_provider(self, settings):
         config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY"}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            provider = OpenAICompatibleProvider(config, settings=settings)
+            provider = OpenAICompatibleProvider(_entry(config), settings=settings)
         captured = {}
 
         async def fake_make_request(**kwargs):
@@ -1026,7 +1036,7 @@ class TestCallSiteTimeouts:
                       httpx_pool_timeout=5.0, stream_read_timeout=300.0)
         provider, captured = self._openai_provider(settings)
 
-        await provider.chat_completions({"messages": []}, "m", {})
+        await provider.chat_completions({"messages": []}, "m", NO_OPTIONS)
 
         t = captured["timeout"]
         assert t.read == 300.0
@@ -1043,7 +1053,7 @@ class TestCallSiteTimeouts:
         await provider.transcriptions(
             {"audio": {"filename": "a.ogg", "content_type": "audio/ogg", "data": b"x"},
              "params": {}},
-            "m", {})
+            "m", NO_OPTIONS)
 
         t = captured["timeout"]
         assert t.read == 3600.0
@@ -1057,7 +1067,7 @@ class TestCallSiteTimeouts:
                       httpx_pool_timeout=5.0, openai_embeddings_read_timeout=30.0)
         provider, captured = self._openai_provider(settings)
 
-        await provider.embeddings({"input": "hi"}, "m", {})
+        await provider.embeddings({"input": "hi"}, "m", NO_OPTIONS)
 
         t = captured["timeout"]
         assert t.read == 30.0
@@ -1126,7 +1136,7 @@ class TestRetryUploadSafety:
     def _provider_with_mock_transport(self, handler, cm=None):
         config = {"base_url": "https://api.example.com", "api_key_env": "TEST_API_KEY"}
         with patch.dict("os.environ", {"TEST_API_KEY": "sk-test-123"}, clear=False):
-            provider = OpenAICompatibleProvider(config, settings=cm or _make_settings(
+            provider = OpenAICompatibleProvider(_entry(config), settings=cm or _make_settings(
                 provider_retry_base_delay=0.001, provider_retry_max_delay=0.01))
         provider.pool.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         return provider
@@ -1146,7 +1156,7 @@ class TestRetryUploadSafety:
         provider = self._provider_with_mock_transport(handler)
         body = {"audio": {"filename": "a.ogg", "content_type": "audio/ogg", "data": audio},
                 "params": {}}
-        result = await provider.transcriptions(body, "stt/dummy", {}, request_id="r1")
+        result = await provider.transcriptions(body, "stt/dummy", NO_OPTIONS, request_id="r1")
 
         assert result == {"text": "transcribed"}
         assert len(seen_bodies) == 2, "the 429 must have been retried exactly once"
@@ -1163,7 +1173,7 @@ class TestRetryUploadSafety:
         body = {"audio": {"filename": "a.ogg", "content_type": "audio/ogg", "data": b"x"},
                 "params": {}}
         with pytest.raises(HTTPException) as exc_info:
-            await provider.transcriptions(body, "stt/dummy", {}, request_id="r1")
+            await provider.transcriptions(body, "stt/dummy", NO_OPTIONS, request_id="r1")
         assert exc_info.value.status_code == 429
 
 

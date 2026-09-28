@@ -21,6 +21,7 @@ from pytest_asyncio import fixture as asyncio_fixture
 
 from src.api.stat_routes import verify_stat_key
 from src.core import usage_db
+from src.core.config_schema import parse_config
 from src.core.usage_db import RequestStats, writer
 
 
@@ -990,9 +991,9 @@ class TestAuthKeyHashEnrichment:
 
         app = FastAPI()
         app.state.config_manager = MagicMock()
-        app.state.config_manager.get_config.return_value = {
+        app.state.config_manager.get_config.return_value = parse_config({
             "user_keys": {"proj": {"api_key": "nnp-v1-real"}}
-        }
+        })
         scope = {"type": "http", "method": "GET", "path": "/",
                  "headers": [], "app": app, "state": {}}
         request = StarletteRequest(scope)

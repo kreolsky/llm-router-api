@@ -48,19 +48,9 @@ async def get_api_key(
         })
         raise create_error(ErrorType.MISSING_API_KEY)
 
-    if config is None or "user_keys" not in config:
-        logger.error("Server configuration error: user keys not loaded", extra={
-            "auth": {
-                "error_type": "config_error",
-                "config_loaded": config is not None,
-                "has_user_keys": config is not None and "user_keys" in config
-            }
-        })
-        raise create_error(ErrorType.INTERNAL_SERVER_ERROR, error_details="Server configuration error: user keys not loaded")
-
     found_project = None
-    for project_name, project_data in config["user_keys"].items():
-        stored_key = project_data.get("api_key", "")
+    for project_name, key_entry in config.user_keys.items():
+        stored_key = key_entry.api_key
         # INVARIANT: constant-time comparison prevents timing attacks
         # WHY: compared as UTF-8 bytes — hmac.compare_digest rejects non-ASCII
         # str, so a non-ASCII bearer (raw bytes on the wire, latin-1-decoded by
@@ -82,8 +72,8 @@ async def get_api_key(
         })
         raise create_error(ErrorType.INVALID_API_KEY)
     
-    allowed_models = config["user_keys"][found_project].get("allowed_models") or []
-    allowed_endpoints = config["user_keys"][found_project].get("allowed_endpoints") or []
+    allowed_models = list(config.user_keys[found_project].allowed_models)
+    allowed_endpoints = list(config.user_keys[found_project].allowed_endpoints)
     
     # SIDE EFFECT: attach project_name to the typed RequestContext read by
     # downstream handlers — the single owner of the resolved project name.

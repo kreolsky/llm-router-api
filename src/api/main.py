@@ -12,6 +12,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ..core.auth import check_endpoint_access
 from ..core.config_manager import ConfigManager
+from ..core.config_schema import RouterConfig
 from ..core.context import AuthContext, request_context
 from ..core.error_handling import enrich_stats_from_envelope
 from ..core.logging import logger
@@ -70,11 +71,11 @@ async def lifespan(app: FastAPI):
     # self.config is already the new one, so a provider removed by the reload
     # cannot be re-populated from the stale config (see the INVARIANT on
     # publish_provider_cache).
-    async def _prepare_on_reload(new_config: dict) -> None:
+    async def _prepare_on_reload(new_config: RouterConfig) -> None:
         """Pre-swap callback: stage the provider cache for the freshly loaded config."""
         await prepare_provider_cache(new_config, config_manager.settings)
 
-    async def _publish_on_reload(new_config: dict) -> None:
+    async def _publish_on_reload(new_config: RouterConfig) -> None:
         """Post-swap callback: publish the staged cache, drain superseded pools."""
         await publish_provider_cache()
 

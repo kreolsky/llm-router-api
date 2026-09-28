@@ -22,7 +22,6 @@ from ..core.model_capabilities import (
     render_capabilities,
 )
 from .base import BaseService
-from .reasoning_effort import parse_effort_policy
 
 
 class ModelService(BaseService):
@@ -76,17 +75,17 @@ class ModelService(BaseService):
         if self.capabilities_cache is not None:
             cache_data = self.capabilities_cache.get(model_id) or {}
         config = self.config_manager.get_config()
-        model_info = config.get("model_info", {}).get(model_id) or {}
+        model_info = config.model_info.get(model_id) or {}
         derived: dict[str, Any] = {}
-        model_cfg = config.get("models", {}).get(model_id) or {}
-        policy, _ = parse_effort_policy(model_cfg)
+        model_entry = config.models.get(model_id)
+        policy = model_entry.effort_policy if model_entry is not None else None
         if policy is not None:
             reasoning: dict[str, Any] = {
                 "supported": True,
-                "effort_levels": policy["allowed"],
+                "effort_levels": list(policy.allowed),
             }
-            if policy["default"] is not None:
-                reasoning["default_effort"] = policy["default"]
+            if policy.default is not None:
+                reasoning["default_effort"] = policy.default
             derived = {"reasoning": reasoning}
         return merge_capabilities(merge_capabilities(cache_data, derived), model_info)
 
@@ -122,9 +121,9 @@ class ModelService(BaseService):
         (empty/None = unrestricted) — the two listings cannot drift because
         neither carries its own copy of the rule.
         """
-        models_config = self.config_manager.get_config().get("models", {})
+        models_config = self.config_manager.get_config().models
         for model_id, model_data in models_config.items():
-            if model_data.get("is_hidden", False):
+            if model_data.is_hidden:
                 continue
             if allowed_models and model_id not in allowed_models:
                 continue
@@ -180,16 +179,15 @@ class ModelService(BaseService):
             raise create_error(ErrorType.MODEL_NOT_ALLOWED, model_id=model_id)
 
         current_config = self.config_manager.get_config()
-        models_config = current_config.get("models", {})
 
-        model_data = models_config.get(model_id)
+        model_data = current_config.models.get(model_id)
         if not model_data:
             raise create_error(ErrorType.MODEL_NOT_FOUND, model_id=model_id)
 
-        provider_name = model_data.get("provider")
-        provider_model_name = model_data.get("provider_model_name")
+        provider_name = model_data.provider
+        provider_model_name = model_data.provider_model_name
 
-        provider_config = current_config.get("providers", {}).get(provider_name)
+        provider_config = current_config.providers.get(provider_name)
         if not provider_config:
             raise create_error(ErrorType.PROVIDER_NOT_FOUND, model_id=model_id, provider_name=provider_name)
 
@@ -216,8 +214,8 @@ class ModelService(BaseService):
             model_id,
             provider=provider_name,
             provider_model_name=provider_model_name,
-            params=model_data.get("params"),
-            options=model_data.get("options"),
+            params=model_data.params,
+            options=model_data.options,
             **rendered,
             **meta,
         )

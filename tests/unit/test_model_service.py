@@ -6,6 +6,7 @@ import pytest
 import yaml
 from fastapi import HTTPException
 
+from src.core.config_schema import parse_config
 from src.core.context import AuthContext
 from src.core.model_capabilities import CapabilitiesCache, normalize_provider_model
 from src.services.model_service import ModelService
@@ -20,14 +21,14 @@ def _make_auth_context(allowed_models=None, allowed_endpoints=None):
 
 
 def _make_config(models=None, providers=None, model_info=None):
-    """Return a config dict suitable for ConfigManager.get_config()."""
+    """Return a RouterConfig suitable for ConfigManager.get_config()."""
     result = {
         "models": models or {},
         "providers": providers or {},
     }
     if model_info:
         result["model_info"] = model_info
-    return result
+    return parse_config(result)
 
 
 def _build_service(models=None, providers=None, model_info=None, cache=None):

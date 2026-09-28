@@ -10,10 +10,9 @@ from typing import Any
 import httpx
 
 from ..core.config_manager import Settings
+from ..core.config_schema import ModelEntry, ProviderEntry
 from ..core.error_handling import ErrorType, create_error, create_provider_http_error
-from ..core.header_policy import FORBIDDEN_STATIC_HEADERS
 from ..core.logging import logger
-from ..services.reasoning_dialect import validate_reasoning_dialect
 from ..utils.deep_merge import deep_merge
 from ..utils.mask import mask_headers
 from .pool import ProviderPool
@@ -38,15 +37,18 @@ def _is_rate_limit_error(e: BaseException) -> bool:
 # os.environ[api_key_env]. It is never replaced per-request. Client API keys
 # stay in auth.py and are not propagated to providers.
 class BaseProvider:
-    def __init__(self, config: dict[str, Any], settings: Settings, provider_name: str | None = None):
-        """Initialize provider from config dict.
+    def __init__(self, entry: ProviderEntry, settings: Settings, provider_name: str | None = None):
+        """Initialize provider from its parsed providers.yaml entry.
 
-        Reads API key from the env var named by config['api_key_env'].
+        Static checks (type, identity, reasoning_dialect, headers) already ran
+        in core/config_schema.py parse_provider; only the env-dependent ones
+        (base_url, the api_key_env variable) run here.
+        Reads API key from the env var named by entry.api_key_env.
         Composes a ProviderPool: its own httpx.AsyncClient (per-provider
         connection pool), concurrency gate and drain accounting. Limits
         come from settings (global env applied per pool).
-        Reads an optional `proxy` URL (e.g. socks5://host:port) from config;
-        when set, all of the provider's traffic is routed through that proxy.
+        An optional `proxy` URL (e.g. socks5://host:port) routes all of the
+        provider's traffic through that proxy.
         provider_name is the providers.yaml dict key (used in logs and
         startup-validation errors); without it the name is derived from the
         class name as a fallback (all type-"openai" providers would log as
@@ -56,55 +58,20 @@ class BaseProvider:
         Raises:
             HTTPException: If base_url is missing or the env var for the API key is unset.
         """
-        self.base_url = config.get("base_url")
-        self.api_key_env = config.get("api_key_env")
-        self.headers = dict(config.get("headers") or {})
+        self.base_url = entry.base_url
+        self.api_key_env = entry.api_key_env
+        self.headers = dict(entry.headers or {})
         self.api_key = os.environ.get(self.api_key_env) if self.api_key_env else None
         self.settings = settings
-        self.proxy = config.get("proxy")
+        self.proxy = entry.proxy
         self.provider_name = provider_name or self.__class__.__name__.replace("Provider", "").lower()
-        # WHY: the providers.yaml entry this instance was built from (shallow
-        # copy — the loader's dict is dropped after the reload). The registry's
-        # reuse check compares it by plain dict equality with the freshly
-        # loaded entry; providers entries are never mutated between load and
-        # compare (_validate_models touches models only), so equality means
-        # "the operator did not touch this backend".
-        self.provider_config = dict(config)
+        # WHY: the providers.yaml entry this instance was built from. The
+        # registry's reuse check compares it by value with the freshly parsed
+        # entry, so equality means "the operator did not touch this backend".
+        self.entry = entry
+        # See the identity ARCH on ProviderEntry (core/config_schema.py).
+        self.identity = entry.identity
 
-        # ARCH: identity is opt-in. `passthrough`: every client header goes
-        # upstream verbatim minus the denylist (core/header_policy.py),
-        # assembled per request by the service layer via extra_headers.
-        # Unset: no forwarding — plain gateway headers only.
-        self.identity = config.get("identity")
-        if self.identity not in (None, "passthrough"):
-            raise create_error(ErrorType.PROVIDER_CONFIG_ERROR,
-                             error_details=f"Unknown identity profile: {self.identity!r} (expected 'passthrough').",
-                             provider_name=self.provider_name)
-
-        # Static `reasoning_dialect:` validation — fail at construction
-        # (startup validation / reload veto), not on the first request.
-        # WHY the funnel re-reads the config dict instead of this attribute:
-        # the translation is keyed on the provider entry, and the funnel's
-        # defensive resolve (services/reasoning_dialect.py) must tolerate the
-        # mocked configs tests build; this check is what guarantees the real
-        # path never sees a typo as a silent `openai`.
-        dialect = config.get("reasoning_dialect")
-        if dialect is not None:
-            validate_reasoning_dialect(dialect, provider_name=self.provider_name)
-
-        # Static `headers:` validation — fail at construction (startup
-        # validation), not on the first request. Runs BEFORE the code-owned
-        # Content-Type default below, so only operator-authored entries are
-        # checked.
-        for name, value in self.headers.items():
-            if not isinstance(name, str) or not name.strip() or not isinstance(value, str):
-                raise create_error(ErrorType.PROVIDER_CONFIG_ERROR,
-                                 error_details=f"headers entries must be 'name: value' strings, got {name!r}: {value!r}.",
-                                 provider_name=self.provider_name)
-            if name.lower() in FORBIDDEN_STATIC_HEADERS:
-                raise create_error(ErrorType.PROVIDER_CONFIG_ERROR,
-                                 error_details=f"headers may not set {name!r} (Authorization comes from api_key_env; transport/hop-by-hop headers are owned by the router).",
-                                 provider_name=self.provider_name)
         self.headers.setdefault("Content-Type", "application/json")
 
         if not self.base_url:
@@ -124,7 +91,7 @@ class BaseProvider:
         # base-class role — client construction, the concurrency gate and the
         # graceful-drain invariants live there, directly testable.
         self.pool = ProviderPool(settings=settings, provider_name=self.provider_name,
-                                 proxy=self.proxy, max_concurrent=config.get("max_concurrent"))
+                                 proxy=self.proxy, max_concurrent=entry.max_concurrent)
 
     async def aclose(self, drain_timeout: float | None = None) -> None:
         """Close the owned pool once in-flight requests have drained.
@@ -166,7 +133,7 @@ class BaseProvider:
         )
 
     def _apply_model_config(self, request_body: dict[str, Any], provider_model_name: str,
-                            model_config: dict[str, Any]) -> dict[str, Any]:
+                            model_config: ModelEntry) -> dict[str, Any]:
         """
         Set provider model name and merge model-level options into request body.
 
@@ -174,7 +141,7 @@ class BaseProvider:
         INVARIANT below.
         """
         request_body["model"] = provider_model_name
-        if options := model_config.get("options"):
+        if options := model_config.options:
             # INVARIANT: models.yaml `options:` may not set `stream`.
             # Why: the service picks the streaming or the JSON branch from the
             # CLIENT's stream value and only then reaches this merge, so an
@@ -505,19 +472,19 @@ class BaseProvider:
             raise
 
     async def chat_completions(self, request_body: dict[str, Any], provider_model_name: str,
-                               model_config: dict[str, Any], request_id: str = "unknown",
+                               model_config: ModelEntry, request_id: str = "unknown",
                                extra_headers: dict[str, str] = None) -> dict[str, Any]:
         """Non-streaming chat completion. Returns the parsed provider JSON response."""
         raise NotImplementedError
 
     def chat_completions_stream(self, request_body: dict[str, Any], provider_model_name: str,
-                                model_config: dict[str, Any], request_id: str = "unknown",
+                                model_config: ModelEntry, request_id: str = "unknown",
                                 extra_headers: dict[str, str] = None) -> AsyncGenerator[bytes, None]:
         """Streaming chat completion. Yields raw SSE bytes from the provider."""
         raise NotImplementedError
 
     async def embeddings(self, request_body: dict[str, Any], provider_model_name: str,
-                         model_config: dict[str, Any], request_id: str = "unknown",
+                         model_config: ModelEntry, request_id: str = "unknown",
                          extra_headers: dict[str, str] = None) -> Any:
         raise NotImplementedError
 
@@ -526,7 +493,7 @@ class BaseProvider:
         raise NotImplementedError
 
     async def transcriptions(self, request_body: dict[str, Any], provider_model_name: str,
-                             model_config: dict[str, Any], request_id: str = "unknown",
+                             model_config: ModelEntry, request_id: str = "unknown",
                              extra_headers: dict[str, str] = None) -> Any:
         """Transcribe audio. request_body shape:
 
