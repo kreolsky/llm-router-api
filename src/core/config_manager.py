@@ -235,58 +235,12 @@ class ConfigManager:
         })
         raw = self._load_config(fail_on_error=False)
         if not self._missing_sections(raw):
-            try:
-                new_config = parse_config(raw)
-            except ConfigError as e:
-                # Same veto as a refusing pre-swap callback: the previous
-                # config keeps serving and the next poll retries.
-                logger.error(
-                    f"Config reload rejected, keeping previous config: {e}",
-                    extra={"config": {"operation": "reload_rejected"}},
-                )
+            new_config = self._parse_for_reload(raw)
+            if new_config is None or not await self._run_pre_swap_callbacks(new_config):
                 return False
-            for name, cb in self._on_reload_callbacks:
-                try:
-                    await cb(new_config)
-                except Exception:
-                    logger.error(
-                        f"Config reload callback failed: {name or '(unnamed)'}",
-                        extra={"config": {"operation": "reload_callback_error", "callback_name": name}},
-                        exc_info=True,
-                    )
-                    return False
             self.config = new_config
-            post_swap_failed = False
-            for name, cb in self._post_swap_callbacks:
-                try:
-                    await cb(new_config)
-                except Exception:
-                    logger.error(
-                        f"Post-swap config reload callback failed: {name or '(unnamed)'}",
-                        extra={"config": {"operation": "reload_post_swap_error", "callback_name": name}},
-                        exc_info=True,
-                    )
-                    post_swap_failed = True
-            # INVARIANT: a reload whose post-swap callback failed never logs
-            # the plain success line.
-            # Why: the swap IS published but a derived cache (the provider
-            # registry) is not, and the retry below reprints this line every
-            # poll interval — an INFO "Configuration reloaded" repeating
-            # forever is what an operator reads as "all good" while the
-            # router serves a half-applied state.
-            log = logger.warning if post_swap_failed else logger.info
-            log(
-                "Configuration reloaded, but a post-swap callback failed - retrying"
-                if post_swap_failed else "Configuration reloaded",
-                extra={
-                    "config": {
-                        "operation": "reload_complete",
-                        "post_swap_failed": post_swap_failed,
-                        "providers_count": len(self.config.providers),
-                        "models_count": len(self.config.models),
-                        "user_keys_count": len(self.config.user_keys)
-                    }
-                })
+            post_swap_failed = not await self._run_post_swap_callbacks(new_config)
+            self._log_reload_complete(post_swap_failed)
             # WHY: True here would let _poll_once commit last_mtimes, and a
             # half-applied reload (the config swapped, a derived cache like
             # the provider registry not) would never be retried until the
@@ -301,6 +255,71 @@ class ConfigManager:
 
         logger.warning("Partial config reload rejected, keeping previous config")
         return False
+
+    def _parse_for_reload(self, raw: dict) -> RouterConfig | None:
+        """Parse the reloaded files; None (logged) when a ConfigError rejects them."""
+        try:
+            return parse_config(raw)
+        except ConfigError as e:
+            # Same veto as a refusing pre-swap callback: the previous
+            # config keeps serving and the next poll retries.
+            logger.error(
+                f"Config reload rejected, keeping previous config: {e}",
+                extra={"config": {"operation": "reload_rejected"}},
+            )
+            return None
+
+    def _log_reload_complete(self, post_swap_failed: bool) -> None:
+        """Log the outcome of an applied reload."""
+        # INVARIANT: a reload whose post-swap callback failed never logs
+        # the plain success line.
+        # Why: the swap IS published but a derived cache (the provider
+        # registry) is not, and the retry below reprints this line every
+        # poll interval — an INFO "Configuration reloaded" repeating
+        # forever is what an operator reads as "all good" while the
+        # router serves a half-applied state.
+        log = logger.warning if post_swap_failed else logger.info
+        log(
+            "Configuration reloaded, but a post-swap callback failed - retrying"
+            if post_swap_failed else "Configuration reloaded",
+            extra={
+                "config": {
+                    "operation": "reload_complete",
+                    "post_swap_failed": post_swap_failed,
+                    "providers_count": len(self.config.providers),
+                    "models_count": len(self.config.models),
+                    "user_keys_count": len(self.config.user_keys)
+                }
+            })
+
+    async def _run_pre_swap_callbacks(self, new_config: RouterConfig) -> bool:
+        """Run every pre-swap callback; False on the first one that raises (a veto)."""
+        for name, cb in self._on_reload_callbacks:
+            try:
+                await cb(new_config)
+            except Exception:
+                logger.error(
+                    f"Config reload callback failed: {name or '(unnamed)'}",
+                    extra={"config": {"operation": "reload_callback_error", "callback_name": name}},
+                    exc_info=True,
+                )
+                return False
+        return True
+
+    async def _run_post_swap_callbacks(self, new_config: RouterConfig) -> bool:
+        """Run EVERY post-swap callback (a failure does not stop the rest); False if any raised."""
+        all_ok = True
+        for name, cb in self._post_swap_callbacks:
+            try:
+                await cb(new_config)
+            except Exception:
+                logger.error(
+                    f"Post-swap config reload callback failed: {name or '(unnamed)'}",
+                    extra={"config": {"operation": "reload_post_swap_error", "callback_name": name}},
+                    exc_info=True,
+                )
+                all_ok = False
+        return all_ok
 
     @property
     def _watched_files(self) -> list:

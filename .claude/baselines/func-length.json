@@ -1,19 +1,15 @@
 {
   "limit": 50,
   "scan_dir": "src",
-  "total": 5,
+  "total": 4,
   "violations": {
     "src/api/main.py::lifespan": {
       "label": "src/api/main.py::lifespan",
-      "span": 54
-    },
-    "src/core/config_manager.py::ConfigManager.reload_config": {
-      "label": "src/core/config_manager.py::ConfigManager.reload_config",
-      "span": 57
+      "span": 56
     },
     "src/core/usage_db/writer.py::_flush_row": {
       "label": "src/core/usage_db/writer.py::_flush_row",
-      "span": 71
+      "span": 70
     },
     "src/providers/pool.py::ProviderPool.__init__": {
       "label": "src/providers/pool.py::ProviderPool.__init__",
