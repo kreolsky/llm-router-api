@@ -703,6 +703,21 @@ class TestModelInfoPricingValues:
             svc = _build_service(models=SAMPLE_MODELS, model_info=model_info)
         assert svc.get_pricing("model-a") == {"completion": 0.001}
 
+    @pytest.mark.parametrize("bad", ["nan", "inf", float("inf"), -1e-7, "-1e-7"])
+    def test_non_finite_or_negative_value_dropped_with_warning(self, bad):
+        model_info = {"model-a": {"pricing": {"prompt": bad, "completion": 0.001}}}
+        with patch("src.core.config_schema.logger") as mock_logger:
+            svc = _build_service(models=SAMPLE_MODELS, model_info=model_info)
+        assert svc.get_pricing("model-a") == {"completion": 0.001}
+        mock_logger.warning.assert_called_once()
+
+    def test_zero_price_kept(self):
+        model_info = {"model-a": {"pricing": {"prompt": 0, "completion": "0"}}}
+        with patch("src.core.config_schema.logger") as mock_logger:
+            svc = _build_service(models=SAMPLE_MODELS, model_info=model_info)
+        assert svc.get_pricing("model-a") == {"prompt": 0.0, "completion": 0.0}
+        mock_logger.warning.assert_not_called()
+
     def test_non_mapping_pricing_dropped_with_warning(self):
         model_info = {"model-a": {"pricing": "free"}}
         with patch("src.core.config_schema.logger") as mock_logger:

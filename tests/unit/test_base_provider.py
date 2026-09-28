@@ -1234,6 +1234,37 @@ class TestErrorPathParity:
         assert not [c for c in mock_logger.error.call_args_list
                     if "Stream request failed" in str(c)]
 
+    async def _stream_error(self, handler) -> HTTPException:
+        provider = self._provider_with_mock_transport(handler)
+        with pytest.raises(HTTPException) as exc_info:
+            async for _ in provider.chat_completions_stream(
+                    {"messages": [{"role": "user", "content": "hi"}]},
+                    "gpt-x", NO_OPTIONS, request_id="r1"):
+                pass
+        return exc_info.value
+
+    @pytest.mark.asyncio
+    async def test_stream_error_json_body_reaches_the_client(self):
+        """A streaming upstream error carries the upstream's own message, not
+        the "Unable to read error response" placeholder — the stream context
+        never buffers the body unless it is read explicitly.
+
+        The body is an unread `stream=`: `httpx.Response(json=...)` pre-buffers
+        its content, so it would pass without the fix."""
+        body = b'{"error": {"message": "rate limited"}}'
+        exc = await self._stream_error(
+            lambda request: httpx.Response(429, stream=httpx.ByteStream(body)))
+        assert exc.status_code == 429
+        assert exc.detail["error"]["message"] == "rate limited"
+        assert "rate limited" in exc.detail["error"]["metadata"]["raw"]
+
+    @pytest.mark.asyncio
+    async def test_stream_error_text_body_is_the_raw(self):
+        exc = await self._stream_error(
+            lambda request: httpx.Response(500, stream=httpx.ByteStream(b"upstream exploded")))
+        assert exc.status_code == 500
+        assert exc.detail["error"]["metadata"]["raw"] == "upstream exploded"
+
 
 # ===================================================================
 # Retry 429-detection robustness

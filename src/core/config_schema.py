@@ -18,6 +18,7 @@ Two validation classes, matching what a hot reload may do to a running router:
 Env-dependent checks (``base_url``, the ``api_key_env`` variable) stay at
 provider construction — they belong to the process, not to the YAML.
 """
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -289,9 +290,9 @@ def _parse_pricing(model_id: str, pricing: Any) -> dict[str, float] | None:
     the dotted form is a float — and the usage writer multiplies prices with
     token counts, so a str price would record string repetition as ``cost_usd``
     or lose the whole row to a TypeError. int, float and numeric strings
-    become floats; a bool or unparsable value is dropped with a warning
-    naming the model and key. Returns None for a non-mapping ``pricing`` so
-    the caller drops the whole block.
+    become floats; a bool, unparsable, non-finite or negative value is
+    dropped with a warning naming the model and key. Returns None for a
+    non-mapping ``pricing`` so the caller drops the whole block.
     """
     if not isinstance(pricing, dict):
         logger.warning(
@@ -307,10 +308,11 @@ def _parse_pricing(model_id: str, pricing: Any) -> dict[str, float] | None:
             price = None if isinstance(value, bool) else float(value)
         except (TypeError, ValueError):
             price = None
-        if price is None:
+        # float() also accepts "nan"/"inf"; neither, nor a negative rate, is a price.
+        if price is None or not math.isfinite(price) or price < 0:
             logger.warning(
                 f"model_info entry '{model_id}' pricing key '{key}' has a "
-                f"non-numeric value {value!r}, ignoring it",
+                f"invalid value {value!r} (expected a finite, non-negative number), ignoring it",
                 extra={"config": {"model_info_key": model_id, "pricing_key": key}},
             )
             continue
@@ -389,9 +391,8 @@ def _warn_dangling_references(
     entry another file does not have (the model_info orphan warning's class —
     nothing dropped, no veto; the request path answers the dangling reference).
 
-    INVARIANT: a section's references are checked only when that section is
-    non-empty.
-    Why: an empty providers/models section never reaches parse_config in
+    WHY: a section's references are checked only when that section is
+    non-empty — an empty providers/models section never reaches parse_config in
     production (startup's _assert_config_complete and the reload's
     _missing_sections reject it first), so warning per entry there would
     only re-describe the missing section — every model/key would dangle.

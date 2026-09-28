@@ -84,8 +84,7 @@ def _env_bool(name: str, default: bool) -> bool:
 
     Unset or empty/whitespace-only means the default (an empty `VAR=` line in
     a .env file is an unset knob, not a typo). Any other value raises
-    _MalformedEnvValue — anything-not-`true` used to read as False, silently
-    disabling the model cache on a typo like `MODEL_CACHE_ENABLED=yes`.
+    _MalformedEnvValue.
     """
     raw = os.getenv(name)
     if raw is None or not raw.strip():
@@ -99,9 +98,7 @@ def _env_bool(name: str, default: bool) -> bool:
 def _env_number(name: str, default, cast):
     """Read a numeric env var; a malformed value raises _MalformedEnvValue.
 
-    Unset or empty/whitespace-only means the default. The old
-    fallback-to-default-with-a-warning contradicted the module ARCH (startup
-    fail-fast): a typo'd QUEUE_WAIT_TIMEOUT served its default in silence.
+    Unset or empty/whitespace-only means the default.
     """
     raw = os.getenv(name)
     if raw is None or not raw.strip():

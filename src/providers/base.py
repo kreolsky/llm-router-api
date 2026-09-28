@@ -1,6 +1,7 @@
 """The provider: HTTP, streaming, retry and error handling for an OpenAI-compatible backend."""
 # SYSTEM: provider — base HTTP, retry, streaming and header merging
 import asyncio
+import contextlib
 import json
 import os
 import time
@@ -174,7 +175,7 @@ class Provider:
     def _raise_provider_http_error(self, e: httpx.HTTPStatusError, request_id: str = "unknown") -> None:
         """Extract error message from provider response and raise HTTPException.
 
-        Handles ResponseNotRead (streaming context where body isn't buffered).
+        Handles ResponseNotRead (a streaming error body whose read failed).
         Logs via log_provider_error before raising.
         """
         response_text = ""
@@ -389,7 +390,7 @@ class Provider:
         Headers go through _merge_request_headers so the stream and non-stream
         paths send an identical set.
         Error hierarchy inside stream context:
-        - HTTPStatusError with ResponseNotRead fallback for error body
+        - HTTPStatusError: the error body is read first, ResponseNotRead fallback if that fails
         - PoolTimeout → 503 (connection pool exhausted)
         - RequestError → generic network error
         """
@@ -403,7 +404,7 @@ class Provider:
             async with self.pool.client.stream("POST", url, headers=merged_headers,
                                                json=request_body,
                                                timeout=stream_timeout) as response:
-                self._check_stream_response(response, start_time, request_id)
+                await self._check_stream_response(response, start_time, request_id)
                 async for chunk in response.aiter_bytes():
                     yield chunk
                 logger.debug(f"Provider stream finished for {request_id}")
@@ -449,8 +450,8 @@ class Provider:
             "request_id": request_id
         })
 
-    def _check_stream_response(self, response: httpx.Response, start_time: float,
-                               request_id: str) -> None:
+    async def _check_stream_response(self, response: httpx.Response, start_time: float,
+                                     request_id: str) -> None:
         """Log the stream's response headers and raise on a non-2xx status."""
         logger.debug(f"Stream response headers received after {time.time() - start_time:.2f}s", extra={
             "status_code": response.status_code,
@@ -465,6 +466,14 @@ class Provider:
             request_id=request_id,
             data_flow="from_provider"
         )
+        if response.status_code >= 400:
+            # WHY: the stream context never buffers the body, so without this
+            # read the client gets a placeholder instead of the upstream's error
+            # text. An error body is small and bounded by stream_read_timeout; a
+            # failed read still surfaces the upstream status via the
+            # ResponseNotRead fallback in _raise_provider_http_error.
+            with contextlib.suppress(httpx.HTTPError):
+                await response.aread()
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
