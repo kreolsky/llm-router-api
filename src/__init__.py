@@ -1,1 +1,1 @@
-"""NNP AI Router: multi-provider LLM gateway."""
+"""LLM API Gateway: multi-provider LLM gateway."""

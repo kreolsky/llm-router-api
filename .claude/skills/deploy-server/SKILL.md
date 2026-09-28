@@ -9,7 +9,7 @@ description: >
   (config/ и .env на сервере — authoritative и не трогаются).
 ---
 
-# deploy-server: обновление nnp-ai-router на удалённом Docker-хосте
+# deploy-server: обновление llm-api-gateway на удалённом Docker-хосте
 
 ## Контекст
 

@@ -1,4 +1,4 @@
-# NNP AI Router
+# LLM API Gateway
 
 OpenAI-compatible API gateway for multiple LLM providers. One endpoint, multiple backends (OpenAI, DeepSeek, OpenRouter, any OpenAI-compatible API).
 

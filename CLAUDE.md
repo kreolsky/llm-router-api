@@ -1,4 +1,4 @@
-# NNP AI Router — Project Bible
+# LLM API Gateway — Project Bible
 
 OpenAI-compatible API gateway for multiple LLM providers. Routes requests to OpenAI, DeepSeek, OpenRouter, and any OpenAI-compatible API through a unified endpoint.
 

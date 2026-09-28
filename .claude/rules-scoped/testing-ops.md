@@ -27,7 +27,7 @@ Dev-only deps live in `requirements-dev.txt`, never in `requirements.txt`.
   rsync-and-restart work on the remote host, so it is load-bearing, not a leftover.
 * Ports: the container listens on `8000`; compose maps host `8777` → `8000`. Clients and the
   whole test suite talk to `8777`.
-* `docker compose logs -f nnp-ai-router` for the request bookends.
+* `docker compose logs -f api` for the request bookends.
 * Health: `curl -s http://localhost:8777/health`.
 * Never `docker compose down -v` — it destroys the `data/` volume carrying the usage DB and
   the model cache (a PreToolUse hook blocks it).

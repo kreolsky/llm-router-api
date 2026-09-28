@@ -9,7 +9,7 @@ description: >
   Do NOT use for: точечный запуск одного теста, debugging без полного прогона.
 ---
 
-# run-tests: полный прогон тестов nnp-ai-router
+# run-tests: полный прогон тестов llm-api-gateway
 
 ## Контекст
 
