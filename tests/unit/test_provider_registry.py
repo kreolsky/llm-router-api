@@ -49,15 +49,6 @@ class TestBuildProviderName:
         instance = _build_provider("glm", parse_provider(_make_config()), Settings())
         assert instance.provider_name == "glm"
 
-    @patch.dict("os.environ", {"TEST_API_KEY": "sk-123"}, clear=False)
-    def test_direct_construction_falls_back_to_class_name(self):
-        """Without provider_name the class-derived fallback applies — the same
-        literal for every provider of a type, which is why the factory passes
-        the config key explicitly."""
-        from src.providers.openai import OpenAICompatibleProvider
-        instance = OpenAICompatibleProvider(parse_provider(_make_config()), Settings())
-        assert instance.provider_name == "openaicompatible"
-
 
 class TestGetProviderInstance:
     """A lookup, never a build: the published cache is the only source."""

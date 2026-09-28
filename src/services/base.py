@@ -18,7 +18,7 @@ from ..core.header_policy import (
 from ..core.logging import logger
 from ..core.usage_db import RequestStats, request_stats
 from ..providers import get_provider_instance
-from ..providers.base import BaseProvider
+from ..providers.base import Provider
 from .reasoning_dialect import translate_reasoning_fields
 from .reasoning_effort import apply_reasoning_effort
 
@@ -41,7 +41,7 @@ class ResolvedTarget:
     provider_name: str
     provider_model_name: str
     provider_config: ProviderEntry
-    provider: BaseProvider
+    provider: Provider
     identity_headers: dict[str, str] | None
 
 

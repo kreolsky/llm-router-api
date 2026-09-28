@@ -60,6 +60,6 @@ FORWARDED_HEADER_DENY_PREFIXES = _TOPOLOGY_PREFIXES
 
 # Static `headers:` from providers.yaml is operator-authored, so it is held to
 # a stricter standard than client input: the key comes from api_key_env (see
-# the INVARIANT over BaseProvider), and per-request transport values are owned
+# the INVARIANT over Provider), and per-request transport values are owned
 # by the router itself (Content-Type defaults / multipart boundary popping).
 FORBIDDEN_STATIC_HEADERS = frozenset({"authorization"}) | _TRANSPORT_HEADERS

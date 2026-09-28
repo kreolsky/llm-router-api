@@ -5,8 +5,7 @@ import asyncio
 from ..core.config_manager import Settings
 from ..core.config_schema import ProviderEntry, RouterConfig
 from ..core.error_handling import ErrorType, create_error
-from .base import BaseProvider
-from .openai import OpenAICompatibleProvider
+from .base import Provider
 
 # ARCH: cache key is the provider name (the dict key in providers.yaml).
 # Each cached instance owns its own httpx pool. The cache is rebuilt in TWO
@@ -15,11 +14,11 @@ from .openai import OpenAICompatibleProvider
 # unchanged and building the rest (pre-swap, fail-fast) — and
 # publish_provider_cache swaps it in and drains the superseded pools
 # (post-swap). On prepare failure the old cache is retained.
-_provider_cache: dict[str, BaseProvider] = {}
+_provider_cache: dict[str, Provider] = {}
 
 # Staged by prepare_provider_cache, consumed by publish_provider_cache. None
 # means nothing is pending publication.
-_staged_cache: dict[str, BaseProvider] | None = None
+_staged_cache: dict[str, Provider] | None = None
 
 # ARCH: serializes the two reload phases so a prepare cannot stage over a
 # publish that is mid-swap. Lookups do not take it — they are a plain dict read.
@@ -42,12 +41,12 @@ def _build_provider(
     provider_name: str,
     entry: ProviderEntry,
     settings: Settings,
-) -> BaseProvider:
+) -> Provider:
     """Pure factory: return a new instance. No caching.
 
     The entry's `type` was validated by parse_config, so there is one arm.
     """
-    return OpenAICompatibleProvider(entry, settings, provider_name=provider_name)
+    return Provider(entry, settings, provider_name=provider_name)
 
 
 # INVARIANT: the published cache is the ONLY source of provider instances —
@@ -59,7 +58,7 @@ def _build_provider(
 # reload. prepare_provider_cache builds every configured provider up front
 # (startup and every reload), so a miss can only mean "not in the live
 # config" — which is exactly PROVIDER_NOT_FOUND.
-async def get_provider_instance(provider_name: str) -> BaseProvider:
+async def get_provider_instance(provider_name: str) -> Provider:
     """Return the published provider instance for provider_name.
 
     Instances are cached by provider_name and built only by
@@ -84,7 +83,7 @@ def _live_instance_if_unchanged(
     provider_name: str,
     entry: ProviderEntry,
     settings: Settings,
-) -> BaseProvider | None:
+) -> Provider | None:
     """Return the published instance when it can be carried into the staged
     cache as-is, else None.
 
@@ -109,7 +108,7 @@ def _live_instance_if_unchanged(
     return live
 
 
-def _stale_stage_values(superseded: dict[str, BaseProvider]) -> list[BaseProvider]:
+def _stale_stage_values(superseded: dict[str, Provider]) -> list[Provider]:
     """Values of a superseded stage that are NOT (by identity) in the
     published cache — the ones a failed/superseded prepare must close.
 
@@ -125,14 +124,14 @@ def _stale_stage_values(superseded: dict[str, BaseProvider]) -> list[BaseProvide
 
 def _build_stage(
     config: RouterConfig, settings: Settings
-) -> tuple[dict[str, BaseProvider], list[BaseProvider], list[str]]:
+) -> tuple[dict[str, Provider], list[Provider], list[str]]:
     """Stage one entry per configured provider: the live instance when the
     entry is unchanged (see _live_instance_if_unchanged), a fresh build
     otherwise. Returns (temp, fresh, errors); fresh lists only the instances
     THIS stage built — the ones a failed prepare must close.
     """
-    temp: dict[str, BaseProvider] = {}
-    fresh: list[BaseProvider] = []
+    temp: dict[str, Provider] = {}
+    fresh: list[Provider] = []
     errors: list[str] = []
     for provider_name, entry in config.providers.items():
         reused = _live_instance_if_unchanged(provider_name, entry, settings)

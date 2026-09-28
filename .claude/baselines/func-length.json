@@ -1,7 +1,7 @@
 {
   "limit": 50,
   "scan_dir": "src",
-  "total": 18,
+  "total": 15,
   "violations": {
     "src/api/main.py::create_transcription": {
       "label": "src/api/main.py::create_transcription",
@@ -42,18 +42,6 @@
     "src/core/usage_db/writer.py::init_db": {
       "label": "src/core/usage_db/writer.py::init_db",
       "span": 52
-    },
-    "src/providers/base.py::BaseProvider.__init__": {
-      "label": "src/providers/base.py::BaseProvider.__init__",
-      "span": 69
-    },
-    "src/providers/base.py::BaseProvider._make_request_attempt": {
-      "label": "src/providers/base.py::BaseProvider._make_request_attempt",
-      "span": 73
-    },
-    "src/providers/base.py::BaseProvider._stream_request_inner": {
-      "label": "src/providers/base.py::BaseProvider._stream_request_inner",
-      "span": 94
     },
     "src/providers/pool.py::ProviderPool.__init__": {
       "label": "src/providers/pool.py::ProviderPool.__init__",
