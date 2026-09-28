@@ -38,13 +38,14 @@ or config key.
 
 Ask with `AskUserQuestion`, recommended level FIRST, each option with its evidence (counts
 from the pre-flight). A level BELOW the recommendation gets one line in the note:
-`версия: v1.2.1 — feat×3 сочтены внутренними`. Do not create the tag yet — it is created in
+`version: v1.2.1 — feat×3 ruled internal`. Do not create the tag yet — it is created in
 §4, so an abandoned release leaves no orphan tag.
 
 ## 3. Release note
 
-`docs/release/release-YYYY-MM-DD-vX.Y.Z.md`, **Russian**, shaped like the newest existing
-note (`ls docs/release/*.md | tail -1`); H1 `# Релиз vX.Y.Z — YYYY-MM-DD`.
+`docs/release/release-YYYY-MM-DD-vX.Y.Z.md`, **always English** — the whole note, whatever the
+language of the request (`cyrillic-src-gate.py` blocks Cyrillic in `docs/release/`); shaped
+like the newest existing note (`ls docs/release/*.md | tail -1`); H1 `# Release vX.Y.Z — YYYY-MM-DD`.
 
 - One-paragraph summary: commit count since the previous tag
   (`git log v<LAST>..origin/dev --oneline --no-merges | wc -l`, taken ONCE — the note's own
@@ -52,10 +53,10 @@ note (`ls docs/release/*.md | tail -1`); H1 `# Релиз vX.Y.Z — YYYY-MM-DD`
 - Changes grouped by theme, from the commit bodies — client-visible first, written as what
   a client of the router can now do (`.claude/rules/testing.md` → *Reports are user
   scenarios*), never a raw log.
-- `## Действия при обновлении` (mandatory): restart or full rebuild, each new env var with
+- `# Upgrade actions` (mandatory): restart or full rebuild, each new env var with
   its default and whether prod needs a value, new/changed keys in `config/*.yaml` (prod
   configs are authoritative and are edited by hand), usage DB schema changes (additive?).
-- `## Известные ограничения` when by-design caveats ship.
+- `# Known limitations` when by-design caveats ship.
 
 Commit on `dev` with an English message `docs(release): vX.Y.Z note`, after
 `.claude/scripts/pre-commit-gates.sh` (unpiped), then `git push origin dev`.
