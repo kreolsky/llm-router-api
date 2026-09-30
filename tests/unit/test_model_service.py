@@ -1,5 +1,6 @@
 """Unit tests for src/services/model_service.py — ModelService class."""
 
+import logging
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -526,6 +527,66 @@ class TestReasoningEffortDerived:
         assert detail["reasoning"]["effort_levels"] == ["minimal", "full"]  # list replaced
         # deep merge: a derived key model_info does not mention survives
         assert detail["reasoning"]["default_effort"] == "low"
+
+    @staticmethod
+    def _effort_warnings(caplog):
+        return [r.getMessage() for r in caplog.records
+                if r.levelno == logging.WARNING and "default_effort" in r.getMessage()]
+
+    @pytest.mark.asyncio
+    async def test_foreign_cached_default_dropped_and_warned_once(self, caplog):
+        """A real OpenRouter entry ships its own default_effort ("minimal");
+        under a local policy it is outside effort_levels, so it is dropped —
+        the router's own gate would 400 it — and the operator is warned once."""
+        cache = _make_cache({"model-a": normalize_provider_model({
+            "id": "model-a",
+            "context_length": 8192,
+            "supported_parameters": ["reasoning", "reasoning_effort"],
+            "reasoning": {"supported": True, "default_effort": "minimal",
+                          "default_enabled": True},
+        })})
+        models = {"model-a": {"provider": "prov-a", "provider_model_name": "a-real",
+                              "reasoning_effort": {"allowed": ["low", "high"]}}}
+        svc = _build_service(models=models, providers=SAMPLE_PROVIDERS, cache=cache)
+        auth_ctx = _make_auth_context(allowed_models=[])
+
+        with caplog.at_level(logging.WARNING, logger="nnp-llm-router"):
+            detail = await svc.retrieve_model("model-a", auth_ctx)
+            await svc.list_models(auth_ctx)
+        assert detail["reasoning"] == {
+            "supported": True, "effort_levels": ["low", "high"], "default_enabled": True,
+        }
+        warnings = self._effort_warnings(caplog)
+        assert len(warnings) == 1
+        assert "model-a" in warnings[0] and "'minimal'" in warnings[0]
+
+    @pytest.mark.asyncio
+    async def test_chained_default_outside_local_policy_dropped(self, caplog):
+        """Chained routers: the upstream router's default ("max") is outside
+        this router's narrower policy — dropped, not advertised."""
+        cache = _make_cache({"model-a": {"reasoning": {
+            "supported": True, "effort_levels": ["low", "high", "max"],
+            "default_effort": "max"}}})
+        models = {"model-a": {"provider": "prov-a", "provider_model_name": "a-real",
+                              "reasoning_effort": {"allowed": ["low", "high"]}}}
+        svc = _build_service(models=models, providers=SAMPLE_PROVIDERS, cache=cache)
+
+        with caplog.at_level(logging.WARNING, logger="nnp-llm-router"):
+            detail = await svc.retrieve_model("model-a", _make_auth_context())
+        assert detail["reasoning"] == {"supported": True, "effort_levels": ["low", "high"]}
+        assert len(self._effort_warnings(caplog)) == 1
+
+    @pytest.mark.asyncio
+    async def test_cached_default_inside_levels_kept_silently(self, caplog):
+        cache = _make_cache({"model-a": {"reasoning": {
+            "supported": True, "effort_levels": ["low", "high", "max"],
+            "default_effort": "high"}}})
+        svc = _build_service(models=SAMPLE_MODELS, providers=SAMPLE_PROVIDERS, cache=cache)
+
+        with caplog.at_level(logging.WARNING, logger="nnp-llm-router"):
+            detail = await svc.retrieve_model("model-a", _make_auth_context())
+        assert detail["reasoning"]["default_effort"] == "high"
+        assert self._effort_warnings(caplog) == []
 
 
 # ===================================================================

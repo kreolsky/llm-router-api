@@ -57,6 +57,43 @@ def _normalize_openrouter_architecture(arch: Any) -> dict[str, Any]:
     return out
 
 
+def _normalize_openrouter_reasoning(raw: dict[str, Any]) -> dict[str, Any]:
+    """Derive the stored ``reasoning`` block for an OpenRouter-shaped entry.
+
+    WHY: upstream advertises reasoning SUPPORT inside supported_parameters
+    ("reasoning" / "reasoning_effort") and never a list of effort levels,
+    so only reasoning.supported is derivable from it. A top-level
+    ``reasoning`` object IS derivable — when the upstream is itself a router
+    of this kind (chained topology), its /v1/models carries the full stored
+    reasoning block. The stored keys are copied over the parameter-derived
+    flag (an explicit upstream ``supported: false`` is honoured); wrong-typed
+    values and unknown keys are dropped. Real OpenRouter entries carry this
+    object too, with their own effort vocabulary (default_effort "minimal"):
+    a default outside the advertised levels is dropped at read time — see
+    ModelService._drop_foreign_default_effort.
+    """
+    reasoning: dict[str, Any] = {}
+    params = raw.get("supported_parameters")
+    if isinstance(params, list) and {
+        "reasoning", "reasoning_effort"
+    } & {str(x).lower() for x in params}:
+        reasoning["supported"] = True
+
+    raw_reasoning = raw.get("reasoning")
+    if isinstance(raw_reasoning, dict):
+        if isinstance(raw_reasoning.get("supported"), bool):
+            reasoning["supported"] = raw_reasoning["supported"]
+        if isinstance(raw_reasoning.get("effort_levels"), list) and all(
+            isinstance(x, str) for x in raw_reasoning["effort_levels"]
+        ):
+            reasoning["effort_levels"] = list(raw_reasoning["effort_levels"])
+        if isinstance(raw_reasoning.get("default_effort"), str):
+            reasoning["default_effort"] = raw_reasoning["default_effort"]
+        if isinstance(raw_reasoning.get("default_enabled"), bool):
+            reasoning["default_enabled"] = raw_reasoning["default_enabled"]
+    return reasoning
+
+
 def _normalize_openrouter(raw: dict[str, Any]) -> dict[str, Any]:
     """Normalize an OpenRouter /models entry into the STORED form."""
     out: dict[str, Any] = {}
@@ -76,14 +113,10 @@ def _normalize_openrouter(raw: dict[str, Any]) -> dict[str, Any]:
         out["architecture"] = arch
 
     if isinstance(raw.get("supported_parameters"), list):
-        params = list(raw["supported_parameters"])
-        out["supported_parameters"] = params
-        # WHY: upstream advertises reasoning SUPPORT inside supported_parameters
-        # ("reasoning" / "reasoning_effort") and never a list of effort levels,
-        # so only reasoning.supported is derivable here; effort_levels and
-        # default_effort stay operator policy (models.yaml reasoning_effort).
-        if {"reasoning", "reasoning_effort"} & {str(x).lower() for x in params}:
-            out["reasoning"] = {"supported": True}
+        out["supported_parameters"] = list(raw["supported_parameters"])
+    reasoning = _normalize_openrouter_reasoning(raw)
+    if reasoning:
+        out["reasoning"] = reasoning
 
     pricing = raw.get("pricing")
     if isinstance(pricing, dict):
@@ -168,10 +201,11 @@ def normalize_provider_model(
     upstream response; the llama branch merges its capabilities in here.
 
     Upstream 'reasoning'/'reasoning_effort' in supported_parameters IS
-    translated into ``reasoning: {"supported": True}`. Only that flag is
-    derivable: no upstream shape carries the effort enum or default_enabled,
-    which stay manual (model_info.yaml) or derived from the models.yaml
-    reasoning_effort policy.
+    translated into ``reasoning: {"supported": True}``. A top-level
+    ``reasoning`` object is also kept (stored keys only, type-checked): when
+    the upstream is itself a router of this kind, it carries the full effort
+    policy — effort_levels, default_effort, default_enabled — which plain
+    ``supported_parameters`` never expresses.
     """
     if not isinstance(raw, dict):
         return {}

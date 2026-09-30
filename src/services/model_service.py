@@ -31,6 +31,7 @@ class ModelService(BaseService):
                  capabilities_cache: CapabilitiesCache):
         super().__init__(config_manager, registry)
         self.capabilities_cache = capabilities_cache
+        self._warned_effort_defaults: set[tuple[str, Any, tuple[Any, ...]]] = set()
 
     def _build_model_response(self, model_id: str, **extra_fields) -> dict[str, Any]:
         """Build a standardized model response object."""
@@ -86,7 +87,40 @@ class ModelService(BaseService):
             if policy.default is not None:
                 reasoning["default_effort"] = policy.default
             derived = {"reasoning": reasoning}
-        return merge_capabilities(merge_capabilities(cache_data, derived), model_info)
+        layered = merge_capabilities(cache_data, derived)
+        self._drop_foreign_default_effort(model_id, layered)
+        return merge_capabilities(layered, model_info)
+
+    def _drop_foreign_default_effort(self, model_id: str, stored: dict[str, Any]) -> None:
+        """Drop a cache-sourced ``default_effort`` that is outside ``effort_levels``.
+
+        INVARIANT: /v1/models never advertises a default effort outside the
+        advertised effort_levels — the dispatch gate would 400 that value.
+        Why: upstream entries carry their own vocabulary (OpenRouter ships
+        "minimal"; a chained router ships its own wider policy), and a merge
+        replaces the levels list but keeps the foreign default.
+        Runs before model_info, which stays the operator's final word. Warned
+        once per (model, value, levels): this path runs on every request.
+        """
+        reasoning = stored.get("reasoning")
+        if not isinstance(reasoning, dict):
+            return
+        levels = reasoning.get("effort_levels")
+        default = reasoning.get("default_effort")
+        if not isinstance(levels, list) or default is None or default in levels:
+            return
+        del reasoning["default_effort"]
+        key = (model_id, default, tuple(levels))
+        if key in self._warned_effort_defaults:
+            return
+        self._warned_effort_defaults.add(key)
+        logger.warning(
+            f"Model '{model_id}': upstream default_effort {default!r} is not in "
+            f"effort_levels {levels} — dropped from /v1/models. Fix: add it to "
+            f"reasoning_effort.allowed in models.yaml, or set reasoning.default_effort "
+            f"in model_info.yaml",
+            error_type="capabilities_config_conflict",
+        )
 
     def get_pricing(self, model_id: str) -> dict[str, Any] | None:
         """Stored per-token pricing for a model, or None when unknown.

@@ -3,9 +3,12 @@
 import json
 import os
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
+from src.core.config_schema import parse_config
+from src.core.context import AuthContext
 from src.core.model_capabilities import (
     CapabilitiesCache,
     merge_capabilities,
@@ -174,6 +177,106 @@ class TestNormalizeOpenRouter:
         raw = {"id": "m", "context_length": 4096}
         out = normalize_provider_model(raw)
         assert out == {"context_length": 4096}
+
+    def test_upstream_reasoning_object_copied(self):
+        # chained routers: the upstream /v1/models is rendered by this same
+        # code and carries the stored reasoning keys at top level.
+        raw = {
+            "id": "glm/flash",
+            "context_length": 131072,
+            "supported_parameters": ["reasoning", "tools"],
+            "reasoning": {
+                "supported": True,
+                "effort_levels": ["low", "high", "max"],
+                "default_effort": "high",
+                "default_enabled": True,
+            },
+        }
+        out = normalize_provider_model(raw)
+        assert out["reasoning"] == {
+            "supported": True,
+            "effort_levels": ["low", "high", "max"],
+            "default_effort": "high",
+            "default_enabled": True,
+        }
+
+    def test_upstream_reasoning_object_without_supported_parameters(self):
+        raw = {
+            "id": "glm/flash",
+            "context_length": 131072,
+            "reasoning": {"supported": True, "effort_levels": ["low", "high"]},
+        }
+        out = normalize_provider_model(raw)
+        assert out["reasoning"] == {"supported": True, "effort_levels": ["low", "high"]}
+
+    def test_upstream_reasoning_false_overrides_derived_flag(self):
+        # explicit upstream `supported: false` wins over the parameter-derived True
+        raw = {
+            "id": "m",
+            "context_length": 8192,
+            "supported_parameters": ["reasoning_effort"],
+            "reasoning": {"supported": False},
+        }
+        out = normalize_provider_model(raw)
+        assert out["reasoning"] == {"supported": False}
+
+    def test_upstream_reasoning_wrong_types_and_unknown_keys_dropped(self):
+        raw = {
+            "id": "m",
+            "context_length": 8192,
+            "supported_parameters": ["reasoning"],
+            "reasoning": {
+                "supported": True,
+                "effort_levels": "high",  # wrong type: str, not list
+                "default_effort": ["high"],  # wrong type: list, not str
+                "default_enabled": "yes",  # wrong type: str, not bool
+                "extra_key": "dropped",  # unknown key
+                42: "non-str key",  # unknown key
+            },
+        }
+        out = normalize_provider_model(raw)
+        assert out["reasoning"] == {"supported": True}
+
+    def test_upstream_reasoning_non_dict_ignored(self):
+        raw = {"id": "m", "context_length": 8192, "reasoning": "enabled"}
+        out = normalize_provider_model(raw)
+        assert "reasoning" not in out
+
+    @pytest.mark.asyncio
+    async def test_round_trip_main_renderer_through_ext_normalizer(self):
+        # what MAIN's /v1/models serves for a model with a models.yaml
+        # reasoning_effort policy must keep effort_levels when EXT normalizes
+        # it into its own cache — binds the renderer to the normalizer.
+        from src.providers import ProviderRegistry
+        from src.services.model_service import ModelService
+
+        cm = MagicMock()
+        cm.get_config.return_value = parse_config({
+            "models": {
+                "glm/flash": {
+                    "provider": "main",
+                    "provider_model_name": "glm/flash",
+                    "reasoning_effort": {"allowed": ["low", "high", "max"], "default": "high"},
+                },
+            },
+            "providers": {"main": {"type": "openai", "base_url": "https://main.example.com/v1"}},
+        })
+        cache = CapabilitiesCache(os.devnull)
+        cache.upsert(
+            "glm/flash",
+            {"context_length": 131072, "supported_parameters": ["reasoning"]},
+            source="test",
+        )
+        svc = ModelService(cm, MagicMock(spec=ProviderRegistry), cache)
+        listed = await svc.list_models(AuthContext([], []))
+        entry = next(m for m in listed["data"] if m["id"] == "glm/flash")
+
+        out = normalize_provider_model(entry)
+        assert out["reasoning"] == {
+            "supported": True,
+            "effort_levels": ["low", "high", "max"],
+            "default_effort": "high",
+        }
 
 
 class TestNormalizeLlamaServer:
