@@ -15,7 +15,7 @@ models:
     provider: openrouter
     provider_model_name: google/gemini-3.5-flash-lite
     reasoning_effort:
-      allowed: [low, high]            # OpenRouter's effort vocabulary below `max`
+      allowed: [minimal]              # mini stays mini: OpenRouter's lowest effort only
       param: reasoning.effort
   local/chat:
     provider: orange
