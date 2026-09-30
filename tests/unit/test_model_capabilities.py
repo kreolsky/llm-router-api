@@ -237,6 +237,14 @@ class TestNormalizeOpenRouter:
         out = normalize_provider_model(raw)
         assert out["reasoning"] == {"supported": True}
 
+    def test_reasoning_only_entry_is_recognized(self):
+        # a chained router's model behind a generic upstream (z.ai) renders
+        # no context/pricing/architecture — only the policy-derived reasoning.
+        raw = {"id": "glm/flash", "object": "model",
+               "reasoning": {"supported": True, "effort_levels": ["low", "high", "max"]}}
+        out = normalize_provider_model(raw)
+        assert out == {"reasoning": {"supported": True, "effort_levels": ["low", "high", "max"]}}
+
     def test_upstream_reasoning_non_dict_ignored(self):
         raw = {"id": "m", "context_length": 8192, "reasoning": "enabled"}
         out = normalize_provider_model(raw)

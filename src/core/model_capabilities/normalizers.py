@@ -24,9 +24,14 @@ def _parse_price(value: Any) -> float:
 
 
 def _is_openrouter_shape(raw: dict[str, Any]) -> bool:
-    """Detect an OpenRouter /models entry (rich metadata)."""
+    """Detect an OpenRouter /models entry (rich metadata).
+
+    WHY: a top-level ``reasoning`` dict alone qualifies — a chained router
+    renders a model behind a generic upstream with nothing else.
+    """
     return (
-        isinstance(raw.get("context_length"), int)
+        isinstance(raw.get("reasoning"), dict)
+        or isinstance(raw.get("context_length"), int)
         or isinstance(raw.get("top_provider"), dict)
         or (isinstance(raw.get("architecture"), dict) and "input_modalities" in raw["architecture"])
         or isinstance(raw.get("pricing"), dict)
