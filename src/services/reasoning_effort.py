@@ -11,10 +11,12 @@ body:
       default: high                   # optional; injected when the client sends none
       param: reasoning_effort         # wire location: reasoning_effort | reasoning.effort
 
-Configured blocks carry no ``default`` today: the client-side default is the
-harness's business (dsh materializes its adapter default), and ``medium`` is
-avoided — dsh's effort vocabulary is off|low|high|max and a value it cannot
-spell would 400 inside the harness before ever reaching the router.
+``default`` is set only where two model ids split one upstream model by
+effort (gemini/flash vs gemini/pro): without it both would run at the
+upstream's own default. Otherwise the client-side default is the harness's
+business (dsh materializes its adapter default), and ``medium`` is avoided on
+models dsh reaches — dsh's effort vocabulary is off|low|high|max and a value
+it cannot spell would 400 inside the harness before ever reaching the router.
 
 Absent key => the field passes through untouched (today's behaviour). The
 client value is read from BOTH dialects (``reasoning_effort`` and
